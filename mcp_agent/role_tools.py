@@ -334,6 +334,8 @@ def role_start_impl(
     role_run_id = _generate_role_run_id(run_id, role, attempt)
 
     # 7. Mutating role lock (only for readonly: false)
+    # Store lock_key so role_result can release it via the exact key
+    stored_lock_key: Optional[str] = None
     if not role_spec.readonly:
         lock_key = _normalize_lock_key(repo, branch, base_branch)
         lock_manager = RoleLockManager()
@@ -362,6 +364,7 @@ def role_start_impl(
                     "retryable": True,
                 },
             }
+        stored_lock_key = lock_key
 
     # 8. Render prompt
     template_vars: dict[str, Any] = {
@@ -466,7 +469,7 @@ def role_start_impl(
         idempotency_key=role_run_id,
     )
 
-    # 11. Create role run record
+    # 11. Create role run record (persist lock_key for mutating roles)
     role_store.create_role_run(
         role=role,
         run_id=run_id,
@@ -477,6 +480,7 @@ def role_start_impl(
         branch=branch,
         artifact_name=role_spec.output_artifact,
         attempt=attempt,
+        lock_key=stored_lock_key,
     )
 
     # 12. Save idempotency record if key was provided
@@ -619,8 +623,16 @@ def role_result_impl(
     result = openhands_get_task_result(task_id=role_run["openhands_task_id"])
     full_result = result.get("answer", "") or ""
 
-    # Save artifact to disk (idempotent — safe to call multiple times)
-    artifact_path = store.save_artifact(role_run_id, full_result)
+    # Save artifact through ArtifactStore (single persistence mechanism)
+    artifact_store = ArtifactStore()
+    artifact_name = role_run.get("artifact_name") or f"{role_run['role']}_output"
+    artifact = artifact_store.save(
+        run_id=role_run["run_id"],
+        role_run_id=role_run_id,
+        role=role_run["role"],
+        artifact_name=artifact_name,
+        content=full_result,
+    )
 
     # Derive summary, action, risk
     result_summary = make_summary(full_result, max_chars=700)
@@ -631,24 +643,22 @@ def role_result_impl(
     display_action = action if action else "UNKNOWN"
     display_risk = risk if risk else "UNKNOWN"
 
-    # Update role run record with parsed fields
+    # Update role run record with artifact metadata and parsed fields
     store.update_role_run(
         role_run_id,
+        artifact_path=artifact["artifact_path"],
+        artifact_name=artifact["artifact_name"],
+        result_summary=result_summary,
         action=display_action,
         risk=display_risk,
-        result_summary=result_summary,
         status="completed",
     )
 
-    # Release mutating lock on final status
-    if role_run.get("branch") or role_run.get("base_branch"):
-        lock_key = _normalize_lock_key(
-            role_run.get("repo"),
-            role_run.get("branch"),
-            role_run.get("base_branch"),
-        )
+    # Release mutating lock on terminal status using stored lock_key
+    stored_lock_key = role_run.get("lock_key")
+    if stored_lock_key:
         lock_manager = RoleLockManager()
-        lock_manager.release(lock_key, role_run_id)
+        lock_manager.release(stored_lock_key, role_run_id)
 
     # Build response
     response: dict = {
@@ -658,8 +668,8 @@ def role_result_impl(
         "status": "completed",
         "action": display_action,
         "risk": display_risk,
-        "artifact_name": role_run.get("artifact_name"),
-        "artifact_path": artifact_path,
+        "artifact_name": artifact["artifact_name"],
+        "artifact_path": artifact["artifact_path"],
         "result_summary": result_summary,
         "full_result": full_result if include_full_result else None,
         "full_result_omitted": not include_full_result,

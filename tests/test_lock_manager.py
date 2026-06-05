@@ -113,6 +113,69 @@ class TestRoleLockManager(unittest.TestCase):
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    def test_stale_lock_overwritten_with_new_metadata(self):
+        """After acquiring over a stale lock, get() returns the new metadata."""
+        from mcp_agent.lock_manager import RoleLockManager
+
+        tmpdir = tempfile.mkdtemp(prefix="test_lock_stale_meta_")
+        try:
+            manager = RoleLockManager(lock_dir=os.path.join(tmpdir, "locks"), ttl_minutes=0)
+
+            # Create a stale lock
+            stale_metadata = {
+                "role_run_id": "run-stale",
+                "role": "coder",
+                "created_at": "2020-01-01T00:00:00+00:00",
+            }
+            manager.acquire("repo-stale2|branch", stale_metadata)
+
+            # Acquire over stale lock with new metadata
+            new_metadata = {
+                "role_run_id": "run-new-123",
+                "role": "coder",
+            }
+            result = manager.acquire("repo-stale2|branch", new_metadata)
+            self.assertIsNone(result)  # Success
+
+            # Verify the lock file now contains the new role_run_id
+            updated = manager.get("repo-stale2|branch")
+            self.assertIsNotNone(updated)
+            self.assertEqual(updated["role_run_id"], "run-new-123")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_stale_lock_overwrite_new_role_run_id_in_file(self):
+        """Lock file contains new role_run_id after stale overwrite."""
+        from mcp_agent.lock_manager import RoleLockManager
+
+        tmpdir = tempfile.mkdtemp(prefix="test_lock_stale_file_")
+        try:
+            manager = RoleLockManager(lock_dir=os.path.join(tmpdir, "locks"), ttl_minutes=0)
+
+            # Create a stale lock with a known role_run_id
+            stale_metadata = {
+                "role_run_id": "run-old-456",
+                "role": "coder",
+                "created_at": "2020-01-01T00:00:00+00:00",
+            }
+            manager.acquire("repo-stale3|branch", stale_metadata)
+
+            # Acquire over stale lock
+            new_metadata = {
+                "role_run_id": "run-new-789",
+                "role": "coder",
+            }
+            manager.acquire("repo-stale3|branch", new_metadata)
+
+            # Read the lock file directly to verify it was overwritten
+            lock_data = manager.get("repo-stale3|branch")
+            self.assertEqual(lock_data["role_run_id"], "run-new-789")
+
+            # Verify the old role_run_id is no longer in the file
+            self.assertNotIn("run-old-456", json.dumps(lock_data))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

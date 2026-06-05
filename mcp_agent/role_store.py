@@ -84,6 +84,7 @@ class RoleRunStore:
         branch: Optional[str] = None,
         artifact_name: Optional[str] = None,
         attempt: int = 1,
+        lock_key: Optional[str] = None,
     ) -> dict[str, Any]:
         """Create a new role run record and persist it.
 
@@ -118,6 +119,7 @@ class RoleRunStore:
             "action": None,
             "risk": None,
             "attempt": attempt,
+            "lock_key": lock_key,
         }
 
         with self._lock:

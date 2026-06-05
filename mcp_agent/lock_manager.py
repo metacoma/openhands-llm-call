@@ -86,7 +86,8 @@ class RoleLockManager:
         existing = self.get(lock_key)
         if existing is not None:
             if self._is_stale(existing):
-                # Stale lock — allow overwrite
+                # Stale lock — overwrite with new metadata
+                self._write_lock(lock_key, metadata)
                 return None
             return existing  # conflict
 
