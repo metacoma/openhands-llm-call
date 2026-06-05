@@ -99,7 +99,8 @@ class TaskStore:
         task_id = uuid.uuid4().hex
         record = _default_task(task_id, conversation_id, prompt,
                                idempotency_key)
-        self._save_task(record)
+        with self._lock:
+            self._save_task(record)
         return record
 
     def get_task(self, task_id: str) -> Optional[dict[str, Any]]:

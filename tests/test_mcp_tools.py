@@ -160,7 +160,8 @@ class TestMcpTools(unittest.TestCase):
             mock_resp.raise_for_status = MagicMock()
             mock_post.return_value = mock_resp
 
-            openhands_start_task(prompt="Test", api_key="test-key")
+            start_result = openhands_start_task(prompt="Test", api_key="test-key")
+            task_id = start_result["task_id"]
 
         # Now mock the status poll.
         mock_get.return_value.json.return_value = {
@@ -171,9 +172,9 @@ class TestMcpTools(unittest.TestCase):
         }
         mock_get.return_value.raise_for_status = MagicMock()
 
-        result = openhands_get_task_status(task_id="nonexistent-should-not-matter")
-        # The task doesn't exist yet in store, so we need to create one first.
-        # Let's use a different approach.
+        result = openhands_get_task_status(task_id=task_id)
+        self.assertEqual(result["status"], "running")
+        self.assertIn("conv-running", result.get("conversation_id", ""))
 
     @patch("mcp_agent.server.requests.get")
     def test_get_status_completed_task_returns_answer(self, mock_get):
