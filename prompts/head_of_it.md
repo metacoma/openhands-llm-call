@@ -33,6 +33,7 @@ Expected tools:
 ```text
 role_list()
 role_start(role, user_task, repo, base_branch, branch, context, artifacts)
+role_wait(role_run_id, timeout_seconds, poll_interval_seconds, return_result)
 role_status(role_run_id)
 role_result(role_run_id)
 ```
@@ -41,7 +42,8 @@ Tool behavior:
 
 - `role_list` returns available roles, descriptions, required artifacts, and whether the role is read-only.
 - `role_start` starts a role-specific task and returns `role_run_id`.
-- `role_status` checks task progress.
+- `role_wait` waits for a long-running role to finish using server-side polling. Use this after `role_start` instead of repeatedly calling `role_status`.
+- `role_status` checks task progress. Single-shot diagnostic only — do not call repeatedly in a tight loop.
 - `role_result` returns the final structured role result and full report.
 
 ## Available Roles
@@ -146,20 +148,21 @@ Expected artifact: `publisher_instructions`.
 6. Only one mutating role may run at a time.
 7. Read-only roles may be used for investigation and validation.
 8. Never hide role failures from the user.
-9. Never claim a role completed unless `role_status` or `role_result` confirms it.
+9. Never claim a role completed unless `role_wait` or `role_result` confirms it.
 10. Preserve artifacts between roles.
 11. Prefer structured decisions over free-form guessing.
 12. If a tool call fails or times out, report the failure and choose a safe retry or stop.
 
 ## Long-Running Role Handling
 
-Roles may run for 30–120 minutes. Use the async pattern:
+Roles may run for 30–120 minutes. Use the recommended async pattern:
 
 ```text
 1. role_start(...)
-2. role_status(role_run_id)
-3. repeat status checks as needed
-4. role_result(role_run_id)
+2. role_wait(role_run_id, timeout_seconds=1800, poll_interval_seconds=15, return_result=true)
+3. If role_wait returns status="completed", continue to next role.
+4. If role_wait returns status="failed"/"stuck"/"timeout", stop and decide whether to retry or report to user.
+5. If role_wait returns status="running" with wait_timed_out=true, wait or call role_wait again later.
 ```
 
 When a role is running, do not start another mutating role against the same repo/branch.
@@ -182,9 +185,9 @@ For each user task:
 
 3. Call `role_start`.
 
-4. Poll until completion.
+4. Call `role_wait` instead of polling `role_status`.
 
-5. Fetch result.
+5. Fetch result (only if needed — `role_wait` with `return_result=true` already returns it).
 
 6. Check if result is usable:
    - completed status;

@@ -118,7 +118,8 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 |---|---|
 | `role_list` | List available worker roles |
 | `role_start` | Start a named worker role |
-| `role_status` | Get status of a running role |
+| `role_wait` | Wait for a long-running role to finish (server-side polling) |
+| `role_status` | Single-shot diagnostic status check (do not poll repeatedly) |
 | `role_result` | Get the result of a completed role |
 
 #### `role_start`
@@ -194,6 +195,64 @@ fail with a clear error.
 - Default `include_full_result=true` preserves existing behavior.
 - When `false`, `full_result` is `null` and `full_result_omitted` is `true`,
   but artifact metadata is still returned.
+
+#### `role_wait` — server-side polling
+
+Wait for a long-running role to finish using server-side polling. Use this after
+`role_start` instead of repeatedly calling `role_status`.
+
+**Recommended flow:**
+
+```text
+role_start -> role_wait
+```
+
+**Example:**
+
+1. Start the role:
+
+```json
+{
+  "role": "scout",
+  "prompt": "Analyze repository https://github.com/metacoma/freeplane_plugin_grpc on main branch. Only inspect, do not modify files. Return scout report.",
+  "context": {},
+  "artifacts": {}
+}
+```
+
+2. Wait for completion:
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1",
+  "timeout_seconds": 1800,
+  "poll_interval_seconds": 15,
+  "return_result": true
+}
+```
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `role_run_id` | Yes | The role run ID returned by `role_start` |
+| `timeout_seconds` | No | Maximum seconds to wait (default 1800, clamped to [1, 7200]) |
+| `poll_interval_seconds` | No | Seconds between status checks (default 15, clamped to [5, 120]) |
+| `return_result` | No | If `true` (default), inline the full result. If `false`, return compact response with `result_available: true` |
+
+**Configuration (environment variables):**
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS` | `1800` | Default timeout |
+| `OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS` | `15` | Default poll interval |
+| `OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS` | `7200` | Maximum allowed timeout |
+
+**Responses:**
+
+- **Completed**: Returns the same structure as `role_result` with an added `duration_seconds` field.
+- **Terminal failure**: Returns `status: "failed"`, `has_result: false`, and an `error` dict with `type`, `message`, and `retryable`.
+- **Bounded timeout**: Returns `status: "running"`, `wait_timed_out: true`, and `poll_after_seconds: 60`.
 
 ### Artifact tools
 

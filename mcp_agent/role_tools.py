@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import time
 from typing import Any, Dict, Optional
 
 from .roles import get_role, list_roles, RoleSpec
@@ -683,6 +684,162 @@ def role_result_impl(
     }
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# role_wait — server-side polling
+# ---------------------------------------------------------------------------
+
+TERMINAL_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "timeout", "stuck"}
+)
+
+_DEFAULT_ROLE_WAIT_TIMEOUT = int(
+    os.getenv("OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS", "1800")
+)
+_DEFAULT_ROLE_WAIT_MAX_TIMEOUT = int(
+    os.getenv("OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS", "7200")
+)
+_DEFAULT_ROLE_WAIT_POLL_INTERVAL = int(
+    os.getenv("OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS", "15")
+)
+_MIN_POLL_INTERVAL = 5
+_MAX_POLL_INTERVAL = 120
+
+
+def role_wait_impl(
+    role_run_id: str,
+    timeout_seconds: int | None = None,
+    poll_interval_seconds: int | None = None,
+    return_result: bool = True,
+) -> dict:
+    """Server-side polling for a long-running role.
+
+    Repeatedly calls ``role_status_impl`` internally until the role reaches
+    a terminal state or the bounded timeout expires.
+
+    Parameters
+    ----------
+    role_run_id :
+        The role run ID returned by ``role_start``.
+    timeout_seconds :
+        Maximum seconds to wait.  Clamped to [1, 7200].
+        Defaults to ``OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS`` env var (1800).
+    poll_interval_seconds :
+        Seconds between status checks.  Clamped to [5, 120].
+        Defaults to ``OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS`` env var (15).
+    return_result :
+        If True and the role completed, inline the full result
+        (delegates to ``role_result_impl``).
+
+    Returns
+    -------
+    dict
+        One of:
+        - completed response with inline result (when ``return_result=True``)
+        - terminal failure response
+        - bounded running response (when wait timeout expires)
+    """
+    # --- Validate role_run_id by doing one status check first ---
+    initial_status = role_status_impl(role_run_id)
+    init_st = initial_status.get("status")
+    if init_st == "failed":
+        return initial_status  # unknown / error
+
+    # --- Clamp parameters ---
+    if timeout_seconds is None:
+        timeout_seconds = _DEFAULT_ROLE_WAIT_TIMEOUT
+    timeout_seconds = max(1, min(timeout_seconds, _DEFAULT_ROLE_WAIT_MAX_TIMEOUT))
+
+    if poll_interval_seconds is None:
+        poll_interval_seconds = _DEFAULT_ROLE_WAIT_POLL_INTERVAL
+    poll_interval_seconds = max(
+        _MIN_POLL_INTERVAL,
+        min(poll_interval_seconds, _MAX_POLL_INTERVAL),
+    )
+
+    # Normalise return_result to bool
+    return_result = bool(return_result)
+
+    # --- Polling loop ---
+    start_mono = time.monotonic()
+    deadline = start_mono + timeout_seconds
+
+    while time.monotonic() < deadline:
+        status = role_status_impl(role_run_id)
+        st = status.get("status")
+
+        if st in TERMINAL_STATUSES:
+            break
+
+        # Sleep remaining time or poll_interval, whichever is less
+        remaining = deadline - time.monotonic()
+        sleep_secs = min(poll_interval_seconds, max(remaining, 0))
+        if sleep_secs > 0:
+            time.sleep(sleep_secs)
+
+    # --- Build response ---
+    duration_seconds = int(time.monotonic() - start_mono)
+    st = status.get("status")
+
+    if st == "completed":
+        if return_result:
+            result = role_result_impl(role_run_id, include_full_result=True)
+            result["duration_seconds"] = duration_seconds
+            return result
+        else:
+            return {
+                "role_run_id": role_run_id,
+                "status": "completed",
+                "has_result": True,
+                "result_available": True,
+                "next_action": "call role_result",
+                "duration_seconds": duration_seconds,
+            }
+
+    if st in ("failed", "stuck"):
+        error_type = "RoleFailed" if st == "failed" else "OpenHandsStuckError"
+        return {
+            "role_run_id": role_run_id,
+            "status": st,
+            "has_result": False,
+            "error": {
+                "type": error_type,
+                "message": status.get(
+                    "error", {}
+                ).get("message", f"Role '{st}'."),
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st in ("cancelled", "timeout"):
+        error_type = f"Role{st.capitalize()}"
+        return {
+            "role_run_id": role_run_id,
+            "status": st,
+            "has_result": False,
+            "error": {
+                "type": error_type,
+                "message": f"Role was {st}.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    # Wait timeout — role still running
+    return {
+        "role_run_id": role_run_id,
+        "status": "running",
+        "has_result": False,
+        "wait_timed_out": True,
+        "message": (
+            "Role is still running after bounded wait. "
+            "Call role_wait again later."
+        ),
+        "poll_after_seconds": 60,
+        "duration_seconds": duration_seconds,
+    }
 
 
 # ---------------------------------------------------------------------------
