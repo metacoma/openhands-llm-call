@@ -25,15 +25,12 @@ Expected response:
 
 Starts a role-specific OpenHands task.
 
-### Input
+### Input (recommended — prompt-only)
 
 ```json
 {
   "role": "scout",
-  "user_task": "Analyze repository and find where to implement feature X",
-  "repo": "https://github.com/metacoma/example",
-  "base_branch": "main",
-  "branch": null,
+  "prompt": "Analyze GitHub repository https://github.com/metacoma/example on main branch. Clone it if necessary. Do not modify files.",
   "context": {
     "run_id": "optional-existing-run-id",
     "idempotency_key": "optional-key"
@@ -45,9 +42,42 @@ Starts a role-specific OpenHands task.
 }
 ```
 
+### Input (backward-compatible — user_task)
+
+```json
+{
+  "role": "scout",
+  "user_task": "Analyze repository and find where to implement feature X",
+  "context": {},
+  "artifacts": {},
+  "idempotency_key": "optional-top-level-key"
+}
+```
+
+### Deprecated parameters
+
+The following parameters are **deprecated** and **no longer passed** to OpenHands as
+selected-repository metadata. They are accepted for backward compatibility only:
+
+- `repo` — Deprecated. No longer passed to OpenHands. Repository instructions should
+  live in the `prompt` text.
+- `base_branch` — Deprecated. No longer passed to OpenHands.
+- `branch` — Deprecated. No longer passed to OpenHands.
+
+If any of these are provided as nested objects (e.g. `{"url": "..."}`), they are
+normalized to strings or discarded.
+
+### Prompt resolution
+
+- `prompt` takes precedence over `user_task` if both are provided.
+- At least one of `prompt` or `user_task` is required.
+
+### Uniqueness scope
+
+`run_id:role:idempotency_key`.
+
 - `idempotency_key` may be provided at top-level or in `context`.
   Top-level takes precedence. Empty string is treated as not provided.
-- Uniqueness scope: `run_id:role:idempotency_key`.
 
 ### Response (success)
 

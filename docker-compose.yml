@@ -19,6 +19,8 @@ services:
       - "${MCP_AGENT_PORT:-8002}:8000"
     environment:
       - OPENHANDS_URL=http://openhands_llm:8000
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
     depends_on:
       - openhands_llm
     restart: unless-stopped

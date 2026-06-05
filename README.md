@@ -63,6 +63,13 @@ User / Head-of-IT
 | `OPENHANDS_ROLE_STATE_DIR` | `.runs` | Directory for role run state, artifacts, and locks |
 | `OPENHANDS_ROLE_LOCK_TTL_MINUTES` | `180` | Stale lock timeout (minutes) |
 
+### MCP server bind host/port
+
+| Environment variable | Default      | Description |
+|---|---|---|
+| `MCP_HOST` | `127.0.0.1` | Bind address for the MCP server. Use `0.0.0.0` in Docker. |
+| `MCP_PORT` | `8000` | Bind port for the MCP server. |
+
 ### Role configuration
 
 Worker roles are defined in `config/roles.yaml`.  Each role specifies:
@@ -116,6 +123,25 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 
 #### `role_start`
 
+**Recommended (prompt-only) usage:**
+
+```json
+{
+  "role": "scout",
+  "prompt": "Analyze GitHub repository https://github.com/metacoma/example on main branch. Clone it if necessary. Do not modify files.",
+  "context": {
+    "run_id": "20260605-abc123",
+    "idempotency_key": "initial-scout"
+  },
+  "artifacts": {}
+}
+```
+
+**Backward-compatible usage (user_task):**
+
+> **Note:** `prompt`-only mode is preferred. `user_task` is kept for backward compatibility.
+> `repo`, `base_branch`, and `branch` are deprecated — repository URL and branch should be included in the `prompt` text.
+
 ```json
 {
   "role": "scout",
@@ -124,14 +150,30 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
   "base_branch": "main",
   "branch": null,
   "context": {
-    "run_id": "20260605-abc123",
-    "idempotency_key": "initial-scout"
+    "run_id": "20260605-abc123"
   },
   "artifacts": {},
   "idempotency_key": "initial-scout"
 }
 ```
 
+**Parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `role` | Yes | The role name (e.g. `scout`, `architect`, `coder`, `reviewer`, `publisher`) |
+| `prompt` | Yes (or `user_task`) | The task/prompt description. Takes precedence over `user_task` |
+| `user_task` | Yes (or `prompt`) | Deprecated alias for `prompt`. Kept for backward compatibility |
+| `context` | No | Dict with `run_id`, `idempotency_key`, etc. |
+| `artifacts` | No | Mapping of artifact names to content |
+| `idempotency_key` | No | Top-level idempotency key (takes precedence over `context.idempotency_key`) |
+| `repo` | No | Deprecated. If provided as a dict it is normalized to a string or discarded. No longer passed to OpenHands |
+| `base_branch` | No | Deprecated. See `repo` |
+| `branch` | No | Deprecated. See `repo` |
+
+**Notes:**
+
+- `repo`, `base_branch`, and `branch` are **deprecated**. Repository URL and branch should be included in the `prompt` text. OpenHands creates an empty/default sandbox with no selected repository metadata.
 - `idempotency_key` (top-level or in `context`) prevents duplicate tasks on retry.
 - `timeout_minutes` is included in the response from the role config.
 - `idempotent_reuse: true` indicates the call was deduplicated.
@@ -257,6 +299,24 @@ Two services are defined in `docker-compose.yml`:
 ```bash
 docker-compose up
 ```
+
+### MCP server access
+
+**Transport:** Streamable HTTP (SHTTP)
+
+**URL from same Docker network:**
+```
+http://mcp_agent:8000/mcp
+```
+
+**URL from host:**
+```
+http://127.0.0.1:8002/mcp
+```
+
+**Key:** empty or dummy
+
+The MCP server binds to `0.0.0.0:8000` inside the container (configurable via `MCP_HOST`/`MCP_PORT` env vars). From the Docker host, use port `8002` (mapped via `docker-compose.yml`).
 
 ## Development
 

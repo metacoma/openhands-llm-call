@@ -128,8 +128,23 @@ def start_v1_app_conversation(
     llm_model: str | None,
     agent_type: str,
 ) -> dict[str, Any]:
+    """Start a new OpenHands V1 conversation.
+
+    Parameters
+    ----------
+    repo :
+        Deprecated.  Kept for backward compatibility but always
+        passed as ``None`` so OpenHands creates an empty/default
+        sandbox with no selected repository metadata.
+    branch :
+        Deprecated.  Kept for backward compatibility but always
+        passed as ``None``.
+    """
     url = f"{base_url.rstrip('/')}/api/v1/app-conversations"
 
+    # NOTE: selected_repository, selected_branch, and git_provider are
+    # always None so the sandbox starts empty.  Repository instructions
+    # live in the prompt text.
     payload: dict[str, Any] = {
         "sandbox_id": None,
         "conversation_id": None,
@@ -147,8 +162,8 @@ def start_v1_app_conversation(
         "system_message_suffix": None,
         "processors": None,
         "llm_model": llm_model,
-        "selected_repository": repo,
-        "selected_branch": branch,
+        "selected_repository": None,
+        "selected_branch": None,
         "git_provider": None,
         "suggested_task": None,
         "title": None,

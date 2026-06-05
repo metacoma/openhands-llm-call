@@ -443,5 +443,84 @@ class TestTaskStorePersistence(unittest.TestCase):
         self.assertEqual(reloaded["prompt"], "Persist test")
 
 
+class TestMcpHostPortConfig(unittest.TestCase):
+    """Test MCP host/port configuration parsing."""
+
+    def test_mcp_host_port_defaults(self):
+        """Default MCP_HOST is 127.0.0.1 and MCP_PORT is 8000."""
+        # Clear any env vars that might be set
+        os.environ.pop("MCP_HOST", None)
+        os.environ.pop("MCP_PORT", None)
+        # Re-import to get fresh module-level values
+        import importlib
+        import mcp_agent.server as server_mod
+        importlib.reload(server_mod)
+        self.assertEqual(server_mod.MCP_HOST, "127.0.0.1")
+        self.assertEqual(server_mod.MCP_PORT, 8000)
+
+    def test_mcp_host_port_from_env(self):
+        """MCP_HOST=0.0.0.0 and MCP_PORT=8000 are parsed correctly."""
+        os.environ["MCP_HOST"] = "0.0.0.0"
+        os.environ["MCP_PORT"] = "8000"
+        import importlib
+        import mcp_agent.server as server_mod
+        importlib.reload(server_mod)
+        self.assertEqual(server_mod.MCP_HOST, "0.0.0.0")
+        self.assertEqual(server_mod.MCP_PORT, 8000)
+
+    def test_mcp_host_port_custom_values(self):
+        """Custom MCP_HOST and MCP_PORT are parsed correctly."""
+        os.environ["MCP_HOST"] = "192.168.1.100"
+        os.environ["MCP_PORT"] = "9999"
+        import importlib
+        import mcp_agent.server as server_mod
+        importlib.reload(server_mod)
+        self.assertEqual(server_mod.MCP_HOST, "192.168.1.100")
+        self.assertEqual(server_mod.MCP_PORT, 9999)
+
+
+class TestNoRepoInPayload(unittest.TestCase):
+    """Test that repo/branch are not included in FastAPI payload."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_no_repo_")
+        os.environ["OPENHANDS_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_STATE_DIR", None)
+        import mcp_agent.server as server_mod
+        server_mod._store = None
+
+    @patch("mcp_agent.server.requests.post")
+    def test_start_task_no_repo_in_payload(self, mock_post):
+        """_start_conversation_on_fastapi does not include repo/branch in payload."""
+        from mcp_agent.server import _start_conversation_on_fastapi
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-no-repo",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        _start_conversation_on_fastapi(
+            prompt="Test prompt",
+            api_key="test-key",
+            llm_model="gpt-4",
+            repo="owner/repo",  # Even with repo passed, it should not be in payload
+            branch="main",
+        )
+
+        # Verify the payload sent to FastAPI
+        call_args = mock_post.call_args
+        payload = call_args[1]["json"]
+        self.assertNotIn("repo", payload)
+        self.assertNotIn("branch", payload)
+        self.assertEqual(payload["prompt"], "Test prompt")
+        self.assertTrue(payload["no_wait"])
+
+
 if __name__ == "__main__":
     unittest.main()
