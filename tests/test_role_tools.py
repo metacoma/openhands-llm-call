@@ -1157,6 +1157,224 @@ class TestLockKeyLifecycle(unittest.TestCase):
             self.assertIsNone(role_run.get("lock_key"))
 
 
+class TestPromptOnlyRoleStart(unittest.TestCase):
+    """Test the new prompt-only role_start model."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_prompt_only_")
+        os.environ["OPENHANDS_STATE_DIR"] = self.tmpdir
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_STATE_DIR", None)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.server as server_mod
+        server_mod._store = None
+
+    @patch("mcp_agent.server.requests.post")
+    def test_role_start_with_prompt_only(self, mock_post):
+        """role_start works with only role and prompt (no user_task)."""
+        from mcp_agent.server import role_start
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-prompt-only",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = role_start(
+            role="scout",
+            prompt="Analyze https://github.com/metacoma/freeplane_plugin_grpc on main branch",
+            context={},
+            artifacts={},
+        )
+
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
+        self.assertIn("scout", result.get("role", ""))
+
+    @patch("mcp_agent.server.requests.post")
+    def test_role_start_user_task_backward_compat(self, mock_post):
+        """role_start still works with user_task (backward compatibility)."""
+        from mcp_agent.server import role_start
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-user-task",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = role_start(
+            role="scout",
+            user_task="Analyze repository ...",
+            context={},
+            artifacts={},
+        )
+
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
+
+    @patch("mcp_agent.server.requests.post")
+    def test_role_start_prompt_takes_precedence_over_user_task(self, mock_post):
+        """When both prompt and user_task are provided, prompt takes precedence."""
+        from mcp_agent.server import role_start
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-precedence",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = role_start(
+            role="scout",
+            prompt="This is the prompt value",
+            user_task="This is the user_task value",
+            context={},
+            artifacts={},
+        )
+
+        self.assertEqual(result["status"], "running")
+        # Verify the prompt value was used (check the captured call)
+        call_args = mock_post.call_args
+        payload = call_args[1]["json"]
+        self.assertIn("This is the prompt value", payload["prompt"])
+
+    def test_role_start_no_prompt_raises_error(self):
+        """role_start rejects when neither prompt nor user_task is provided."""
+        from mcp_agent.server import role_start
+
+        result = role_start(
+            role="scout",
+            prompt=None,
+            user_task=None,
+            context={},
+            artifacts={},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingPrompt")
+        self.assertIn("prompt", result["error"]["message"].lower())
+
+    @patch("mcp_agent.server.requests.post")
+    def test_role_start_nested_repo_dict_no_crash(self, mock_post):
+        """Nested dict repo values do not cause validation errors."""
+        from mcp_agent.server import role_start
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-nested-repo",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = role_start(
+            role="scout",
+            prompt="Analyze repository",
+            repo={"url": "https://github.com/metacoma/freeplane_plugin_grpc"},
+            base_branch={"base_branch": "main"},
+            branch={"branch": None},
+            context={},
+            artifacts={},
+        )
+
+        self.assertEqual(result["status"], "running")
+        # Verify repo was normalized from dict
+        call_args = mock_post.call_args
+        payload = call_args[1]["json"]
+        self.assertNotIn("repo", payload)
+        self.assertNotIn("branch", payload)
+
+    @patch("mcp_agent.server.requests.post")
+    def test_role_start_no_structured_repo_fields_required(self, mock_post):
+        """No error when repo/base_branch/branch are omitted."""
+        from mcp_agent.server import role_start
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-no-repo-fields",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = role_start(
+            role="scout",
+            prompt="Analyze repository",
+            context={},
+            artifacts={},
+        )
+
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
+
+
+class TestOpenHandsEmptySandbox(unittest.TestCase):
+    """Test that OpenHands wrapper sends empty repository metadata."""
+
+    def test_start_conversation_empty_sandbox(self):
+        """start_v1_app_conversation always sends selected_repository=None."""
+        from openhands_llm.openhands_llm_call import start_v1_app_conversation
+
+        # We can't make a real API call, but we can verify the function
+        # signature and that it would pass None values.
+        # The actual API call is tested via mocking in integration.
+        # Here we verify the code path by inspecting the source.
+        import inspect
+        source = inspect.getsource(start_v1_app_conversation)
+        # The function should always set selected_repository to None
+        self.assertIn('selected_repository": None', source)
+        self.assertIn('selected_branch": None', source)
+        self.assertIn('git_provider": None', source)
+
+    @patch("openhands_llm.openhands_llm_call.request_json")
+    def test_openhands_payload_no_repo_metadata(self, mock_request_json):
+        """Verify the actual payload sent has no repo metadata."""
+        from openhands_llm.openhands_llm_call import start_v1_app_conversation
+
+        mock_request_json.return_value = {
+            "conversation_id": "conv-test",
+            "status": "no_wait",
+        }
+
+        start_v1_app_conversation(
+            base_url="http://localhost:3000",
+            api_key="test-key",
+            repo="owner/repo",  # Even with repo passed, should be None in payload
+            branch="main",
+            prompt="Test prompt",
+            llm_model="gpt-4",
+            agent_type="default",
+        )
+
+        # Verify the payload
+        call_args = mock_request_json.call_args
+        json_body = call_args[1]["json_body"]
+
+        self.assertIsNone(json_body["selected_repository"])
+        self.assertIsNone(json_body["selected_branch"])
+        self.assertIsNone(json_body["git_provider"])
+        self.assertEqual(json_body["pr_number"], [])
+
+    def test_prompt_text_present_in_payload(self):
+        """Verify prompt text is present in the message/body sent to OpenHands."""
+        from openhands_llm.openhands_llm_call import start_v1_app_conversation
+
+        import inspect
+        source = inspect.getsource(start_v1_app_conversation)
+        # The prompt should be in the initial_message text
+        self.assertIn('"text": prompt', source)
+
+
 if __name__ == "__main__":
     unittest.main()
 

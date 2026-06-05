@@ -212,9 +212,9 @@ def role_list_impl() -> dict:
 def role_start_impl(
     role: str,
     user_task: str,
-    repo: Optional[str] = None,
-    base_branch: Optional[str] = None,
-    branch: Optional[str] = None,
+    repo: Optional[Any] = None,
+    base_branch: Optional[Any] = None,
+    branch: Optional[Any] = None,
     context: Optional[dict] = None,
     artifacts: Optional[dict] = None,
     idempotency_key: Optional[str] = None,
@@ -226,13 +226,15 @@ def role_start_impl(
     role :
         The role name (e.g. ``"scout"``).
     user_task :
-        The user's original task description.
+        The user's original task description (the effective prompt).
     repo :
-        GitHub repo URL or owner/repo string.
+        Deprecated.  GitHub repo URL or owner/repo string.  May also
+        be a dict; normalization is done by the caller.  No longer
+        passed to OpenHands as selected-repository metadata.
     base_branch :
-        The base branch to use.
+        Deprecated.  See ``repo``.
     branch :
-        Optional feature branch (may be None to auto-create).
+        Deprecated.  See ``repo``.
     context :
         Optional dict with ``run_id`` and other context
         (may include ``idempotency_key``).
@@ -415,12 +417,16 @@ def role_start_impl(
         )
 
     try:
+        # NOTE: repo and branch are intentionally NOT passed to the
+        # FastAPI payload so OpenHands creates an empty/default sandbox.
+        # They are kept in template_vars for backward-compatible prompt
+        # rendering and in the role run record for historical tracking.
         fastapi_result = _start_conversation_on_fastapi(
             prompt=rendered_prompt,
             api_key=api_key,
             llm_model=role_spec.model,
-            repo=repo,
-            branch=branch,
+            repo=None,
+            branch=None,
             max_polls=max_polls,
         )
     except Exception as exc:

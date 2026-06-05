@@ -161,11 +161,14 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
     # Suppress CLI prints from start_v1_app_conversation
     _capture(lambda: None)  # no-op capture to verify helper works
 
+    # NOTE: repo and branch are always passed as None so OpenHands
+    # creates an empty/default sandbox.  Repository instructions live
+    # in the prompt text.
     result = oh.start_v1_app_conversation(
         base_url=base_url,
         api_key=api_key,
-        repo=req.repo,
-        branch=req.branch,
+        repo=None,
+        branch=None,
         prompt=prompt,
         llm_model=llm_model,
         agent_type=req.agent_type,
