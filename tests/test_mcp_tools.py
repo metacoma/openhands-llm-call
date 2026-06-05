@@ -522,5 +522,207 @@ class TestNoRepoInPayload(unittest.TestCase):
         self.assertTrue(payload["no_wait"])
 
 
+class TestPromptNormalization(unittest.TestCase):
+    """Tests for _normalize_text_arg and role_start prompt compatibility."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_prompt_norm_")
+        os.environ["OPENHANDS_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_STATE_DIR", None)
+        import mcp_agent.server as server_mod
+        server_mod._store = None
+
+    # -- _normalize_text_arg direct tests -----------------------------------
+
+    def test_normalize_text_arg_plain_string(self):
+        """_normalize_text_arg('x') returns 'x'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg("x"), "x")
+
+    def test_normalize_text_arg_dict_text(self):
+        """_normalize_text_arg({'text': 'x'}) returns 'x'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg({"text": "x"}), "x")
+
+    def test_normalize_text_arg_dict_prompt(self):
+        """_normalize_text_arg({'prompt': 'x'}) returns 'x'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg({"prompt": "x"}), "x")
+
+    def test_normalize_text_arg_dict_value(self):
+        """_normalize_text_arg({'value': 'x'}) returns 'x'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg({"value": "x"}), "x")
+
+    def test_normalize_text_arg_dict_user_task(self):
+        """_normalize_text_arg({'user_task': 'x'}) returns 'x'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg({"user_task": "x"}), "x")
+
+    def test_normalize_text_arg_dict_task(self):
+        """_normalize_text_arg({'task': 'x'}) returns 'x'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg({"task": "x"}), "x")
+
+    def test_normalize_text_arg_none(self):
+        """_normalize_text_arg(None) returns None."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertIsNone(_normalize_text_arg(None))
+
+    def test_normalize_text_arg_empty_dict(self):
+        """_normalize_text_arg({}) returns str({})."""
+        from mcp_agent.server import _normalize_text_arg
+
+        # Falls back to str() for dicts without known keys
+        self.assertEqual(_normalize_text_arg({}), "{}")
+
+    def test_normalize_text_arg_int(self):
+        """_normalize_text_arg(42) returns '42'."""
+        from mcp_agent.server import _normalize_text_arg
+
+        self.assertEqual(_normalize_text_arg(42), "42")
+
+    # -- role_start with plain string prompt --------------------------------
+
+    @patch("mcp_agent.server._role_tools.role_start_impl")
+    def test_role_start_plain_string_prompt(self, mock_impl):
+        """role_start with plain string prompt works and passes normalized text."""
+        mock_impl.return_value = {"status": "running", "run_id": "test-run-1"}
+
+        from mcp_agent.server import role_start
+
+        result = role_start(role="scout", prompt="Analyze repository ...")
+
+        self.assertEqual(result["status"], "running")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["user_task"], "Analyze repository ...")
+
+    # -- role_start with wrapped prompt object ------------------------------
+
+    @patch("mcp_agent.server._role_tools.role_start_impl")
+    def test_role_start_wrapped_prompt_object(self, mock_impl):
+        """role_start with {'text': '...'} prompt normalizes correctly."""
+        mock_impl.return_value = {"status": "running", "run_id": "test-run-2"}
+
+        from mcp_agent.server import role_start
+
+        result = role_start(
+            role="scout", prompt={"text": "Analyze repository ..."}
+        )
+
+        self.assertEqual(result["status"], "running")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["user_task"], "Analyze repository ...")
+
+    # -- role_start with wrapped user_task object ---------------------------
+
+    @patch("mcp_agent.server._role_tools.role_start_impl")
+    def test_role_start_wrapped_user_task_object(self, mock_impl):
+        """role_start with {'text': '...'} user_task normalizes correctly."""
+        mock_impl.return_value = {"status": "running", "run_id": "test-run-3"}
+
+        from mcp_agent.server import role_start
+
+        result = role_start(
+            role="scout", user_task={"text": "Analyze repository ..."}
+        )
+
+        self.assertEqual(result["status"], "running")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["user_task"], "Analyze repository ...")
+
+    # -- role_start with prompt taking precedence over user_task ------------
+
+    @patch("mcp_agent.server._role_tools.role_start_impl")
+    def test_role_start_prompt_takes_precedence(self, mock_impl):
+        """When both prompt and user_task are provided, prompt takes precedence."""
+        mock_impl.return_value = {"status": "running", "run_id": "test-run-4"}
+
+        from mcp_agent.server import role_start
+
+        result = role_start(
+            role="scout",
+            prompt={"text": "prompt value"},
+            user_task={"text": "user_task value"},
+        )
+
+        self.assertEqual(result["status"], "running")
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["user_task"], "prompt value")
+
+    # -- role_start with missing prompt -------------------------------------
+
+    def test_role_start_missing_prompt_returns_error(self):
+        """role_start with None prompt and user_task returns MissingPrompt error."""
+        from mcp_agent.server import role_start
+
+        result = role_start(role="scout", prompt=None, user_task=None)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingPrompt")
+        self.assertFalse(result["error"]["retryable"])
+
+    # -- role_start with empty string prompt --------------------------------
+
+    @patch("mcp_agent.server._role_tools.role_start_impl")
+    def test_role_start_empty_string_prompt(self, mock_impl):
+        """role_start with empty string prompt returns MissingPrompt error."""
+        from mcp_agent.server import role_start
+
+        result = role_start(role="scout", prompt="")
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingPrompt")
+
+    # -- FastMCP host/port config tests -------------------------------------
+
+    def test_fastmcp_host_from_env(self):
+        """FASTMCP_HOST env var is read correctly."""
+        os.environ["FASTMCP_HOST"] = "0.0.0.0"
+        os.environ["FASTMCP_PORT"] = "8000"
+        import importlib
+        import mcp_agent.server as server_mod
+        importlib.reload(server_mod)
+        self.assertEqual(server_mod._fastmcp_host, "0.0.0.0")
+        self.assertEqual(server_mod._fastmcp_port, 8000)
+
+    def test_fastmcp_host_fallback_to_mcp_host(self):
+        """FASTMCP_HOST falls back to MCP_HOST when not set."""
+        os.environ.pop("FASTMCP_HOST", None)
+        os.environ.pop("FASTMCP_PORT", None)
+        os.environ["MCP_HOST"] = "192.168.1.100"
+        os.environ["MCP_PORT"] = "9999"
+        import importlib
+        import mcp_agent.server as server_mod
+        importlib.reload(server_mod)
+        self.assertEqual(server_mod._fastmcp_host, "192.168.1.100")
+        self.assertEqual(server_mod._fastmcp_port, 9999)
+
+    def test_fastmcp_host_precedence_over_mcp(self):
+        """FASTMCP_HOST takes precedence over MCP_HOST."""
+        os.environ["FASTMCP_HOST"] = "10.0.0.1"
+        os.environ["FASTMCP_PORT"] = "7777"
+        os.environ["MCP_HOST"] = "192.168.1.100"
+        os.environ["MCP_PORT"] = "9999"
+        import importlib
+        import mcp_agent.server as server_mod
+        importlib.reload(server_mod)
+        self.assertEqual(server_mod._fastmcp_host, "10.0.0.1")
+        self.assertEqual(server_mod._fastmcp_port, 7777)
+
+
 if __name__ == "__main__":
     unittest.main()
