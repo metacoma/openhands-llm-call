@@ -1,0 +1,52 @@
+roles:
+  scout:
+    description: "Read-only repository investigator. Finds relevant files, dependencies, commands, constraints, and risks."
+    model: "openai/qwen36-35b-a3b-coder"
+    prompt_template: "prompts/scout.md"
+    readonly: true
+    timeout_minutes: 60
+    requires_artifacts: []
+    output_artifact: "scout_report"
+
+  architect:
+    description: "Read-only implementation planner. Converts user task and scout report into a safe implementation plan."
+    model: "openai/qwen36-35b-a3b-coder"
+    prompt_template: "prompts/architect.md"
+    readonly: true
+    timeout_minutes: 60
+    requires_artifacts:
+      - scout_report
+    output_artifact: "architect_plan"
+
+  coder:
+    description: "Implementation worker. Creates feature branch, modifies code, runs validation, commits result."
+    model: "openai/qwen36-35b-a3b-coder"
+    prompt_template: "prompts/coder.md"
+    readonly: false
+    timeout_minutes: 120
+    requires_artifacts:
+      - scout_report
+      - architect_plan
+    output_artifact: "coder_report"
+
+  reviewer:
+    description: "Read-only reviewer. Reviews diff and validation. Emits ACTION: PASS or ACTION: BLOCKER and risk level."
+    model: "openai/qwen36-27b-q8-mtp"
+    prompt_template: "prompts/reviewer.md"
+    readonly: true
+    timeout_minutes: 75
+    requires_artifacts:
+      - scout_report
+      - architect_plan
+      - coder_report
+    output_artifact: "reviewer_report"
+
+  publisher:
+    description: "Publish instruction generator. Produces exact push and PR commands. Must not push and must not create PR."
+    model: "openai/qwen36-35b-a3b-coder"
+    prompt_template: "prompts/publisher.md"
+    readonly: true
+    timeout_minutes: 30
+    requires_artifacts:
+      - reviewer_report
+    output_artifact: "publisher_instructions"
