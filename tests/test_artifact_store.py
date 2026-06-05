@@ -274,5 +274,328 @@ class TestArtifactToolImpl(unittest.TestCase):
         self.assertEqual(result["error"]["type"], "ArtifactNotFound")
 
 
+class TestArtifactStorePathValidation(unittest.TestCase):
+    """Security tests for ArtifactStore path validation."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_artifact_sec_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+
+    # -- valid save/read regression --
+
+    def test_valid_save_and_read_still_works(self):
+        """Normal save/read round-trip works."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        meta = store.save(
+            run_id="run-valid-001",
+            role_run_id="run-valid-001-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="valid content",
+        )
+        result = store.get("run-valid-001", artifact_name="scout_report")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["content"], "valid content")
+
+    # -- traversal in artifact_name --
+
+    def test_save_rejects_traversal_in_artifact_name_dotdot(self):
+        """artifact_name '..' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-100",
+                role_run_id="run-100-scout-1",
+                role="scout",
+                artifact_name="..",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_artifact_name_prefix(self):
+        """artifact_name '../evil' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-101",
+                role_run_id="run-101-scout-1",
+                role="scout",
+                artifact_name="../evil",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_artifact_name_slash(self):
+        """artifact_name 'foo/evil' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-102",
+                role_run_id="run-102-scout-1",
+                role="scout",
+                artifact_name="foo/evil",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_artifact_name_backslash(self):
+        """artifact_name 'foo\\evil' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-103",
+                role_run_id="run-103-scout-1",
+                role="scout",
+                artifact_name="foo\\evil",
+                content="evil",
+            )
+
+    # -- traversal in run_id --
+
+    def test_save_rejects_traversal_in_run_id_dotdot(self):
+        """run_id '..' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="..",
+                role_run_id="run-200-scout-1",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_run_id_prefix(self):
+        """run_id '../run' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="../run",
+                role_run_id="run-201-scout-1",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_run_id_slash(self):
+        """run_id 'foo/bar' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="foo/bar",
+                role_run_id="run-202-scout-1",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_run_id_backslash(self):
+        """run_id 'foo\\bar' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="foo\\bar",
+                role_run_id="run-203-scout-1",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    # -- traversal in role_run_id --
+
+    def test_save_rejects_traversal_in_role_run_id_dotdot(self):
+        """role_run_id '..' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-300",
+                role_run_id="..",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_role_run_id_prefix(self):
+        """role_run_id '../role' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-301",
+                role_run_id="../role",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_role_run_id_slash(self):
+        """role_run_id 'foo/bar' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-302",
+                role_run_id="foo/bar",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_traversal_in_role_run_id_backslash(self):
+        """role_run_id 'foo\\bar' is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-303",
+                role_run_id="foo\\bar",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    # -- empty / control characters --
+
+    def test_save_rejects_empty_run_id(self):
+        """Empty run_id is rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="",
+                role_run_id="run-400-scout-1",
+                role="scout",
+                artifact_name="report",
+                content="evil",
+            )
+
+    def test_save_rejects_control_characters(self):
+        """Control characters in artifact_name are rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.save(
+                run_id="run-401",
+                role_run_id="run-401-scout-1",
+                role="scout",
+                artifact_name="report\x00evil",
+                content="evil",
+            )
+
+    # -- read-time path escape --
+
+    def test_read_rejects_state_dir_escape(self):
+        """Mutated metadata with '../' path is rejected on read."""
+        import json as _json
+
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+
+        # Save a normal artifact first
+        store.save(
+            run_id="run-500",
+            role_run_id="run-500-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="normal",
+        )
+
+        # Mutate the metadata to point outside state_dir
+        run_dir = os.path.join(self.tmpdir, "run-500")
+        meta_files = [f for f in os.listdir(run_dir) if f.endswith(".meta.json")]
+        self.assertTrue(len(meta_files) > 0)
+        meta_path = os.path.join(run_dir, meta_files[0])
+        with open(meta_path, "r") as f:
+            meta = _json.load(f)
+        meta["artifact_path"] = "../outside.artifact"
+        with open(meta_path, "w") as f:
+            _json.dump(meta, f)
+
+        with self.assertRaises(ValueError):
+            store.get("run-500", artifact_name="scout_report")
+
+    # -- sibling-prefix escape (the core bug) --
+
+    def test_sibling_prefix_escape_rejected(self):
+        """A path under a sibling directory (e.g. state_evil) is rejected.
+
+        This test proves that ``startswith()`` is no longer the security
+        boundary — ``Path.relative_to()`` correctly distinguishes
+        ``/tmp/state_evil`` from ``/tmp/state``.
+        """
+        import json as _json
+
+        from mcp_agent.artifact_store import ArtifactStore
+
+        # Create a state_dir and a sibling directory
+        base = tempfile.mkdtemp(prefix="test_sibling_")
+        state_dir = os.path.join(base, "state")
+        evil_dir = os.path.join(base, "state_evil")
+        os.makedirs(evil_dir, exist_ok=True)
+
+        old_env = os.environ.get("OPENHANDS_ROLE_STATE_DIR")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = state_dir
+
+        try:
+            store = ArtifactStore()
+
+            # Create a fake artifact under the *evil* sibling
+            os.makedirs(evil_dir, exist_ok=True)
+            evil_file = os.path.join(evil_dir, "evil.artifact")
+            with open(evil_file, "w") as f:
+                f.write("leaked")
+
+            # Craft a metadata file that points to the evil sibling
+            run_dir = os.path.join(state_dir, "run-600")
+            os.makedirs(run_dir, exist_ok=True)
+            meta = {
+                "artifact_name": "evil",
+                "role": "scout",
+                "role_run_id": "run-600-scout-1",
+                "run_id": "run-600",
+                "artifact_path": "../state_evil/evil.artifact",
+                "created_at": "2025-01-01T00:00:00+00:00",
+            }
+            meta_file = os.path.join(run_dir, "run-600-scout-1_evil.artifact.meta.json")
+            with open(meta_file, "w") as f:
+                _json.dump(meta, f)
+
+            # Reading should raise ValueError
+            with self.assertRaises(ValueError):
+                store.get("run-600", artifact_name="evil")
+        finally:
+            if old_env:
+                os.environ["OPENHANDS_ROLE_STATE_DIR"] = old_env
+            else:
+                os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+            shutil.rmtree(base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

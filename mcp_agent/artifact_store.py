@@ -11,9 +11,33 @@ state directory to prevent path traversal.
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Strict allow-list for filesystem path components.
+_SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _safe_component(value: str, field: str) -> str:
+    """Validate a path component and return it unchanged.
+
+    Rejects empty values, reserved components (``.`` / ``..``),
+    path traversal characters, control characters, and any
+    character outside the safe allow-list.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Invalid {field}: empty value")
+    if value in {".", ".."}:
+        raise ValueError(f"Invalid {field}: reserved path component")
+    if "/" in value or "\\" in value or ".." in value:
+        raise ValueError(f"Invalid {field}: path traversal is not allowed")
+    if any(ord(ch) < 32 for ch in value):
+        raise ValueError(f"Invalid {field}: control characters are not allowed")
+    if not _SAFE_COMPONENT_RE.fullmatch(value):
+        raise ValueError(f"Invalid {field}: unsupported characters")
+    return value
 
 
 def _now_iso() -> str:
@@ -69,7 +93,12 @@ class ArtifactStore:
         dict
             Artifact metadata record.
         """
-        run_dir = self.state_dir / run_id
+        # Validate all user-controlled path components
+        safe_run_id = _safe_component(run_id, "run_id")
+        _safe_component(role_run_id, "role_run_id")
+        _safe_component(artifact_name, "artifact_name")
+
+        run_dir = self.state_dir / safe_run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # Use role_run_id-based filename to avoid collisions
@@ -82,7 +111,7 @@ class ArtifactStore:
 
         # Write companion metadata
         # Store artifact_path relative to state_dir for safe resolution
-        rel_path = f"{run_id}/{filename}"
+        rel_path = f"{safe_run_id}/{filename}"
         meta = {
             "artifact_name": artifact_name,
             "role": role,
@@ -114,9 +143,14 @@ class ArtifactStore:
         for meta_path in sorted(run_dir.glob("*.meta.json")):
             try:
                 data = json.loads(meta_path.read_text(encoding="utf-8"))
-                # Validate the artifact file still exists
+                # Validate the artifact file still exists and is within state_dir
                 artifact_rel = data.get("artifact_path", "")
                 full_path = self.state_dir / artifact_rel
+                # Skip artifacts with escaped paths
+                try:
+                    self._ensure_under_state_dir(full_path)
+                except ValueError:
+                    continue
                 if full_path.exists():
                     artifacts.append(data)
             except (json.JSONDecodeError, OSError):
@@ -194,6 +228,23 @@ class ArtifactStore:
 
     # -- internals ---------------------------------------------------------
 
+    def _ensure_under_state_dir(self, path: Path) -> Path:
+        """Validate that *path* resolves within ``state_dir``.
+
+        Raises ``ValueError`` if the resolved path escapes the state
+        directory.  Uses ``Path.relative_to()`` instead of string
+        prefix checks to avoid the sibling-prefix vulnerability.
+        """
+        resolved = path.resolve()
+        state_resolved = self.state_dir.resolve()
+        try:
+            resolved.relative_to(state_resolved)
+        except ValueError as exc:
+            raise ValueError(
+                f"Artifact path escapes state directory: {resolved}"
+            ) from exc
+        return resolved
+
     def _read_artifact(self, meta: Dict[str, Any]) -> Dict[str, Any]:
         """Read artifact content and return augmented metadata.
 
@@ -201,13 +252,13 @@ class ArtifactStore:
         """
         artifact_rel = meta.get("artifact_path", "")
 
-        # Security: prevent path traversal
-        full_path = (self.state_dir / artifact_rel).resolve()
-        state_resolved = self.state_dir.resolve()
-        if not str(full_path).startswith(str(state_resolved)):
+        # Reject absolute paths stored in metadata
+        if artifact_rel and os.path.isabs(artifact_rel):
             raise ValueError(
-                f"Artifact path escapes state directory: {artifact_rel}"
+                f"Artifact path must be relative: {artifact_rel}"
             )
+
+        full_path = self._ensure_under_state_dir(self.state_dir / artifact_rel)
 
         try:
             content = full_path.read_text(encoding="utf-8")
