@@ -597,5 +597,161 @@ class TestArtifactStorePathValidation(unittest.TestCase):
             shutil.rmtree(base, ignore_errors=True)
 
 
+class TestArtifactStoreListGetPathValidation(unittest.TestCase):
+    """Regression tests for ArtifactStore.list() and ArtifactStore.get() run_id validation."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_list_get_validation_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+
+    # -- list() rejects traversal in run_id --
+
+    def test_list_rejects_traversal_in_run_id_dotdot(self):
+        """list() rejects run_id '..'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.list("..")
+
+    def test_list_rejects_traversal_in_run_id_prefix(self):
+        """list() rejects run_id '../evil'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.list("../evil")
+
+    def test_list_rejects_traversal_in_run_id_slash(self):
+        """list() rejects run_id 'foo/bar'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.list("foo/bar")
+
+    def test_list_rejects_traversal_in_run_id_backslash(self):
+        """list() rejects run_id 'foo\\bar'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.list("foo\\bar")
+
+    # -- get() rejects traversal in run_id --
+
+    def test_get_rejects_traversal_in_run_id_dotdot(self):
+        """get() rejects run_id '..'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.get("..", artifact_name="report")
+
+    def test_get_rejects_traversal_in_run_id_prefix(self):
+        """get() rejects run_id '../evil'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.get("../evil", artifact_name="report")
+
+    def test_get_rejects_traversal_in_run_id_slash(self):
+        """get() rejects run_id 'foo/bar'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.get("foo/bar", artifact_name="report")
+
+    def test_get_rejects_traversal_in_run_id_backslash(self):
+        """get() rejects run_id 'foo\\bar'."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.get("foo\\bar", artifact_name="report")
+
+    # -- valid list() still works --
+
+    def test_list_valid_run_id_returns_artifacts(self):
+        """list() returns saved artifacts for a valid run_id."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+
+        store.save(
+            run_id="run-valid-001",
+            role_run_id="run-valid-001-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="scout content",
+        )
+        store.save(
+            run_id="run-valid-001",
+            role_run_id="run-valid-001-architect-1",
+            role="architect",
+            artifact_name="architect_plan",
+            content="architect content",
+        )
+
+        artifacts = store.list("run-valid-001")
+        self.assertEqual(len(artifacts), 2)
+        names = {a["artifact_name"] for a in artifacts}
+        self.assertIn("scout_report", names)
+        self.assertIn("architect_plan", names)
+
+    def test_list_nonexistent_run_id_returns_empty(self):
+        """list() returns [] for a non-existent run_id."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        artifacts = store.list("run-nonexistent")
+        self.assertEqual(artifacts, [])
+
+    # -- valid get() still works --
+
+    def test_get_valid_run_id_returns_artifact(self):
+        """get() returns artifact content for a valid run_id."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+
+        store.save(
+            run_id="run-valid-002",
+            role_run_id="run-valid-002-coder-1",
+            role="coder",
+            artifact_name="coder_report",
+            content="## Coder Report\n\nImplementation complete.",
+        )
+
+        result = store.get("run-valid-002", artifact_name="coder_report")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["content"], "## Coder Report\n\nImplementation complete.")
+        self.assertEqual(result["artifact_name"], "coder_report")
+
+    def test_get_by_role_run_id_still_works(self):
+        """get() works with role_run_id for a valid run_id."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+
+        store.save(
+            run_id="run-valid-003",
+            role_run_id="run-valid-003-reviewer-1",
+            role="reviewer",
+            artifact_name="reviewer_report",
+            content="ACTION: PASS\nRISK: LOW",
+        )
+
+        result = store.get("run-valid-003", role_run_id="run-valid-003-reviewer-1")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["content"], "ACTION: PASS\nRISK: LOW")
+
+
 if __name__ == "__main__":
     unittest.main()

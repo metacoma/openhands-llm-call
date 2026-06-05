@@ -134,8 +134,14 @@ class ArtifactStore:
         -------
         list[dict]
             List of artifact metadata records.
+
+        Raises
+        ------
+        ValueError
+            If *run_id* contains path traversal or invalid characters.
         """
-        run_dir = self.state_dir / run_id
+        safe_run_id = _safe_component(run_id, "run_id")
+        run_dir = self._ensure_under_state_dir(self.state_dir / safe_run_id)
         if not run_dir.is_dir():
             return []
 
@@ -182,9 +188,11 @@ class ArtifactStore:
         Raises
         ------
         ValueError
-            If the resolved path would escape the state directory.
+            If *run_id* contains path traversal or invalid characters, or
+            if the resolved path would escape the state directory.
         """
-        run_dir = self.state_dir / run_id
+        safe_run_id = _safe_component(run_id, "run_id")
+        run_dir = self._ensure_under_state_dir(self.state_dir / safe_run_id)
         if not run_dir.is_dir():
             return None
 

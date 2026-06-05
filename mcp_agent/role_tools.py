@@ -698,7 +698,17 @@ def artifact_list_impl(run_id: str) -> dict:
         ``{run_id, artifacts: [...]}``
     """
     store = ArtifactStore()
-    artifacts = store.list(run_id)
+    try:
+        artifacts = store.list(run_id)
+    except ValueError as exc:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "PathTraversalDetected",
+                "message": str(exc),
+                "retryable": False,
+            },
+        }
     return {"run_id": run_id, "artifacts": artifacts}
 
 
