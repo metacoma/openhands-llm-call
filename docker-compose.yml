@@ -1,0 +1,24 @@
+services:
+  openhands_llm:
+    build:
+      context: .
+      dockerfile: openhands_llm/Dockerfile
+    ports:
+      - "${OPENHANDS_LLM_PORT:-8001}:8000"
+    environment:
+      - OPENHANDS_URL=${OPENHANDS_URL:-http://localhost:3000}
+      - OPENHANDS_API_KEY=${OPENHANDS_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+    restart: unless-stopped
+
+  mcp_agent:
+    build:
+      context: .
+      dockerfile: mcp_agent/Dockerfile
+    ports:
+      - "${MCP_AGENT_PORT:-8002}:8000"
+    environment:
+      - OPENHANDS_URL=http://openhands_llm:8000
+    depends_on:
+      - openhands_llm
+    restart: unless-stopped

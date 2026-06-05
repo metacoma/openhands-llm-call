@@ -61,6 +61,15 @@ class CallLMResponse(BaseModel):
     status: str  # "completed", "no_wait", "error"
 
 
+class JobStatusResponse(BaseModel):
+    """Response from GET /v1/jobs/{uid}."""
+
+    conversation_id: str | None = None
+    status: str  # "running", "completed", "failed", "not_found"
+    answer: str = ""
+    execution_status: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -223,6 +232,65 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Job status helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
+    """Check the status of a job by UID (conversation_id).
+
+    Returns a dict with keys: conversation_id, status, answer, execution_status.
+    """
+    conversation = oh.get_v1_conversation(
+        base_url=base_url,
+        api_key=api_key,
+        conversation_id=uid,
+    )
+
+    if not conversation:
+        return {
+            "conversation_id": uid,
+            "status": "not_found",
+            "answer": "",
+            "execution_status": None,
+        }
+
+    exec_status = conversation.get("execution_status")
+    is_done = oh.conversation_is_done(conversation)
+
+    if is_done:
+        # Extract final answer from events
+        events = oh.search_v1_events(
+            base_url=base_url,
+            api_key=api_key,
+            conversation_id=uid,
+            limit=100,
+            max_pages=50,
+        )
+        answers = oh.collect_final_text_from_events(events)
+        final_answer = oh.extract_final_answer([answers]) if answers else ""
+
+        if exec_status in ("failed", "error"):
+            job_status = "failed"
+        else:
+            job_status = "completed"
+
+        return {
+            "conversation_id": uid,
+            "status": job_status,
+            "answer": final_answer,
+            "execution_status": exec_status,
+        }
+
+    return {
+        "conversation_id": uid,
+        "status": "running",
+        "answer": "",
+        "execution_status": exec_status,
+    }
+
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
@@ -252,6 +320,50 @@ def call_lm(req: CallLMRequest) -> JSONResponse:
             "answer": result["answer"],
             "conversation_id": result["conversation_id"],
             "status": result["status"],
+        }
+    )
+
+
+def _resolve_job_url() -> str:
+    """Resolve OpenHands base URL for job status checks."""
+    return DEFAULT_BASE_URL.rstrip("/")
+
+
+def _resolve_job_api_key() -> str:
+    """Resolve API key for job status checks."""
+    key = os.getenv("OPENHANDS_API_KEY")
+    if not key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENHANDS_API_KEY environment variable is required for job status checks",
+        )
+    return key
+
+
+@app.get("/v1/jobs/{uid}", response_model=JobStatusResponse)
+def get_job_status(uid: str) -> JSONResponse:
+    """Check the status of an async LLM job by its UID (conversation_id).
+
+    Returns job status and, if completed, the final answer.
+    """
+    base_url = _resolve_job_url()
+    api_key = _resolve_job_api_key()
+
+    try:
+        job = _get_job_status(uid, base_url, api_key)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"OpenHands API error: {exc}"
+        ) from exc
+
+    return JSONResponse(
+        content={
+            "conversation_id": job["conversation_id"],
+            "status": job["status"],
+            "answer": job["answer"],
+            "execution_status": job["execution_status"],
         }
     )
 
