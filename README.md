@@ -139,15 +139,21 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 
 **Backward-compatible usage (user_task):**
 
+> **Note:** `prompt`-only mode is preferred. `user_task` is kept for backward compatibility.
+> `repo`, `base_branch`, and `branch` are deprecated — repository URL and branch should be included in the `prompt` text.
+
 ```json
 {
   "role": "scout",
   "user_task": "Analyze repository and find where to implement feature X",
+  "repo": "https://github.com/metacoma/example",
+  "base_branch": "main",
+  "branch": null,
   "context": {
-    "run_id": "20260605-abc123",
-    "idempotency_key": "initial-scout"
+    "run_id": "20260605-abc123"
   },
-  "artifacts": {}
+  "artifacts": {},
+  "idempotency_key": "initial-scout"
 }
 ```
 
