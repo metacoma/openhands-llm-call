@@ -297,6 +297,7 @@ def role_start_impl(
         base_branch=base_branch,
         branch=branch,
         artifact_name=role_spec.output_artifact,
+        attempt=attempt,
     )
 
     logger.info(

@@ -83,10 +83,20 @@ class RoleRunStore:
         base_branch: Optional[str] = None,
         branch: Optional[str] = None,
         artifact_name: Optional[str] = None,
+        attempt: int = 1,
     ) -> dict[str, Any]:
         """Create a new role run record and persist it.
 
-        Returns the new record dict.
+        Parameters
+        ----------
+        attempt :
+            Attempt number for this role within the run.  Used to
+            produce distinct artifact filenames on retry.
+
+        Returns
+        -------
+        dict
+            The new record dict.
         """
         run_dir = self.state_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -107,7 +117,7 @@ class RoleRunStore:
             "result_summary": None,
             "action": None,
             "risk": None,
-            "attempt": 1,
+            "attempt": attempt,
         }
 
         with self._lock:
