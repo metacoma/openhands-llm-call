@@ -18,6 +18,7 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from .task_store import TaskStore
+from . import role_tools as _role_tools
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -950,6 +951,146 @@ def check_job(uid: str, url: str | None = None) -> dict:
     resp = requests.get(f"{base}/v1/jobs/{uid}", timeout=120)
     resp.raise_for_status()
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Role-level MCP tools
+# ---------------------------------------------------------------------------
+
+
+@MCP.tool()
+def role_list() -> dict:
+    """List all available worker roles.
+
+    Returns a dict with a ``roles`` key containing a list of role
+    summaries (name, description, model, readonly,
+    requires_artifacts, output_artifact, timeout_minutes).
+
+    Example::
+
+        {
+            "roles": [
+                {
+                    "name": "scout",
+                    "description": "Read-only repository investigator...",
+                    "model": "openai/qwen36-35b-a3b-coder",
+                    "readonly": true,
+                    "requires_artifacts": [],
+                    "output_artifact": "scout_report",
+                    "timeout_minutes": 60
+                },
+                ...
+            ]
+        }
+    """
+    return _role_tools.role_list_impl()
+
+
+@MCP.tool()
+def role_start(
+    role: str,
+    user_task: str,
+    repo: str | None = None,
+    base_branch: str | None = None,
+    branch: str | None = None,
+    context: dict | None = None,
+    artifacts: dict | None = None,
+) -> dict:
+    """Start a named worker role as an OpenHands task.
+
+    The server renders the role-specific prompt, selects the model,
+    and starts an OpenHands task using the existing backend.
+
+    Args:
+        role: The role name (e.g. ``"scout"``, ``"architect"``,
+            ``"coder"``, ``"reviewer"``, ``"publisher"``).
+        user_task: The user's original task description.
+        repo: GitHub repo URL or owner/repo string.
+        base_branch: The base branch to use.
+        branch: Optional feature branch (may be None to auto-create).
+        context: Optional dict with ``run_id`` and other context.
+        artifacts: Mapping of artifact names to their text content
+            (e.g. ``{"scout_report": "..."}``).
+
+    Returns:
+        On success: ``{run_id, role_run_id, role, status, poll_after_seconds}``
+        On failure: ``{status: "failed", error: {...}}``
+
+    Example::
+
+        {
+            "run_id": "20260605-abc123",
+            "role_run_id": "20260605-abc123-scout-1",
+            "role": "scout",
+            "status": "running",
+            "poll_after_seconds": 30
+        }
+    """
+    return _role_tools.role_start_impl(
+        role=role,
+        user_task=user_task,
+        repo=repo,
+        base_branch=base_branch,
+        branch=branch,
+        context=context,
+        artifacts=artifacts,
+    )
+
+
+@MCP.tool()
+def role_status(role_run_id: str) -> dict:
+    """Get the status of a previously started role.
+
+    Args:
+        role_run_id: The role run ID returned by ``role_start``.
+
+    Returns:
+        Normalized status dict.
+
+    Example::
+
+        {
+            "role_run_id": "20260605-abc123-scout-1",
+            "run_id": "20260605-abc123",
+            "role": "scout",
+            "status": "running",
+            "summary": "Short summary if available",
+            "has_result": false
+        }
+    """
+    return _role_tools.role_status_impl(role_run_id=role_run_id)
+
+
+@MCP.tool()
+def role_result(role_run_id: str) -> dict:
+    """Get the result of a completed role.
+
+    If the role is not yet completed, returns status without full result.
+    If completed, fetches the full result, saves the artifact, and
+    derives summary/action/risk.
+
+    Args:
+        role_run_id: The role run ID returned by ``role_start``.
+
+    Returns:
+        Structured role result.
+
+    Example::
+
+        {
+            "role_run_id": "20260605-abc123-scout-1",
+            "run_id": "20260605-abc123",
+            "role": "scout",
+            "status": "completed",
+            "action": "CONTINUE",
+            "risk": null,
+            "artifact_name": "scout_report",
+            "artifact_path": "runs/20260605-abc123/01-scout.answer.md",
+            "result_summary": "Short summary",
+            "full_result": "Full markdown report"
+        }
+    """
+    return _role_tools.role_result_impl(role_run_id=role_run_id)
 
 
 # ---------------------------------------------------------------------------
