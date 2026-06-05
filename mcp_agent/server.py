@@ -85,15 +85,25 @@ def _start_conversation_on_fastapi(
     branch: str | None = None,
     agent_type: str = "default",
     url: str | None = None,
+    max_polls: int | None = None,
 ) -> dict[str, Any]:
-    """POST /v1/call_lm with no_wait=True and return the response dict."""
+    """POST /v1/call_lm with no_wait=True and return the response dict.
+
+    Parameters
+    ----------
+    max_polls :
+        Optional per-request max poll count.  If not provided, falls
+        back to the global ``OPENHANDS_MAX_RUNTIME // OPENHANDS_POLL_INTERVAL``.
+    """
     base = (url or OPENHANDS_URL).rstrip("/")
     payload: dict[str, Any] = {
         "prompt": prompt,
         "api_key": api_key,
         "no_wait": True,
         "poll_interval": OPENHANDS_POLL_INTERVAL,
-        "max_polls": OPENHANDS_MAX_RUNTIME // OPENHANDS_POLL_INTERVAL,
+        "max_polls": max_polls or (
+            OPENHANDS_MAX_RUNTIME // OPENHANDS_POLL_INTERVAL
+        ),
     }
     if llm_model:
         payload["llm_model"] = llm_model
@@ -995,6 +1005,7 @@ def role_start(
     branch: str | None = None,
     context: dict | None = None,
     artifacts: dict | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Start a named worker role as an OpenHands task.
 
@@ -1008,12 +1019,17 @@ def role_start(
         repo: GitHub repo URL or owner/repo string.
         base_branch: The base branch to use.
         branch: Optional feature branch (may be None to auto-create).
-        context: Optional dict with ``run_id`` and other context.
+        context: Optional dict with ``run_id`` and other context
+            (may include ``idempotency_key``).
         artifacts: Mapping of artifact names to their text content
             (e.g. ``{"scout_report": "..."}``).
+        idempotency_key: Optional stable key to deduplicate retried
+            calls.  Top-level key takes precedence over
+            ``context.idempotency_key``.
 
     Returns:
-        On success: ``{run_id, role_run_id, role, status, poll_after_seconds}``
+        On success: ``{run_id, role_run_id, role, status, poll_after_seconds,
+        timeout_minutes, idempotent_reuse}``
         On failure: ``{status: "failed", error: {...}}``
 
     Example::
@@ -1023,7 +1039,9 @@ def role_start(
             "role_run_id": "20260605-abc123-scout-1",
             "role": "scout",
             "status": "running",
-            "poll_after_seconds": 30
+            "poll_after_seconds": 30,
+            "timeout_minutes": 60,
+            "idempotent_reuse": false
         }
     """
     return _role_tools.role_start_impl(
@@ -1034,6 +1052,7 @@ def role_start(
         branch=branch,
         context=context,
         artifacts=artifacts,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -1062,7 +1081,9 @@ def role_status(role_run_id: str) -> dict:
 
 
 @MCP.tool()
-def role_result(role_run_id: str) -> dict:
+def role_result(
+    role_run_id: str, include_full_result: bool = True
+) -> dict:
     """Get the result of a completed role.
 
     If the role is not yet completed, returns status without full result.
@@ -1071,11 +1092,14 @@ def role_result(role_run_id: str) -> dict:
 
     Args:
         role_run_id: The role run ID returned by ``role_start``.
+        include_full_result: If True (default), returns the full result
+            text.  If False, omits ``full_result`` but still returns
+            artifact metadata and a summary.
 
     Returns:
         Structured role result.
 
-    Example::
+    Example (full)::
 
         {
             "role_run_id": "20260605-abc123-scout-1",
@@ -1089,8 +1113,97 @@ def role_result(role_run_id: str) -> dict:
             "result_summary": "Short summary",
             "full_result": "Full markdown report"
         }
+
+    Example (compact)::
+
+        {
+            "role_run_id": "20260605-abc123-scout-1",
+            "run_id": "20260605-abc123",
+            "role": "scout",
+            "status": "completed",
+            "action": "CONTINUE",
+            "risk": null,
+            "artifact_name": "scout_report",
+            "artifact_path": "runs/20260605-abc123/01-scout.answer.md",
+            "result_summary": "Short summary",
+            "full_result": null,
+            "full_result_omitted": true
+        }
     """
-    return _role_tools.role_result_impl(role_run_id=role_run_id)
+    return _role_tools.role_result_impl(
+        role_run_id=role_run_id,
+        include_full_result=include_full_result,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Artifact MCP tools
+# ---------------------------------------------------------------------------
+
+
+@MCP.tool()
+def artifact_list(run_id: str) -> dict:
+    """List artifacts for a given run.
+
+    Args:
+        run_id: The top-level run identifier returned by ``role_start``.
+
+    Returns:
+        A dict with ``run_id`` and ``artifacts`` (list of artifact
+        metadata records).
+
+    Example::
+
+        {
+            "run_id": "20260605-abc123",
+            "artifacts": [
+                {
+                    "artifact_name": "scout_report",
+                    "role": "scout",
+                    "role_run_id": "20260605-abc123-scout-1",
+                    "artifact_path": "runs/20260605-abc123/...",
+                    "created_at": "..."
+                }
+            ]
+        }
+    """
+    return _role_tools.artifact_list_impl(run_id=run_id)
+
+
+@MCP.tool()
+def artifact_get(
+    run_id: str | None = None,
+    artifact_name: str | None = None,
+    role_run_id: str | None = None,
+) -> dict:
+    """Get an artifact by name or role_run_id.
+
+    Args:
+        run_id: The top-level run identifier.
+        artifact_name: Logical artifact name (e.g. ``"scout_report"``).
+            Mutually exclusive with ``role_run_id``; if both are
+            provided, ``artifact_name`` is preferred.
+        role_run_id: The role-specific run ID.
+
+    Returns:
+        Artifact metadata with ``content`` key, or an error dict.
+
+    Example::
+
+        {
+            "run_id": "20260605-abc123",
+            "artifact_name": "scout_report",
+            "role": "scout",
+            "role_run_id": "20260605-abc123-scout-1",
+            "artifact_path": "runs/20260605-abc123/...",
+            "content": "Full artifact text ..."
+        }
+    """
+    return _role_tools.artifact_get_impl(
+        run_id=run_id,
+        artifact_name=artifact_name,
+        role_run_id=role_run_id,
+    )
 
 
 # ---------------------------------------------------------------------------

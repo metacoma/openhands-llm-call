@@ -212,6 +212,103 @@ class RoleRunStore:
                     continue
             return count
 
+    # -- idempotency index -----------------------------------------------
+
+    def _idempotency_index_path(self) -> Path:
+        """Return the path to the idempotency index file."""
+        return self.state_dir / "idempotency_index.json"
+
+    def save_idempotency_record(
+        self, scope: str, role_run_id: str
+    ) -> None:
+        """Persist an idempotency scope → role_run_id mapping.
+
+        Parameters
+        ----------
+        scope :
+            The uniqueness scope string (e.g.
+            ``"run_id:role:idempotency_key"``).
+        role_run_id :
+            The role run ID that this scope maps to.
+        """
+        index_path = self._idempotency_index_path()
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            index = {}
+        index[scope] = role_run_id
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.state_dir), suffix=".tmp", prefix="idem_"
+        )
+        try:
+            os.write(
+                fd,
+                json.dumps(index, indent=2, ensure_ascii=False).encode(
+                    "utf-8"
+                ),
+            )
+            os.fsync(fd)
+            os.close(fd)
+            os.rename(tmp_path, str(index_path))
+        except Exception:
+            try:
+                os.close(fd)  # type: ignore[possibly-unbound]
+            except OSError:
+                pass
+            raise
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    def find_by_idempotency_scope(
+        self, scope: str
+    ) -> Optional[str]:
+        """Look up a role_run_id by idempotency scope.
+
+        Returns the role_run_id if found, or None.
+        """
+        index_path = self._idempotency_index_path()
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        return index.get(scope)
+
+    def clear_idempotency_scope(self, scope: str) -> None:
+        """Remove a scope from the idempotency index."""
+        index_path = self._idempotency_index_path()
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        index.pop(scope, None)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.state_dir), suffix=".tmp", prefix="idem_"
+        )
+        try:
+            os.write(
+                fd,
+                json.dumps(index, indent=2, ensure_ascii=False).encode(
+                    "utf-8"
+                ),
+            )
+            os.fsync(fd)
+            os.close(fd)
+            os.rename(tmp_path, str(index_path))
+        except Exception:
+            try:
+                os.close(fd)  # type: ignore[possibly-unbound]
+            except OSError:
+                pass
+            raise
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     # -- internals ---------------------------------------------------------
 
     def _record_path(self, role_run_id: str) -> Path:
