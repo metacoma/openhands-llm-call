@@ -255,6 +255,19 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
             "execution_status": None,
         }
 
+    # Detect raw API wrapper responses (e.g. {"items": []}) that do not
+    # represent an actual conversation object.  A real conversation always
+    # carries at least one of these identifying fields.
+    if not conversation.get("id") and not conversation.get(
+        "app_conversation_id"
+    ) and not conversation.get("conversation_id"):
+        return {
+            "conversation_id": uid,
+            "status": "not_found",
+            "answer": "",
+            "execution_status": None,
+        }
+
     exec_status = conversation.get("execution_status")
     is_done = oh.conversation_is_done(conversation)
 
