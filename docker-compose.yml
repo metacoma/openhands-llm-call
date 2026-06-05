@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: openhands_llm/Dockerfile
     ports:
-      - "${OPENHANDS_LLM_PORT:-8001}:8000"
+      - "0.0.0.0:${OPENHANDS_LLM_PORT:-8001}:8000"
     environment:
       - OPENHANDS_URL=${OPENHANDS_URL:-http://localhost:3000}
       - OPENHANDS_API_KEY=${OPENHANDS_API_KEY:-}
@@ -16,11 +16,13 @@ services:
       context: .
       dockerfile: mcp_agent/Dockerfile
     ports:
-      - "${MCP_AGENT_PORT:-8002}:8000"
+      - "0.0.0.0:${MCP_AGENT_PORT:-8002}:8000"
     environment:
       - OPENHANDS_URL=http://openhands_llm:8000
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8000
     depends_on:
       - openhands_llm
     restart: unless-stopped

@@ -38,17 +38,47 @@ logger.setLevel(logging.INFO)
 # MCP server
 # ---------------------------------------------------------------------------
 
-MCP = FastMCP(
-    "openhands-llm-mcp",
-    instructions="MCP server that wraps the OpenHands LLM Call FastAPI endpoints",
-)
-
 OPENHANDS_URL = os.getenv("OPENHANDS_URL", "http://localhost:8000").rstrip("/")
 
 # MCP bind host/port – configurable via env, defaults to 127.0.0.1 for
 # local development and 0.0.0.0 when running in Docker.
 MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
+
+# FastMCP host/port – configurable via FASTMCP_* env vars, falling back
+# to MCP_* vars.  Passed to the FastMCP constructor when supported.
+_fastmcp_host = os.getenv("FASTMCP_HOST", MCP_HOST)
+_fastmcp_port = int(os.getenv("FASTMCP_PORT", str(MCP_PORT)))
+
+# Try to pass host/port to FastMCP constructor if supported.
+# The installed mcp>=1.0.0 may or may not accept these parameters.
+_fastmcp_kwargs: dict[str, Any] = {
+    "host": _fastmcp_host,
+    "port": _fastmcp_port,
+}
+
+try:
+    MCP = FastMCP(
+        "openhands-llm-mcp",
+        **_fastmcp_kwargs,
+        instructions="MCP server that wraps the OpenHands LLM Call FastAPI endpoints",
+    )
+    logger.info(
+        "FastMCP initialized with host=%s port=%s",
+        _fastmcp_host, _fastmcp_port,
+    )
+except TypeError:
+    # FastMCP constructor does not accept host/port — fall back to defaults.
+    # Binding is still controlled by uvicorn.run() below.
+    MCP = FastMCP(
+        "openhands-llm-mcp",
+        instructions="MCP server that wraps the OpenHands LLM Call FastAPI endpoints",
+    )
+    logger.info(
+        "FastMCP constructor does not accept host/port; "
+        "binding controlled by uvicorn.run(host=%s, port=%s)",
+        MCP_HOST, MCP_PORT,
+    )
 
 # Long-running task defaults
 OPENHANDS_POLL_INTERVAL = int(
@@ -1012,11 +1042,30 @@ def role_list() -> dict:
     return _role_tools.role_list_impl()
 
 
+def _normalize_text_arg(value: Any) -> str | None:
+    """Normalize a prompt/user_task argument that may be wrapped as a dict.
+
+    OpenHands may serialize a plain string prompt as an object:
+        {"text": "actual prompt text"}
+    This helper extracts the string from both forms.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("text", "prompt", "value", "user_task", "task"):
+            nested = value.get(key)
+            if isinstance(nested, str):
+                return nested
+    return str(value)
+
+
 @MCP.tool()
 def role_start(
     role: str,
-    prompt: str | None = None,
-    user_task: str | None = None,
+    prompt: Any = None,
+    user_task: Any = None,
     repo: Any | None = None,
     base_branch: Any | None = None,
     branch: Any | None = None,
@@ -1033,10 +1082,12 @@ def role_start(
         role: The role name (e.g. ``"scout"``, ``"architect"``,
             ``"coder"``, ``"reviewer"``, ``"publisher"``).
         prompt: The user's task/prompt description.  Used as primary
-            input when provided.
+            input when provided.  Accepts both plain strings and
+            dict-wrapped values (e.g. ``{"text": "..."}``).
         user_task: Deprecated alias for ``prompt``.  Kept for backward
             compatibility.  If both are provided, ``prompt`` takes
-            precedence.
+            precedence.  Accepts both plain strings and dict-wrapped
+            values.
         repo: Deprecated.  If provided as a dict it is normalized to a
             string or discarded.  No longer passed to OpenHands as
             selected-repository metadata.
@@ -1067,8 +1118,10 @@ def role_start(
             "idempotent_reuse": false
         }
     """
-    # Resolve prompt from prompt or user_task
-    effective_prompt = prompt or user_task
+    # Normalize prompt/user_task: handle both plain strings and
+    # dict-wrapped values (e.g. {"text": "..."}) that OpenHands
+    # may serialize.
+    effective_prompt = _normalize_text_arg(prompt) or _normalize_text_arg(user_task)
     if not effective_prompt:
         return {
             "status": "failed",
