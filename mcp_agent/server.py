@@ -76,5 +76,19 @@ def check_health() -> dict:
     return resp.json()
 
 
+@MCP.tool()
+def check_job(uid: str, url: str | None = None) -> dict:
+    """Check the status of an async LLM job by its UID.
+
+    Args:
+        uid: The job UID (conversation_id) returned by call_llm with no_wait=True.
+        url: OpenHands base URL override (defaults to OPENHANDS_URL env var).
+    """
+    base = (url or OPENHANDS_URL).rstrip("/")
+    resp = requests.get(f"{base}/v1/jobs/{uid}", timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
 if __name__ == "__main__":
     MCP.run(transport="streamable-http")
