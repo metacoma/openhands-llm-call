@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-import openhands_llm_call as oh
+from . import openhands_llm_call as oh
 
 # ---------------------------------------------------------------------------
 # Config / defaults
