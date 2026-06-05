@@ -381,6 +381,33 @@ def get_job_status(uid: str) -> JSONResponse:
     )
 
 
+@app.get("/v1/jobs/{uid}/events")
+def get_job_events(uid: str, limit: int = 50) -> JSONResponse:
+    """Get events for a job (conversation)."""
+    base_url = _resolve_job_url()
+    api_key = _resolve_job_api_key()
+
+    try:
+        events = oh.search_v1_events(
+            base_url=base_url,
+            api_key=api_key,
+            conversation_id=uid,
+            limit=min(limit, 100),
+            max_pages=50,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"OpenHands API error: {exc}"
+        ) from exc
+
+    return JSONResponse(
+        content={
+            "events": events,
+            "count": len(events),
+        }
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}

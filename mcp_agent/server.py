@@ -1,16 +1,807 @@
 #!/usr/bin/env python3
-"""MCP server that proxies to the OpenHands LLM Call FastAPI server."""
+"""MCP server that proxies to the OpenHands LLM Call FastAPI server.
 
+Supports long-running OpenHands tasks via a non-blocking start + polling
+pattern.  Task state is persisted as JSON files under a configurable
+directory so that repeated MCP calls and process restarts do not lose data.
+"""
+
+import json
+import logging
 import os
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
 import requests
 from mcp.server.fastmcp import FastMCP
 
+from .task_store import TaskStore
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger("openhands-mcp")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# ---------------------------------------------------------------------------
+# MCP server
+# ---------------------------------------------------------------------------
+
 MCP = FastMCP(
     "openhands-llm-mcp",
-    description="MCP server that wraps the OpenHands LLM Call FastAPI endpoints",
+    instructions="MCP server that wraps the OpenHands LLM Call FastAPI endpoints",
 )
 
 OPENHANDS_URL = os.getenv("OPENHANDS_URL", "http://localhost:8000").rstrip("/")
+
+# Long-running task defaults
+OPENHANDS_POLL_INTERVAL = int(
+    os.getenv("OPENHANDS_POLL_INTERVAL_SECONDS", "10")
+)
+OPENHANDS_MAX_RUNTIME = int(
+    os.getenv("OPENHANDS_MAX_RUNTIME_SECONDS", "7200")
+)
+OPENHANDS_REQUEST_TIMEOUT = int(
+    os.getenv("OPENHANDS_REQUEST_TIMEOUT_SECONDS", "60")
+)
+# Module-level task store (created once on first tool call)
+_store: TaskStore | None = None
+
+
+def _get_store() -> TaskStore:
+    global _store
+    if _store is None:
+        state_dir = os.getenv(
+            "OPENHANDS_STATE_DIR", "/tmp/openhands-llm-call-state"
+        )
+        _store = TaskStore(state_dir)
+    return _store
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Helper: start a conversation via FastAPI in non-blocking mode
+# ---------------------------------------------------------------------------
+
+
+def _start_conversation_on_fastapi(
+    prompt: str,
+    api_key: str,
+    llm_model: str | None = None,
+    repo: str | None = None,
+    branch: str | None = None,
+    agent_type: str = "default",
+    url: str | None = None,
+) -> dict[str, Any]:
+    """POST /v1/call_lm with no_wait=True and return the response dict."""
+    base = (url or OPENHANDS_URL).rstrip("/")
+    payload: dict[str, Any] = {
+        "prompt": prompt,
+        "api_key": api_key,
+        "no_wait": True,
+        "poll_interval": OPENHANDS_POLL_INTERVAL,
+        "max_polls": OPENHANDS_MAX_RUNTIME // OPENHANDS_POLL_INTERVAL,
+    }
+    if llm_model:
+        payload["llm_model"] = llm_model
+    if repo:
+        payload["repo"] = repo
+    if branch:
+        payload["branch"] = branch
+    if agent_type:
+        payload["agent_type"] = agent_type
+
+    resp = requests.post(
+        f"{base}/v1/call_lm",
+        json=payload,
+        timeout=OPENHANDS_REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# MCP tools
+# ---------------------------------------------------------------------------
+
+
+@MCP.tool()
+def openhands_start_task(
+    prompt: str,
+    api_key: str,
+    llm_model: str | None = None,
+    repo: str | None = None,
+    branch: str | None = None,
+    agent_type: str = "default",
+    url: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    """Start a new OpenHands task and return a task_id for polling.
+
+    This tool returns immediately (non-blocking) so that long-running
+    OpenHands jobs (30-50 min) do not block the MCP caller.
+
+    Args:
+        prompt: The task prompt for the agent.
+        api_key: OpenHands API key.
+        llm_model: LLM model override (e.g. openai/qwen3:32b).
+        repo: GitHub repo full name (owner/repo).
+        branch: Branch to use.
+        agent_type: OpenHands agent type (default: 'default').
+        url: OpenHands LLM base URL override.
+        idempotency_key: Optional stable key to deduplicate retried calls.
+
+    Returns:
+        A dict with task_id, conversation_id, status, and a message
+        instructing the caller to poll with openhands_get_task_status.
+
+    Example::
+
+        {
+            "task_id": "abc123",
+            "conversation_id": "conv-xyz",
+            "status": "running",
+            "created_at": "2025-01-01T00:00:00+00:00",
+            "message": "Task started. Poll with openhands_get_task_status."
+        }
+    """
+    store = _get_store()
+
+    # Idempotency: if a task with the same key already exists and is
+    # terminal, return it; if it is still running, return the existing
+    # record so the caller does not get a duplicate job.
+    if idempotency_key:
+        existing = store.find_by_idempotency_key(idempotency_key)
+        if existing:
+            status = existing.get("status", "unknown")
+            if status in ("completed", "failed", "cancelled", "timeout"):
+                logger.info(
+                    "Idempotency key %s matched terminal task %s; "
+                    "returning existing task",
+                    idempotency_key,
+                    existing["task_id"],
+                )
+                return {
+                    "task_id": existing["task_id"],
+                    "conversation_id": existing.get("conversation_id"),
+                    "status": status,
+                    "created_at": existing.get("created_at"),
+                    "message": (
+                        f"Idempotent match: task {existing['task_id']} "
+                        f"already completed with status '{status}'."
+                    ),
+                }
+            logger.info(
+                "Idempotency key %s matched running task %s; "
+                "returning existing task to avoid duplicates",
+                idempotency_key,
+                existing["task_id"],
+            )
+            return {
+                "task_id": existing["task_id"],
+                "conversation_id": existing.get("conversation_id"),
+                "status": status,
+                "created_at": existing.get("created_at"),
+                "message": (
+                    f"Idempotent match: task {existing['task_id']} "
+                    f"is already {status}. Poll for result."
+                ),
+            }
+
+    # Start conversation on FastAPI (non-blocking).
+    try:
+        logger.info("Starting OpenHands conversation (no_wait=True)")
+        result = _start_conversation_on_fastapi(
+            prompt=prompt,
+            api_key=api_key,
+            llm_model=llm_model,
+            repo=repo,
+            branch=branch,
+            agent_type=agent_type,
+            url=url,
+        )
+    except requests.exceptions.Timeout as exc:
+        logger.error("Timeout starting OpenHands conversation: %s", exc)
+        return {
+            "status": "failed",
+            "error": {
+                "type": "RequestTimeout",
+                "message": f"Timeout calling FastAPI server: {exc}",
+                "retryable": True,
+            },
+        }
+    except requests.exceptions.ConnectionError as exc:
+        logger.error("Connection error starting OpenHands conversation: %s", exc)
+        return {
+            "status": "failed",
+            "error": {
+                "type": "ConnectionError",
+                "message": f"Cannot reach FastAPI server: {exc}",
+                "retryable": True,
+            },
+        }
+    except requests.exceptions.HTTPError as exc:
+        logger.error("HTTP error starting OpenHands conversation: %s", exc)
+        return {
+            "status": "failed",
+            "error": {
+                "type": "HTTPError",
+                "message": f"HTTP {exc.response.status_code}: {exc.response.text[:500]}",
+                "retryable": exc.response.status_code < 500,
+            },
+        }
+    except Exception as exc:
+        logger.error("Unexpected error starting OpenHands conversation: %s", exc)
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnexpectedError",
+                "message": str(exc),
+                "retryable": False,
+            },
+        }
+
+    conversation_id = (
+        result.get("conversation_id")
+        or result.get("id")
+        or result.get("app_conversation_id")
+    )
+
+    if not conversation_id:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingConversationId",
+                "message": (
+                    "FastAPI response did not include a conversation_id. "
+                    f"Raw response: {json.dumps(result, ensure_ascii=False)[:500]}"
+                ),
+                "retryable": False,
+            },
+        }
+
+    # Persist task record.
+    task_record = store.create_task(
+        conversation_id=conversation_id,
+        prompt=prompt,
+        idempotency_key=idempotency_key,
+    )
+    # Update conversation_id from the FastAPI response.
+    store.update_task(task_record["task_id"], conversation_id=conversation_id)
+
+    logger.info(
+        "Task started: task_id=%s conversation_id=%s",
+        task_record["task_id"],
+        conversation_id,
+    )
+
+    return {
+        "task_id": task_record["task_id"],
+        "conversation_id": conversation_id,
+        "status": "running",
+        "created_at": task_record["created_at"],
+        "message": "Task started. Poll with openhands_get_task_status.",
+    }
+
+
+@MCP.tool()
+def openhands_get_task_status(
+    task_id: str,
+    url: str | None = None,
+) -> dict:
+    """Get the status of a previously started OpenHands task.
+
+    If the task is still running, this tool polls the FastAPI server
+    to refresh the status.
+
+    Args:
+        task_id: The task_id returned by openhands_start_task.
+        url: OpenHands LLM base URL override.
+
+    Returns:
+        A dict with task_id, conversation_id, status, duration_seconds,
+        and a progress_hint.
+
+    Example::
+
+        {
+            "task_id": "abc123",
+            "conversation_id": "conv-xyz",
+            "status": "running",
+            "created_at": "2025-01-01T00:00:00+00:00",
+            "updated_at": "2025-01-01T00:30:00+00:00",
+            "duration_seconds": 1800,
+            "last_event": "Agent is working on the task",
+            "progress_hint": "OpenHands is still working"
+        }
+    """
+    store = _get_store()
+    task = store.get_task(task_id)
+
+    if task is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownTaskId",
+                "message": f"No task found with task_id='{task_id}'.",
+                "retryable": False,
+            },
+        }
+
+    status = task.get("status", "unknown")
+    conversation_id = task.get("conversation_id")
+
+    # Terminal tasks: return cached state.
+    if status in ("completed", "failed", "cancelled", "timeout"):
+        result = task.get("result")
+        if isinstance(result, dict):
+            answer = result.get("answer", "")
+        elif isinstance(result, str):
+            answer = result
+        else:
+            answer = ""
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": status,
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), task.get("updated_at")
+            ),
+            "answer": answer,
+        }
+
+    # Running / queued: poll FastAPI for latest status.
+    if not conversation_id:
+        store.update_task(task_id, status="unknown", updated_at=_utcnow_iso())
+        return {
+            "task_id": task_id,
+            "conversation_id": None,
+            "status": "unknown",
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), task.get("updated_at")
+            ),
+            "progress_hint": "No conversation_id yet; waiting for OpenHands",
+        }
+
+    base = (url or OPENHANDS_URL).rstrip("/")
+    try:
+        resp = requests.get(
+            f"{base}/v1/jobs/{conversation_id}",
+            timeout=OPENHANDS_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        job_data = resp.json()
+    except requests.exceptions.Timeout as exc:
+        logger.warning(
+            "Timeout polling job %s status: %s", conversation_id, exc
+        )
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": status,
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), task.get("updated_at")
+            ),
+            "progress_hint": "Polling timed out; task may still be running.",
+            "last_poll_error": str(exc),
+        }
+    except requests.exceptions.ConnectionError as exc:
+        logger.warning(
+            "Connection error polling job %s status: %s", conversation_id, exc
+        )
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": status,
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), task.get("updated_at")
+            ),
+            "progress_hint": "Cannot reach server; task may still be running.",
+            "last_poll_error": str(exc),
+        }
+    except Exception as exc:
+        logger.warning(
+            "Error polling job %s status: %s", conversation_id, exc
+        )
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": status,
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), task.get("updated_at")
+            ),
+            "progress_hint": f"Poll error: {exc}",
+            "last_poll_error": str(exc),
+        }
+
+    api_status = job_data.get("status", "unknown")
+    exec_status = job_data.get("execution_status")
+
+    # Map FastAPI status to our status model.
+    if api_status == "completed" or exec_status in ("finished", "success"):
+        new_status = "completed"
+    elif api_status == "failed" or exec_status in ("failed", "error"):
+        new_status = "failed"
+    elif api_status == "not_found":
+        new_status = "unknown"
+    else:
+        new_status = "running"
+
+    # Update local store.
+    update_fields: dict[str, Any] = {
+        "status": new_status,
+        "last_polled_at": _utcnow_iso(),
+        "updated_at": _utcnow_iso(),
+    }
+    answer_for_return = ""
+    if new_status == "completed":
+        answer = job_data.get("answer", "")
+        answer_for_return = answer
+        update_fields["result"] = {
+            "answer": answer,
+            "completed_at": _utcnow_iso(),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), _utcnow_iso()
+            ),
+        }
+    elif new_status == "failed":
+        update_fields["error"] = {
+            "type": "OpenHandsApiError",
+            "message": f"Task failed with execution_status={exec_status}",
+            "retryable": False,
+        }
+
+    store.update_task(task_id, **update_fields)
+
+    # Build progress hint.
+    progress_hints = {
+        "running": "OpenHands is still working",
+        "queued": "Task is queued in OpenHands",
+        "completed": "Task completed successfully",
+        "failed": "Task failed — see error field for details",
+        "unknown": "Unable to determine task status",
+    }
+
+    return {
+        "task_id": task_id,
+        "conversation_id": conversation_id,
+        "status": new_status,
+        "created_at": task.get("created_at"),
+        "updated_at": update_fields.get("updated_at", task.get("updated_at")),
+        "duration_seconds": _duration_seconds(
+            task.get("created_at"),
+            update_fields.get("updated_at", task.get("updated_at")),
+        ),
+        "execution_status": exec_status,
+        "answer": answer_for_return,
+        "last_event": job_data.get("answer", "")[:200] if new_status == "completed" else None,
+        "progress_hint": progress_hints.get(new_status, "Unknown"),
+    }
+
+
+@MCP.tool()
+def openhands_get_task_result(
+    task_id: str,
+    url: str | None = None,
+) -> dict:
+    """Get the final result / answer of a completed OpenHands task.
+
+    Args:
+        task_id: The task_id returned by openhands_start_task.
+        url: OpenHands LLM base URL override.
+
+    Returns:
+        A dict with task_id, conversation_id, status, answer, and
+        completed_at.
+
+    Example::
+
+        {
+            "task_id": "abc123",
+            "conversation_id": "conv-xyz",
+            "status": "completed",
+            "answer": "The final answer text...",
+            "completed_at": "2025-01-01T01:00:00+00:00",
+            "duration_seconds": 3600
+        }
+    """
+    store = _get_store()
+    task = store.get_task(task_id)
+
+    if task is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownTaskId",
+                "message": f"No task found with task_id='{task_id}'.",
+                "retryable": False,
+            },
+        }
+
+    status = task.get("status", "unknown")
+    conversation_id = task.get("conversation_id")
+
+    # Already completed: return cached result.
+    if status == "completed":
+        result = task.get("result") or {}
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except json.JSONDecodeError:
+                result = {"answer": result}
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": "completed",
+            "answer": result.get("answer", "") if isinstance(result, dict) else result,
+            "completed_at": result.get("completed_at") if isinstance(result, dict) else None,
+            "duration_seconds": result.get("duration_seconds") if isinstance(result, dict) else None,
+        }
+
+    # Terminal non-completed: return error.
+    if status in ("failed", "cancelled", "timeout"):
+        error = task.get("error") or {}
+        if isinstance(error, str):
+            error = {"type": "TaskError", "message": error}
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": status,
+            "error": error,
+        }
+
+    # Still running: try to fetch latest answer from FastAPI.
+    if not conversation_id:
+        return {
+            "task_id": task_id,
+            "conversation_id": None,
+            "status": status,
+            "message": "No conversation_id yet; task may still be starting.",
+        }
+
+    base = (url or OPENHANDS_URL).rstrip("/")
+    try:
+        resp = requests.get(
+            f"{base}/v1/jobs/{conversation_id}",
+            timeout=OPENHANDS_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        job_data = resp.json()
+    except Exception as exc:
+        logger.warning("Error fetching result for task %s: %s", task_id, exc)
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": status,
+            "message": "Still running; could not fetch latest result.",
+            "last_poll_error": str(exc),
+        }
+
+    api_status = job_data.get("status", "unknown")
+    answer = job_data.get("answer", "")
+
+    if api_status == "completed" or job_data.get("execution_status") in (
+        "finished",
+        "success",
+    ):
+        store.update_task(
+            task_id,
+            status="completed",
+            result={
+                "answer": answer,
+                "completed_at": _utcnow_iso(),
+                "duration_seconds": _duration_seconds(
+                    task.get("created_at"), _utcnow_iso()
+                ),
+            },
+            updated_at=_utcnow_iso(),
+            last_polled_at=_utcnow_iso(),
+        )
+        return {
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "status": "completed",
+            "answer": answer,
+            "completed_at": _utcnow_iso(),
+            "duration_seconds": _duration_seconds(
+                task.get("created_at"), _utcnow_iso()
+            ),
+        }
+
+    return {
+        "task_id": task_id,
+        "conversation_id": conversation_id,
+        "status": "running",
+        "message": "Task is still running. Poll again later.",
+    }
+
+
+@MCP.tool()
+def openhands_get_task_events(
+    task_id: str,
+    limit: int = 50,
+    url: str | None = None,
+) -> dict:
+    """Get events (logs) for a previously started OpenHands task.
+
+    Events are fetched from the FastAPI server on each call; they are
+    not cached locally to keep state small.
+
+    Args:
+        task_id: The task_id returned by openhands_start_task.
+        limit: Maximum number of events to return (max 100).
+        url: OpenHands LLM base URL override.
+
+    Returns:
+        A dict with task_id, events list, and count.
+
+    Example::
+
+        {
+            "task_id": "abc123",
+            "events": [...],
+            "count": 10
+        }
+    """
+    store = _get_store()
+    task = store.get_task(task_id)
+
+    if task is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownTaskId",
+                "message": f"No task found with task_id='{task_id}'.",
+                "retryable": False,
+            },
+        }
+
+    conversation_id = task.get("conversation_id")
+    if not conversation_id:
+        return {
+            "task_id": task_id,
+            "events": [],
+            "count": 0,
+            "message": "No conversation_id available for this task.",
+        }
+
+    base = (url or OPENHANDS_URL).rstrip("/")
+    try:
+        resp = requests.get(
+            f"{base}/v1/jobs/{conversation_id}/events",
+            params={"limit": min(max(limit, 1), 100)},
+            timeout=OPENHANDS_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.Timeout as exc:
+        logger.warning("Timeout fetching events for task %s: %s", task_id, exc)
+        return {
+            "task_id": task_id,
+            "events": [],
+            "count": 0,
+            "error": {
+                "type": "RequestTimeout",
+                "message": f"Timeout fetching events: {exc}",
+                "retryable": True,
+            },
+        }
+    except requests.exceptions.ConnectionError as exc:
+        logger.warning(
+            "Connection error fetching events for task %s: %s", task_id, exc
+        )
+        return {
+            "task_id": task_id,
+            "events": [],
+            "count": 0,
+            "error": {
+                "type": "ConnectionError",
+                "message": f"Cannot reach server: {exc}",
+                "retryable": True,
+            },
+        }
+    except Exception as exc:
+        logger.warning("Error fetching events for task %s: %s", task_id, exc)
+        return {
+            "task_id": task_id,
+            "events": [],
+            "count": 0,
+            "error": {
+                "type": "UnexpectedError",
+                "message": str(exc),
+                "retryable": False,
+            },
+        }
+
+    events = data.get("events", [])
+
+    # Update local events_summary for quick access.
+    summary = [
+        {
+            "event_id": evt.get("id") or evt.get("event_id") or "",
+            "kind": evt.get("kind") or evt.get("type") or "",
+            "source": evt.get("source") or "",
+        }
+        for evt in events[:20]
+    ]
+    store.update_task(task_id, events_summary=summary)
+
+    return {
+        "task_id": task_id,
+        "events": events,
+        "count": len(events),
+    }
+
+
+@MCP.tool()
+def openhands_cancel_task(task_id: str) -> dict:
+    """Cancel a previously started OpenHands task (best-effort).
+
+    Note: OpenHands V1 API may not support task cancellation.  This
+    tool marks the task as cancelled locally, but the remote conversation
+    may continue running.
+
+    Args:
+        task_id: The task_id returned by openhands_start_task.
+
+    Returns:
+        A confirmation dict with the updated status.
+    """
+    store = _get_store()
+    task = store.get_task(task_id)
+
+    if task is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownTaskId",
+                "message": f"No task found with task_id='{task_id}'.",
+                "retryable": False,
+            },
+        }
+
+    current_status = task.get("status", "unknown")
+    if current_status in ("completed", "failed", "cancelled", "timeout"):
+        return {
+            "task_id": task_id,
+            "status": current_status,
+            "message": f"Task is already in terminal state '{current_status}'.",
+        }
+
+    store.update_task(task_id, status="cancelled", updated_at=_utcnow_iso())
+    logger.info("Task %s marked as cancelled (local only)", task_id)
+
+    return {
+        "task_id": task_id,
+        "status": "cancelled",
+        "message": (
+            "Task marked as cancelled locally. "
+            "Note: OpenHands API may not support remote cancellation; "
+            "the conversation may continue running."
+        ),
+    }
 
 
 @MCP.tool()
@@ -26,8 +817,13 @@ def call_llm(
     poll_interval: int = 10,
     max_polls: int = 180,
     no_wait: bool = False,
+    wait_seconds: int = 0,
 ) -> dict:
     """Create an OpenHands agent conversation and return the final LLM answer.
+
+    This tool is backward-compatible with the original ``call_llm``.  By
+    default it now runs in **non-blocking** mode (``no_wait=True``).  Use
+    ``wait_seconds`` to request bounded blocking.
 
     Args:
         prompt: The task prompt for the agent.
@@ -41,31 +837,97 @@ def call_llm(
         poll_interval: Polling interval in seconds.
         max_polls: Maximum polling attempts.
         no_wait: Only start conversation without waiting for completion.
+        wait_seconds: Bounded blocking time (default 0 = non-blocking).
+            If > 0, waits up to that many seconds before returning.
+
+    Returns:
+        If ``no_wait=True`` or ``wait_seconds`` expires: a dict with
+        ``task_id`` and polling instructions.
+        If ``wait_seconds`` is large enough for completion: a dict with
+        ``answer``, ``conversation_id``, and ``status``.
     """
     base = (url or OPENHANDS_URL).rstrip("/")
-    payload = {
-        "prompt": prompt,
-        "api_key": api_key,
-        "poll_interval": poll_interval,
-        "max_polls": max_polls,
-        "no_wait": no_wait,
-    }
-    if llm_model:
-        payload["llm_model"] = llm_model
-    if repo:
-        payload["repo"] = repo
-    if branch:
-        payload["branch"] = branch
-    if agent_type:
-        payload["agent_type"] = agent_type
-    if url:
-        payload["url"] = url
-    if conversation_id:
-        payload["conversation_id"] = conversation_id
 
-    resp = requests.post(f"{base}/v1/call_lm", json=payload, timeout=3600)
-    resp.raise_for_status()
-    return resp.json()
+    # --- mode: existing conversation (no_wait implied) -------------------
+    if conversation_id:
+        payload = {
+            "conversation_id": conversation_id,
+            "api_key": api_key,
+            "events_limit": 100,
+            "events_max_pages": 50,
+            "final_fetch_delay": 30,
+            "verbose_events": False,
+        }
+        resp = requests.post(
+            f"{base}/v1/call_lm", json=payload, timeout=OPENHANDS_REQUEST_TIMEOUT
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # --- mode: start via new non-blocking flow --------------------------
+    # Use openhands_start_task internally.
+    start_result = openhands_start_task(
+        prompt=prompt,
+        api_key=api_key,
+        llm_model=llm_model,
+        repo=repo,
+        branch=branch,
+        agent_type=agent_type,
+        url=url,
+    )
+
+    # If start failed, return the error immediately.
+    if start_result.get("status") == "failed":
+        return start_result
+
+    task_id = start_result.get("task_id", "")
+
+    # --- bounded wait if requested --------------------------------------
+    if wait_seconds > 0:
+        elapsed = 0
+        while elapsed < wait_seconds:
+            status_result = openhands_get_task_status(task_id=task_id, url=url)
+            st = status_result.get("status", "unknown")
+            if st == "completed":
+                return {
+                    "answer": status_result.get("answer", ""),
+                    "conversation_id": status_result.get("conversation_id"),
+                    "status": "completed",
+                    "duration_seconds": status_result.get("duration_seconds"),
+                }
+            if st in ("failed", "cancelled", "timeout"):
+                return {
+                    "answer": "",
+                    "conversation_id": status_result.get("conversation_id"),
+                    "status": st,
+                    "error": status_result.get("error"),
+                }
+
+            remaining = wait_seconds - elapsed
+            sleep_time = min(OPENHANDS_POLL_INTERVAL, remaining)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            elapsed += sleep_time
+
+        # Timeout: return task_id so caller can poll.
+        return {
+            "task_id": task_id,
+            "conversation_id": start_result.get("conversation_id"),
+            "status": "running",
+            "message": (
+                f"Waited {wait_seconds}s; task still running. "
+                "Poll with openhands_get_task_status."
+            ),
+        }
+
+    # --- no_wait (default) ----------------------------------------------
+    return {
+        "task_id": task_id,
+        "conversation_id": start_result.get("conversation_id"),
+        "status": start_result.get("status", "running"),
+        "created_at": start_result.get("created_at"),
+        "message": "Task started. Poll with openhands_get_task_status.",
+    }
 
 
 @MCP.tool()
@@ -88,6 +950,24 @@ def check_job(uid: str, url: str | None = None) -> dict:
     resp = requests.get(f"{base}/v1/jobs/{uid}", timeout=120)
     resp.raise_for_status()
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Utility
+# ---------------------------------------------------------------------------
+
+
+def _duration_seconds(start_iso: str | None, end_iso: str | None) -> int | None:
+    """Compute duration in seconds between two ISO-8601 strings."""
+    if not start_iso or not end_iso:
+        return None
+    try:
+        start_dt = datetime.fromisoformat(start_iso)
+        end_dt = datetime.fromisoformat(end_iso)
+        diff = (end_dt - start_dt).total_seconds()
+        return int(max(diff, 0))
+    except (ValueError, TypeError):
+        return None
 
 
 if __name__ == "__main__":
