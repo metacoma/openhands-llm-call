@@ -1166,7 +1166,10 @@ def role_start(
 
 @MCP.tool()
 def role_status(role_run_id: str) -> dict:
-    """Get the status of a previously started role.
+    """Single-shot diagnostic status check.
+
+    Do not call repeatedly in a tight loop; use ``role_wait`` for
+    server-side polling.
 
     Args:
         role_run_id: The role run ID returned by ``role_start``.
@@ -1241,6 +1244,91 @@ def role_result(
     return _role_tools.role_result_impl(
         role_run_id=role_run_id,
         include_full_result=include_full_result,
+    )
+
+
+# ---------------------------------------------------------------------------
+# role_wait — server-side polling
+# ---------------------------------------------------------------------------
+
+
+@MCP.tool()
+def role_wait(
+    role_run_id: str,
+    timeout_seconds: int | None = None,
+    poll_interval_seconds: int | None = None,
+    return_result: bool = True,
+) -> dict:
+    """Wait for a long-running role to finish using server-side polling.
+
+    Use this after ``role_start`` instead of repeatedly calling ``role_status``.
+    Returns completed result, terminal error, or bounded running state.
+
+    Args:
+        role_run_id: The role run ID returned by ``role_start``.
+        timeout_seconds: Maximum seconds to wait (default 1800, clamped to [1, 7200]).
+            Override with env var ``OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS``.
+        poll_interval_seconds: Seconds between status checks (default 15, clamped to [5, 120]).
+            Override with env var ``OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS``.
+        return_result: If True (default) and the role completed, inline the
+            full result.  If False, return a compact response with
+            ``result_available: true`` and ``next_action: "call role_result"``.
+
+    Returns
+    -------
+    dict
+        One of:
+
+        **Completed with result** (return_result=True)::
+
+            {
+                "role_run_id": "...",
+                "status": "completed",
+                "has_result": true,
+                "result": "...",
+                "duration_seconds": 742
+            }
+
+        **Terminal failure**::
+
+            {
+                "role_run_id": "...",
+                "status": "failed",
+                "has_result": false,
+                "error": {
+                    "type": "RoleFailed",
+                    "message": "...",
+                    "retryable": true
+                },
+                "duration_seconds": 1234
+            }
+
+        **Bounded timeout** (role still running)::
+
+            {
+                "role_run_id": "...",
+                "status": "running",
+                "has_result": false,
+                "wait_timed_out": true,
+                "message": "Role is still running after bounded wait. Call role_wait again later.",
+                "poll_after_seconds": 60,
+                "duration_seconds": 1800
+            }
+
+    Example::
+
+        {
+            "role_run_id": "20260605-abc123-scout-1",
+            "timeout_seconds": 1800,
+            "poll_interval_seconds": 15,
+            "return_result": true
+        }
+    """
+    return _role_tools.role_wait_impl(
+        role_run_id=role_run_id,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        return_result=return_result,
     )
 
 
