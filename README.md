@@ -25,8 +25,8 @@ docker compose -f docker-compose.test.yml up --build
 
 This starts three services:
 - **mock_server** on port `8003` — fake OpenHands V1 API
-- **openhands_llm** on port `8004` — FastAPI server pointing to the mock
-- **mcp_agent** on port `8005` — MCP agent pointing to openhands_llm
+- **openhands_llm** on port `8001` — FastAPI server pointing to the mock
+- **mcp_agent** on port `8002` — MCP agent pointing to openhands_llm
 
 ### With real OpenHands backend
 
@@ -70,9 +70,6 @@ This starts two services:
 ```bash
 # Use mock backend (default)
 bin/test_call_llm.sh
-
-# Use real backend
-bin/test_call_llm.sh --real
 
 # Custom URL
 bin/test_call_llm.sh --url http://localhost:8001

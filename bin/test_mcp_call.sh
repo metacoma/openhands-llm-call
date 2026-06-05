@@ -7,7 +7,6 @@
 #
 # Usage:
 #   bin/test_mcp_call.sh                    # uses defaults (mock mode)
-#   bin/test_mcp_call.sh --real             # uses real OpenHands backend
 #   bin/test_mcp_call.sh --url http://...   # custom mcp_agent URL
 #   bin/test_mcp_call.sh --delay 30         # mock delay in seconds
 #
@@ -29,8 +28,6 @@ MOCK_DELAY="${MOCK_DELAY:-60}"
 POLL_INTERVAL=5
 MAX_POLLS=720
 
-MODE="mock"
-
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
@@ -38,8 +35,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --url)
             MCP_URL="$2"; shift 2 ;;
-        --real)
-            MODE="real"; shift ;;
         --delay)
             MOCK_DELAY="$2"; shift 2 ;;
         --help|-h)

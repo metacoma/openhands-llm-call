@@ -15,7 +15,7 @@ services:
       context: .
       dockerfile: openhands_llm/Dockerfile
     ports:
-      - "${OPENHANDS_LLM_PORT:-8004}:8000"
+      - "${OPENHANDS_LLM_PORT:-8001}:8000"
     environment:
       - OPENHANDS_URL=http://mock_server:8000
       - OPENHANDS_API_KEY=mock-api-key
@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: mcp_agent/Dockerfile
     ports:
-      - "${MCP_AGENT_PORT:-8005}:8000"
+      - "${MCP_AGENT_PORT:-8002}:8000"
     environment:
       - OPENHANDS_URL=http://openhands_llm:8000
     depends_on:

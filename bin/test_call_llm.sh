@@ -4,7 +4,6 @@
 #
 # Usage:
 #   bin/test_call_llm.sh                    # uses defaults (mock mode)
-#   bin/test_call_llm.sh --real             # uses real OpenHands backend
 #   bin/test_call_llm.sh --url http://...   # custom openhands_llm URL
 #   bin/test_call_llm.sh --delay 30         # mock delay in seconds
 #   bin/test_call_llm.sh --prompt "Hello"   # custom prompt
@@ -27,7 +26,6 @@ MOCK_DELAY="${MOCK_DELAY:-60}"
 POLL_INTERVAL=5
 MAX_POLLS=720  # 60 minutes max
 
-MODE="mock"
 CUSTOM_PROMPT=""
 
 # ---------------------------------------------------------------------------
@@ -37,8 +35,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --url)
             LLM_URL="$2"; shift 2 ;;
-        --real)
-            MODE="real"; shift ;;
         --delay)
             MOCK_DELAY="$2"; shift 2 ;;
         --prompt)
@@ -58,31 +54,19 @@ done
 # Submit LLM call (no_wait=true)
 # ---------------------------------------------------------------------------
 echo "=== Submitting LLM call ==="
-echo "  Mode:     $MODE"
-echo "  URL:      $LLM_URL"
-echo "  Poll int: ${POLL_INTERVAL}s"
+echo "  URL:       $LLM_URL"
+echo "  Poll int:  ${POLL_INTERVAL}s"
 echo "  Max polls: $MAX_POLLS"
 echo ""
 
-if [[ "$MODE" == "real" ]]; then
-    RESPONSE=$(curl -s -X POST "$LLM_URL/v1/call_lm" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"prompt\": \"${CUSTOM_PROMPT:-Hello, world. Please respond with a short greeting.\",
-            \"api_key\": \"${API_KEY}\",
-            \"llm_model\": \"${LLM_MODEL}\",
-            \"no_wait\": true
-        }")
-else
-    RESPONSE=$(curl -s -X POST "$LLM_URL/v1/call_lm" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"prompt\": \"${CUSTOM_PROMPT:-Hello, world. Please respond with a short greeting.\",
-            \"api_key\": \"${API_KEY}\",
-            \"llm_model\": \"${LLM_MODEL}\",
-            \"no_wait\": true
-        }")
-fi
+RESPONSE=$(curl -s -X POST "$LLM_URL/v1/call_lm" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"prompt\": \"${CUSTOM_PROMPT:-Hello, world. Please respond with a short greeting.\",
+        \"api_key\": \"${API_KEY}\",
+        \"llm_model\": \"${LLM_MODEL}\",
+        \"no_wait\": true
+    }")
 
 # Extract conversation_id (job UID)
 JOB_UID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('conversation_id',''))" 2>/dev/null || echo "")
