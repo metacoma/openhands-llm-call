@@ -12,7 +12,7 @@ Client ──► mcp_agent (port 8002) ──► openhands_llm (port 8001) ─�
 ```
 
 - **openhands_llm** — FastAPI server that wraps OpenHands V1 API calls. Supports both synchronous (blocking) and asynchronous (fire-and-forget with job UID) modes.
-- **mcp_agent** — MCP (Model Context Protocol) server that exposes the LLM call as a tool, enabling integration with AI agents.
+- **mcp_agent** — MCP (Model Context Protocol) server that exposes the LLM call as a tool, enabling integration with AI agents. Supports long-running tasks via a non-blocking start + polling pattern.
 - **mock_server** — Fake OpenHands V1 backend for testing without a real OpenHands instance.
 
 ## Quick start
@@ -49,6 +49,10 @@ This starts two services:
 | `OPENHANDS_URL` | `http://localhost:3000` | OpenHands V1 API base URL |
 | `OPENHANDS_API_KEY` | _(required)_ | Bearer API key for OpenHands |
 | `LLM_MODEL` | _(optional)_ | Default LLM model |
+| `OPENHANDS_POLL_INTERVAL_SECONDS` | `10` | Polling interval for long-running tasks (seconds) |
+| `OPENHANDS_MAX_RUNTIME_SECONDS` | `7200` | Maximum runtime for long-running tasks (seconds, 2 hours) |
+| `OPENHANDS_REQUEST_TIMEOUT_SECONDS` | `60` | HTTP request timeout for API calls (seconds) |
+| `OPENHANDS_STATE_DIR` | `/tmp/openhands-llm-call-state` | Directory for task state persistence (JSON files) |
 | `OPENHANDS_LLM_PORT` | `8001` | Port for openhands_llm service |
 | `MCP_AGENT_PORT` | `8002` | Port for mcp_agent service |
 | `MOCK_SERVER_PORT` | `8003` | Port for mock_server service |
@@ -196,11 +200,141 @@ Health check endpoint.
 
 ## MCP tools
 
-The MCP agent exposes these tools:
+### Long-running task tools (NEW)
 
-- **call_llm** — Create an OpenHands agent conversation (same as POST /v1/call_lm)
+These tools support the non-blocking start + polling pattern for long-running
+OpenHands tasks (30–50+ minutes).
+
+#### openhands_start_task
+
+Start a new OpenHands task and return a `task_id` immediately.
+
+```json
+{
+  "tool": "openhands_start_task",
+  "arguments": {
+    "prompt": "Fix bug X in repo Y",
+    "api_key": "your-api-key",
+    "llm_model": "openai/qwen3:32b",
+    "repo": "owner/repo",
+    "branch": "main",
+    "idempotency_key": "optional-stable-key"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "task_id": "abc123",
+  "conversation_id": "conv-xyz",
+  "status": "running",
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "message": "Task started. Poll with openhands_get_task_status."
+}
+```
+
+#### openhands_get_task_status
+
+Poll the status of a previously started task.
+
+```json
+{
+  "tool": "openhands_get_task_status",
+  "arguments": {
+    "task_id": "abc123"
+  }
+}
+```
+
+**Response (running):**
+```json
+{
+  "task_id": "abc123",
+  "conversation_id": "conv-xyz",
+  "status": "running",
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:30:00+00:00",
+  "duration_seconds": 1800,
+  "execution_status": "running",
+  "progress_hint": "OpenHands is still working"
+}
+```
+
+**Response (completed):**
+```json
+{
+  "task_id": "abc123",
+  "conversation_id": "conv-xyz",
+  "status": "completed",
+  "answer": "The final answer text...",
+  "duration_seconds": 3600
+}
+```
+
+#### openhands_get_task_result
+
+Get the final answer of a completed task.
+
+```json
+{
+  "tool": "openhands_get_task_result",
+  "arguments": {
+    "task_id": "abc123"
+  }
+}
+```
+
+#### openhands_get_task_events
+
+Get events (logs) for a task.
+
+```json
+{
+  "tool": "openhands_get_task_events",
+  "arguments": {
+    "task_id": "abc123",
+    "limit": 50
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "task_id": "abc123",
+  "events": [...],
+  "count": 10
+}
+```
+
+#### openhands_cancel_task
+
+Cancel a task (best-effort; OpenHands API may not support remote cancellation).
+
+```json
+{
+  "tool": "openhands_cancel_task",
+  "arguments": {
+    "task_id": "abc123"
+  }
+}
+```
+
+### Backward-compatible tools
+
+- **call_llm** — Create an OpenHands agent conversation. Now defaults to non-blocking mode (returns `task_id`). Use `wait_seconds` for bounded blocking.
 - **check_health** — Check server health
 - **check_job** — Check the status of an async job by UID (same as GET /v1/jobs/{uid})
+
+### Long-running task workflow
+
+For tasks that may take 30–50 minutes:
+
+1. Call `openhands_start_task` → get `task_id`
+2. Poll `openhands_get_task_status` every 10–30 seconds
+3. When status is `completed`, call `openhands_get_task_result` for the answer
+4. Optionally call `openhands_get_task_events` for intermediate logs
 
 ## Stopping services
 
