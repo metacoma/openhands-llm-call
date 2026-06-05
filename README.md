@@ -1,258 +1,296 @@
-# OpenHands Role-Orchestration Prompts
+# openhands-llm-call
 
-This archive contains prompts for the first-stage architecture:
+## Overview
+
+`openhands-llm-call` provides a role-based orchestration layer on top of the
+OpenHands LLM Call FastAPI backend.  A Head-of-IT agent drives a pipeline of
+specialized worker roles (scout → architect → coder → reviewer → publisher)
+through MCP tool calls.
+
+## Architecture
 
 ```
 User / Head-of-IT
-  └── OpenHands chat (head_of_it.md prompt)
+  └── OpenHands chat (prompts/head_of_it.md)
         └── MCP server (mcp_agent/server.py)
-              ├── Existing tools: openhands_start_task, openhands_get_task_status,
+              ├── Generic OpenHands tools
+              │   openhands_start_task, openhands_get_task_status,
               │   openhands_get_task_result, openhands_get_task_events,
               │   openhands_cancel_task, call_llm, check_health, check_job
-              └── NEW role tools: role_list, role_start, role_status, role_result
-                    ├── Role registry (config/roles.yaml)
-                    ├── Prompt renderer (Jinja2)
-                    └── Role run store (file-based JSON)
+              ├── Role tools
+              │   role_list, role_start, role_status, role_result
+              ├── Artifact tools
+              │   artifact_list, artifact_get
+              ├── Role registry (config/roles.yaml)
+              ├── Prompt renderer (mcp_agent/prompt_renderer.py)
+              ├── Role run store (mcp_agent/role_store.py)
+              ├── Lock manager (mcp_agent/lock_manager.py)
+              └── Artifact store (mcp_agent/artifact_store.py)
 ```
 
-## First-Stage Role Orchestration
+## Installation
 
-### Overview
+1. Clone this repository.
+2. Install MCP agent dependencies:
 
-The MCP server exposes **four new role-level tools** on top of the existing
-OpenHands long-running task implementation.  The Head of IT uses these tools
-to drive a pipeline of specialized roles (scout → architect → coder →
-reviewer → publisher).
+   ```bash
+   pip install -r mcp_agent/requirements.txt
+   ```
 
-### Where Prompts Live
+3. (Optional) Install OpenHands LLM Call backend:
+
+   ```bash
+   pip install -r openhands_llm/requirements.txt
+   ```
+
+## Configuration
+
+### OpenHands backend
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `OPENHANDS_URL` | `http://localhost:8000` | Base URL of the OpenHands FastAPI server |
+| `OPENHANDS_API_KEY` | *(empty)* | API key forwarded to the backend |
+| `OPENHANDS_MAX_RUNTIME_SECONDS` | `7200` | Default max runtime (seconds) for tasks |
+| `OPENHANDS_POLL_INTERVAL_SECONDS` | `10` | Polling interval (seconds) |
+| `OPENHANDS_STATE_DIR` | `/tmp/openhands-llm-call-state` | Directory for generic task persistence |
+
+### Role configuration
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `ROLE_CONFIG_PATH` | `config/roles.yaml` | Path to the role YAML config |
+| `OPENHANDS_ROLE_STATE_DIR` | `.runs` | Directory for role run state, artifacts, and locks |
+| `OPENHANDS_ROLE_LOCK_TTL_MINUTES` | `180` | Stale lock timeout (minutes) |
+
+### Role configuration
+
+Worker roles are defined in `config/roles.yaml`.  Each role specifies:
+
+- `model` — LLM model to use
+- `prompt_template` — Path to the Jinja2 prompt template
+- `readonly` — Whether the role is read-only (no code changes)
+- `timeout_minutes` — Maximum runtime for this role
+- `requires_artifacts` — List of artifact names this role needs
+- `output_artifact` — Logical name for this role's output artifact
+
+### Prompts
+
+Worker prompts live in `prompts/<role>.md`:
 
 ```text
 prompts/
-  head_of_it.md   — main orchestration prompt (used in the OpenHands chat)
-  scout.md        — scout role template
-  architect.md    — architect role template
-  coder.md        — coder role template
-  reviewer.md     — reviewer role template
-  publisher.md    — publisher role template
+  scout.md        — read-only repository investigation
+  architect.md    — implementation planning
+  coder.md        — code implementation (mutating)
+  reviewer.md     — review with ACTION/RISK output
+  publisher.md    — publish instructions with PUBLISH_STATUS
 ```
 
-The Head of IT prompt (`prompts/head_of_it.md`) is **not** itself a worker
-role by default.  It is the prompt used in the main OpenHands chat that
-calls the MCP role tools.
+The Head-of-IT orchestration prompt lives at `prompts/head_of_it.md`.  It is
+meant to be used as the main OpenHands chat prompt, not as a worker role.
 
-### Where Roles Config Lives
+## MCP Tools
 
-```text
-config/roles.yaml
+### Generic OpenHands tools
+
+| Tool | Purpose |
+|---|---|
+| `openhands_start_task` | Start a non-blocking OpenHands task |
+| `openhands_get_task_status` | Poll task status |
+| `openhands_get_task_result` | Fetch final task result |
+| `openhands_get_task_events` | Retrieve task event log |
+| `openhands_cancel_task` | Cancel a running task |
+| `call_llm` | High-level LLM call (backward-compatible) |
+| `check_health` | Health-check the backend |
+| `check_job` | Check an async LLM job by UID |
+
+### Role tools
+
+| Tool | Purpose |
+|---|---|
+| `role_list` | List available worker roles |
+| `role_start` | Start a named worker role |
+| `role_status` | Get status of a running role |
+| `role_result` | Get the result of a completed role |
+
+#### `role_start`
+
+```json
+{
+  "role": "scout",
+  "user_task": "Analyze repository and find where to implement feature X",
+  "repo": "https://github.com/metacoma/example",
+  "base_branch": "main",
+  "branch": null,
+  "context": {
+    "run_id": "20260605-abc123",
+    "idempotency_key": "initial-scout"
+  },
+  "artifacts": {},
+  "idempotency_key": "initial-scout"
+}
 ```
 
-This file defines the five worker roles, their models, prompt templates,
-required artifacts, and timeouts.  The path can be overridden via the
-`ROLE_CONFIG_PATH` environment variable (default: `config/roles.yaml`).
+- `idempotency_key` (top-level or in `context`) prevents duplicate tasks on retry.
+- `timeout_minutes` is included in the response from the role config.
+- `idempotent_reuse: true` indicates the call was deduplicated.
 
-### Role Definitions
+For mutating roles (`readonly: false`, currently only `coder`), a file-based
+lock is acquired on `repo|branch`. Concurrent starts for the same repo/branch
+fail with a clear error.
 
-| Role | Model | Timeout | Required Artifacts | Output Artifact |
-|---|---|---|---|---|
-| scout | openai/qwen36-35b-a3b-coder | 60 min | — | scout_report |
-| architect | openai/qwen36-35b-a3b-coder | 60 min | scout_report | architect_plan |
-| coder | openai/qwen36-35b-a3b-coder | 120 min | scout_report, architect_plan | coder_report |
-| reviewer | openai/qwen36-27b-q8-mtp | 75 min | scout_report, architect_plan, coder_report | reviewer_report |
-| publisher | openai/qwen36-35b-a3b-coder | 30 min | reviewer_report | publisher_instructions |
+#### `role_result`
 
-### Example MCP Sequence
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1",
+  "include_full_result": false
+}
+```
+
+- Default `include_full_result=true` preserves existing behavior.
+- When `false`, `full_result` is `null` and `full_result_omitted` is `true`,
+  but artifact metadata is still returned.
+
+### Artifact tools
+
+| Tool | Purpose |
+|---|---|
+| `artifact_list` | List artifacts for a run |
+| `artifact_get` | Get an artifact by name or role_run_id |
+
+#### `artifact_list`
+
+```json
+{
+  "run_id": "20260605-abc123"
+}
+```
+
+Returns `{run_id, artifacts: [...]}` where each artifact includes
+`artifact_name`, `role`, `role_run_id`, `artifact_path`, `created_at`.
+
+#### `artifact_get`
+
+```json
+{
+  "run_id": "20260605-abc123",
+  "artifact_name": "scout_report"
+}
+```
+
+Or by role_run_id:
+
+```json
+{
+  "run_id": "20260605-abc123",
+  "role_run_id": "20260605-abc123-scout-1"
+}
+```
+
+Returns artifact metadata with `content` field. Path traversal is
+prevented — artifacts can only be read from the configured state directory.
+
+## Head-of-IT Usage Example
+
+A typical orchestration sequence:
 
 ```text
 1. role_list()
-   → Returns the list of available roles.
+   → Returns available roles
 
 2. role_start(
       role="scout",
       user_task="Analyze repository and find where to implement feature X",
       repo="https://github.com/metacoma/example",
       base_branch="main",
-      branch=null,
-      context={},
-      artifacts={}
+      context={"run_id": "20260605-abc123", "idempotency_key": "initial-scout"}
    )
-   → Returns: {run_id, role_run_id, role, status: "running", poll_after_seconds: 30}
+   → Returns: {run_id, role_run_id, role, status: "running", poll_after_seconds: 30, timeout_minutes: 60}
 
-3. role_status(role_run_id="...")
+3. role_status(role_run_id="20260605-abc123-scout-1")
    → Poll until status == "completed"
 
-4. role_result(role_run_id="...")
-   → Returns: {status: "completed", action, risk, artifact_name,
-                artifact_path, result_summary, full_result}
+4. role_result(role_run_id="20260605-abc123-scout-1", include_full_result=false)
+   → Returns: {status: "completed", action, risk, artifact_path, result_summary, full_result: null, full_result_omitted: true}
 
-5. role_start(
+5. artifact_get(run_id="20260605-abc123", artifact_name="scout_report")
+   → Returns artifact content
+
+6. role_start(
       role="architect",
       user_task="Plan implementation",
       repo="https://github.com/metacoma/example",
       base_branch="main",
-      artifacts={"scout_report": "<full_result from step 4>"}
+      artifacts={"scout_report": "<content from step 5>"}
    )
    → Returns: {run_id, role_run_id, role, status: "running", ...}
 
-6. Continue the pipeline: role_status → role_result → role_start for each role.
+7. Continue the pipeline: role_status → role_result → artifact_get → role_start
 ```
 
-### New MCP Tools
+## Long-running task behavior
 
-#### `role_list()`
+- **Per-role timeouts**: Each role in `config/roles.yaml` specifies
+  `timeout_minutes`. The `coder` role defaults to 120 minutes; `publisher`
+  to 30 minutes. This is converted to `max_polls` and passed to the
+  OpenHands backend.
 
-List all available worker roles.
+- **Mutating role locks**: Roles with `readonly: false` acquire a file-based
+  lock on `repo|branch` before starting. Concurrent attempts for the same
+  repo/branch fail fast with a clear error. Locks expire after
+  `OPENHANDS_ROLE_LOCK_TTL_MINUTES` (default 180 min) for crash recovery.
 
-**Input:** none.
+- **Idempotent role_start**: Providing an `idempotency_key` (top-level or in
+  `context`) deduplicates retry calls. The uniqueness scope is
+  `run_id:role:idempotency_key`. Duplicate calls return the existing
+  `role_run_id` with `idempotent_reuse: true`.
 
-**Output:**
+## Docker
 
-```json
-{
-  "roles": [
-    {
-      "name": "scout",
-      "description": "Read-only repository investigator...",
-      "model": "openai/qwen36-35b-a3b-coder",
-      "readonly": true,
-      "requires_artifacts": [],
-      "output_artifact": "scout_report",
-      "timeout_minutes": 60
-    }
-  ]
-}
+Two services are defined in `docker-compose.yml`:
+
+- `openhands_llm` — OpenHands LLM Call FastAPI backend
+- `mcp_agent` — MCP server that proxies to the backend
+
+```bash
+docker-compose up
 ```
 
-#### `role_start(role, user_task, repo, base_branch, branch, context, artifacts)`
+## Development
 
-Start a named worker role as an OpenHands task.
+```bash
+# Install dependencies
+pip install -r mcp_agent/requirements.txt
+pip install pytest
 
-**Required inputs:** `role`, `user_task`
+# Run tests
+python -m pytest
 
-**Optional inputs:** `repo`, `base_branch`, `branch`, `context`, `artifacts`
-
-**Behavior:**
-1. Load role spec from `config/roles.yaml`.
-2. Validate required artifacts.
-3. Render role-specific prompt via Jinja2.
-4. Start OpenHands task using the existing FastAPI backend.
-5. Store mapping from `role_run_id` → OpenHands `task_id`.
-6. Return immediately (non-blocking).
-
-**Output (success):**
-
-```json
-{
-  "run_id": "20260605-abc123",
-  "role_run_id": "20260605-abc123-scout-1",
-  "role": "scout",
-  "status": "running",
-  "poll_after_seconds": 30
-}
+# Byte-compile check
+python -m compileall mcp_agent
 ```
 
-**Output (failure):**
+## Testing
 
-```json
-{
-  "status": "failed",
-  "error": {
-    "type": "UnknownRole",
-    "message": "Unknown role 'qa'. Available roles: scout, architect, coder, reviewer, publisher.",
-    "retryable": false
-  }
-}
-```
+Tests are in `tests/`:
 
-#### `role_status(role_run_id)`
+| File | Coverage |
+|---|---|
+| `test_role_tools.py` | parse_action, parse_risk, make_summary, role_list, role_start validation, role_status, role_result |
+| `test_role_store.py` | RoleRunStore create/get/update/save_artifact/get_artifact/get_attempt_count |
+| `test_roles.py` | load_roles, get_role, list_roles, validation |
+| `test_task_store.py` | TaskStore CRUD, idempotency, persistence |
+| `test_mcp_tools.py` | Mocked OpenHands integration for all generic tools |
+| `test_prompt_renderer.py` | Jinja2 prompt rendering |
+| `test_lock_manager.py` | Lock acquire/release/conflict/stale handling |
+| `test_artifact_store.py` | Artifact save/list/get/path-traversal prevention |
 
-Get the status of a previously started role.
+New tests added for this hardening:
 
-**Input:** `role_run_id` (returned by `role_start`).
-
-**Output:**
-
-```json
-{
-  "role_run_id": "20260605-abc123-scout-1",
-  "run_id": "20260605-abc123",
-  "role": "scout",
-  "status": "running|completed|failed|timeout|cancelled|unknown",
-  "summary": "Short summary if available",
-  "has_result": false
-}
-```
-
-#### `role_result(role_run_id)`
-
-Get the result of a completed role.
-
-**Input:** `role_run_id` (returned by `role_start`).
-
-**Output:**
-
-```json
-{
-  "role_run_id": "20260605-abc123-scout-1",
-  "run_id": "20260605-abc123",
-  "role": "scout",
-  "status": "completed",
-  "action": "CONTINUE",
-  "risk": null,
-  "artifact_name": "scout_report",
-  "artifact_path": "runs/20260605-abc123/01-scout.answer.md",
-  "result_summary": "Short summary of the result",
-  "full_result": "Full markdown report"
-}
-```
-
-For the **reviewer** role, `action` is parsed from `ACTION: PASS` or
-`ACTION: BLOCKER` in the result, and `risk` from `RISK: LOW|MEDIUM|HIGH`.
-
-For the **publisher** role, `action` is parsed from `PUBLISH_STATUS: READY`
-or `PUBLISH_STATUS: BLOCKED`.
-
-### Artifact Storage
-
-When a role completes, the full result is saved to:
-
-```text
-<state_dir>/<run_id>/<NN>-<role>.answer.md
-```
-
-For example:
-
-```text
-.runs/20260605-abc123/01-scout.answer.md
-.runs/20260605-abc123/02-architect.answer.md
-.runs/20260605-abc123/03-coder.answer.md
-.runs/20260605-abc123/04-reviewer.answer.md
-.runs/20260605-abc123/05-publisher.answer.md
-```
-
-The state directory is controlled by `OPENHANDS_ROLE_STATE_DIR` (default:
-`.runs`).
-
-### Backward Compatibility
-
-Existing generic OpenHands tools (`openhands_start_task`,
-`openhands_get_task_status`, `openhands_get_task_result`,
-`openhands_get_task_events`, `openhands_cancel_task`, `call_llm`,
-`check_health`, `check_job`) continue to work unchanged.  Role tools are
-strictly additive.
-
-## Files
-
-- `prompts/head_of_it.md` — main orchestration prompt for the OpenHands chat.
-- `prompts/scout.md` — read-only repository investigation role.
-- `prompts/architect.md` — implementation planning role.
-- `prompts/coder.md` — implementation role, creates branch and commits changes.
-- `prompts/reviewer.md` — read-only review role, emits PASS/BLOCKER and risk.
-- `prompts/publisher.md` — publish instructions role, never pushes and never creates PR.
-- `config/roles.yaml` — role registry configuration.
-- `roles.example.yaml` — example role registry (identical to config/roles.yaml).
-- `mcp_tools_contract.md` — expected MCP tool behavior.
-- `mcp_agent/server.py` — MCP server with existing tools + new role tools.
-- `mcp_agent/roles.py` — role registry (loads and validates roles.yaml).
-- `mcp_agent/prompt_renderer.py` — Jinja2 prompt template renderer.
-- `mcp_agent/role_store.py` — file-based role run state store.
-- `mcp_agent/role_tools.py` — MCP tool implementations + parsing helpers.
+- Idempotency: first call creates task, duplicate call returns existing
+- Timeout: per-role `timeout_minutes` converted to `max_polls`
+- Locks: acquire, conflict, readonly bypass, release on completion, stale expiry
+- Artifacts: save, list, get, path traversal rejection
+- `include_full_result`: false omits full_result, true preserves old behavior

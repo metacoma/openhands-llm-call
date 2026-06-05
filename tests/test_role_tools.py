@@ -321,6 +321,842 @@ class TestRoleResultTool(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["type"], "UnknownRoleRunId")
 
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_result_include_full_result_false(self, mock_store):
+        """include_full_result=false omits full_result but returns artifact metadata."""
+        from mcp_agent.server import role_result
+
+        mock_run = {
+            "run_id": "20260605-abc123",
+            "role": "scout",
+            "role_run_id": "20260605-abc123-scout-1",
+            "openhands_task_id": "task-mock",
+            "branch": None,
+            "base_branch": "main",
+            "repo": "https://github.com/example/repo",
+            "artifact_name": "scout_report",
+            "artifact_path": None,
+        }
+        mock_store.return_value.get_role_run.return_value = mock_run
+
+        # Mock the OpenHands status as completed
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status:
+            mock_status.return_value = {"status": "completed"}
+            with patch(
+                "mcp_agent.server.openhands_get_task_result"
+            ) as mock_result:
+                mock_result.return_value = {"answer": "# Full result\n\nComplete report."}
+                with patch("mcp_agent.role_tools._get_role_store") as mock_rs:
+                    mock_rs.return_value.get_role_run.return_value = mock_run
+                    mock_rs.return_value.save_artifact.return_value = "runs/20260605-abc123/01-scout.answer.md"
+                    mock_rs.return_value.update_role_run.return_value = mock_run
+
+                    result = role_result(
+                        role_run_id="20260605-abc123-scout-1",
+                        include_full_result=False,
+                    )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(result["full_result"])
+        self.assertTrue(result["full_result_omitted"])
+        self.assertEqual(result["artifact_name"], "scout_report")
+        self.assertIsNotNone(result["artifact_path"])
+        self.assertIsNotNone(result["result_summary"])
+
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_result_include_full_result_true_default(self, mock_store):
+        """include_full_result=true (default) preserves existing behavior."""
+        from mcp_agent.server import role_result
+
+        mock_run = {
+            "run_id": "20260605-def456",
+            "role": "scout",
+            "role_run_id": "20260605-def456-scout-1",
+            "openhands_task_id": "task-mock-2",
+            "branch": None,
+            "base_branch": "main",
+            "repo": "https://github.com/example/repo",
+            "artifact_name": "scout_report",
+            "artifact_path": None,
+        }
+        with patch("mcp_agent.role_tools._get_role_store") as mock_rs:
+            mock_rs.return_value.get_role_run.return_value = mock_run
+
+            with patch(
+                "mcp_agent.server.openhands_get_task_status"
+            ) as mock_status:
+                mock_status.return_value = {"status": "completed"}
+                with patch(
+                    "mcp_agent.server.openhands_get_task_result"
+                ) as mock_result:
+                    mock_result.return_value = {"answer": "Full report content."}
+                    mock_rs.return_value.save_artifact.return_value = "runs/20260605-def456/01-scout.answer.md"
+                    mock_rs.return_value.update_role_run.return_value = mock_run
+
+                    # Default: include_full_result=True
+                    result = role_result(
+                        role_run_id="20260605-def456-scout-1"
+                    )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["full_result"], "Full report content.")
+        self.assertFalse(result["full_result_omitted"])
+
+
+class TestIdempotentRoleStart(unittest.TestCase):
+    """Test idempotent role_start behavior."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_idem_")
+        os.environ["OPENHANDS_STATE_DIR"] = self.tmpdir
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_STATE_DIR", None)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.server as server_mod
+        server_mod._store = None
+
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_first_call_with_idempotency_key_starts_task(self, mock_store):
+        """First role_start with idempotency key starts one task."""
+        from mcp_agent.server import role_start
+
+        mock_store.return_value.find_by_idempotency_scope.return_value = None
+        mock_store.return_value.get_attempt_count.return_value = 0
+        mock_store.return_value.create_role_run.return_value = {
+            "task_id": "mock-task-id",
+        }
+
+        with patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_fastapi:
+            mock_fastapi.return_value = {
+                "conversation_id": "conv-idem-123",
+            }
+            result = role_start(
+                role="scout",
+                user_task="Test task",
+                context={"run_id": "20260605-idem01"},
+                idempotency_key="test-key",
+            )
+
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
+        self.assertFalse(result.get("idempotent_reuse", True))
+        self.assertIn("timeout_minutes", result)
+
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_second_call_with_same_key_returns_existing(self, mock_store):
+        """Second role_start with same run_id+role+idempotency_key returns same role_run_id."""
+        from mcp_agent.server import role_start
+
+        # First call creates the record
+        mock_store.return_value.find_by_idempotency_scope.return_value = None
+        mock_store.return_value.get_attempt_count.return_value = 0
+        mock_store.return_value.create_role_run.return_value = {
+            "task_id": "mock-task-1",
+        }
+
+        with patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_fastapi:
+            mock_fastapi.return_value = {
+                "conversation_id": "conv-idem-123",
+            }
+            result1 = role_start(
+                role="scout",
+                user_task="Test task",
+                context={"run_id": "20260605-idem02"},
+                idempotency_key="test-key",
+            )
+
+        # Simulate the idempotency record being saved
+        existing_role_run_id = result1["role_run_id"]
+        mock_store.return_value.find_by_idempotency_scope.return_value = existing_role_run_id
+        mock_store.return_value.get_role_run.return_value = {
+            "run_id": "20260605-idem02",
+            "role": "scout",
+            "role_run_id": existing_role_run_id,
+            "openhands_task_id": "mock-task-1",
+        }
+
+        # Mock openhands_get_task_status for the idempotency path
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status:
+            mock_status.return_value = {"status": "running"}
+
+            # Second call with same key
+            result2 = role_start(
+                role="scout",
+                user_task="Different task",
+                context={"run_id": "20260605-idem02"},
+                idempotency_key="test-key",
+            )
+
+        self.assertEqual(result2["status"], "running")
+        self.assertEqual(result2["role_run_id"], existing_role_run_id)
+        self.assertTrue(result2["idempotent_reuse"])
+        # _start_conversation_on_fastapi should NOT have been called again
+        self.assertEqual(mock_fastapi.call_count, 1)
+
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_context_idempotency_key_works(self, mock_store):
+        """context.idempotency_key is also supported."""
+        from mcp_agent.server import role_start
+
+        mock_store.return_value.find_by_idempotency_scope.return_value = None
+        mock_store.return_value.get_attempt_count.return_value = 0
+        mock_store.return_value.create_role_run.return_value = {
+            "task_id": "mock-task-ctx",
+        }
+
+        with patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_fastapi:
+            mock_fastapi.return_value = {
+                "conversation_id": "conv-ctx-123",
+            }
+            result = role_start(
+                role="scout",
+                user_task="Test task",
+                context={
+                    "run_id": "20260605-idem03",
+                    "idempotency_key": "ctx-key",
+                },
+            )
+
+        self.assertEqual(result["status"], "running")
+        self.assertFalse(result.get("idempotent_reuse", True))
+
+
+class TestTimeoutApplication(unittest.TestCase):
+    """Test per-role timeout application."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_timeout_")
+        os.environ["OPENHANDS_STATE_DIR"] = self.tmpdir
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_STATE_DIR", None)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.server as server_mod
+        server_mod._store = None
+
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_coder_timeout_120_minutes(self, mock_store):
+        """Coder role (120 min timeout) is passed as max_polls to FastAPI."""
+        from mcp_agent.server import role_start
+
+        mock_store.return_value.find_by_idempotency_scope.return_value = None
+        mock_store.return_value.get_attempt_count.return_value = 0
+        mock_store.return_value.create_role_run.return_value = {
+            "task_id": "mock-task-coder",
+        }
+
+        with patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_fastapi:
+            mock_fastapi.return_value = {
+                "conversation_id": "conv-coder-123",
+            }
+            result = role_start(
+                role="coder",
+                user_task="Implement feature",
+                context={"run_id": "20260605-time01"},
+                artifacts={
+                    "scout_report": "scout content",
+                    "architect_plan": "architect content",
+                },
+            )
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["timeout_minutes"], 120)
+
+        # Verify max_polls was passed
+        call_args = mock_fastapi.call_args
+        max_polls = call_args[1].get("max_polls")
+        self.assertIsNotNone(max_polls)
+        # 120 min * 60 sec / 10 sec interval = 720
+        self.assertEqual(max_polls, 720)
+
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_publisher_timeout_30_minutes(self, mock_store):
+        """Publisher role (30 min timeout) is passed as max_polls."""
+        from mcp_agent.server import role_start
+
+        mock_store.return_value.find_by_idempotency_scope.return_value = None
+        mock_store.return_value.get_attempt_count.return_value = 0
+        mock_store.return_value.create_role_run.return_value = {
+            "task_id": "mock-task-pub",
+        }
+
+        with patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_fastapi:
+            mock_fastapi.return_value = {
+                "conversation_id": "conv-pub-123",
+            }
+            result = role_start(
+                role="publisher",
+                user_task="Publish",
+                context={"run_id": "20260605-time02"},
+                artifacts={"reviewer_report": "review content"},
+            )
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["timeout_minutes"], 30)
+
+        call_args = mock_fastapi.call_args
+        max_polls = call_args[1].get("max_polls")
+        self.assertIsNotNone(max_polls)
+        # 30 min * 60 sec / 10 sec interval = 180
+        self.assertEqual(max_polls, 180)
+
+
+class TestImprovedMakeSummary(unittest.TestCase):
+    """Test improved make_summary."""
+
+    def test_strip_markdown_headings(self):
+        """make_summary strips markdown headings lightly."""
+        from mcp_agent.role_tools import make_summary
+
+        text = "# Title\n## Section\nSome content\n## Another\nMore text"
+        result = make_summary(text, max_chars=200)
+        # First 2 headings should be preserved
+        self.assertIn("# Title", result)
+        self.assertIn("## Section", result)
+
+    def test_remove_excessive_blank_lines(self):
+        """make_summary collapses excessive blank lines."""
+        from mcp_agent.role_tools import make_summary
+
+        text = "Line 1\n\n\n\n\nLine 2"
+        result = make_summary(text, max_chars=200)
+        # Should not have 4 consecutive blank lines
+        self.assertNotIn("\n\n\n\n", result)
+
+    def test_cap_at_max_chars(self):
+        """make_summary caps output at max_chars."""
+        from mcp_agent.role_tools import make_summary
+
+        long_text = " ".join([f"word{i}" for i in range(200)])
+        result = make_summary(long_text, max_chars=50)
+        # Account for "..." suffix
+        self.assertLessEqual(len(result), 53)  # 50 + "..."
+        self.assertIn("...", result)
+
+    def test_preserves_useful_first_lines(self):
+        """make_summary preserves useful first lines."""
+        from mcp_agent.role_tools import make_summary
+
+        text = "Important first line\nSecond line\n## Heading\nMore content"
+        result = make_summary(text, max_chars=200)
+        self.assertIn("Important first line", result)
+
+    def test_empty_input_returns_empty(self):
+        """make_summary returns empty for empty input."""
+        from mcp_agent.role_tools import make_summary
+
+        self.assertEqual(make_summary(""), "")
+        self.assertEqual(make_summary(None), "")
+
+    def test_nonempty_input_never_returns_empty(self):
+        """make_summary never returns empty for meaningful non-empty input."""
+        from mcp_agent.role_tools import make_summary
+
+        result = make_summary("Hello world", max_chars=10)
+        self.assertNotEqual(result, "")
+        self.assertIn("Hello", result)
+
+    def test_default_max_chars_is_700(self):
+        """Default max_chars is 700."""
+        from mcp_agent.role_tools import make_summary
+
+        text = " ".join([f"word{i}" for i in range(100)])
+        result = make_summary(text)
+        # Should not be truncated since it's short
+        self.assertEqual(result, text.strip())
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for Bug 1 (artifact visibility) and Bug 3 (lock lifecycle)
+# ---------------------------------------------------------------------------
+
+
+class TestRoleResultArtifactIntegration(unittest.TestCase):
+    """Regression tests for artifact persistence through ArtifactStore.
+
+    Bug 1: role_result_impl was saving artifacts via RoleRunStore.save_artifact()
+    which uses a different file layout than ArtifactStore.  This meant
+    artifact_list/artifact_get could not see artifacts created by role_result.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_role_result_artifact_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+        # Clear the module-level RoleRunStore singleton so tests don't share state
+        import mcp_agent.role_tools as rt
+        rt._role_store = None
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        # Clear the module-level RoleRunStore singleton so tests don't share state
+        import mcp_agent.role_tools as rt
+        rt._role_store = None
+
+    def test_role_result_saves_artifact_through_artifact_store(self):
+        """role_result calls ArtifactStore.save() with correct args.
+
+        We verify this by checking that artifact_list sees the artifact
+        after role_result completes, proving the save went to ArtifactStore.
+        """
+        from mcp_agent.role_tools import (
+            role_result_impl,
+            artifact_list_impl,
+            artifact_get_impl,
+        )
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        store.create_role_run(
+            role="coder",
+            run_id="run-001",
+            role_run_id="run-001-coder-1",
+            openhands_task_id="task-001",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/x",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/x",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nDone."}
+
+            result = role_result_impl("run-001-coder-1")
+            self.assertEqual(result["status"], "completed")
+            self.assertIsNotNone(result["artifact_path"])
+            self.assertIsNotNone(result["artifact_name"])
+
+        # artifact_list should see the artifact (proving it was saved to ArtifactStore)
+        list_result = artifact_list_impl(run_id="run-001")
+        self.assertEqual(list_result["run_id"], "run-001")
+        self.assertEqual(len(list_result["artifacts"]), 1)
+        self.assertEqual(
+            list_result["artifacts"][0]["artifact_name"], "coder_report"
+        )
+
+    def test_artifact_list_sees_role_result_artifact(self):
+        """After role_result, artifact_list(run_id) includes the artifact."""
+        from mcp_agent.role_tools import role_result_impl, artifact_list_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        store.create_role_run(
+            role="coder",
+            run_id="run-002",
+            role_run_id="run-002-coder-1",
+            openhands_task_id="task-002",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/y",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/y",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nDone."}
+            role_result_impl("run-002-coder-1")
+
+        list_result = artifact_list_impl(run_id="run-002")
+        self.assertEqual(list_result["run_id"], "run-002")
+        self.assertEqual(len(list_result["artifacts"]), 1)
+        self.assertEqual(
+            list_result["artifacts"][0]["artifact_name"], "coder_report"
+        )
+
+    def test_artifact_get_retrieves_role_result_artifact(self):
+        """After role_result, artifact_get(run_id, artifact_name) returns content."""
+        from mcp_agent.role_tools import role_result_impl, artifact_get_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        store.create_role_run(
+            role="coder",
+            run_id="run-003",
+            role_run_id="run-003-coder-1",
+            openhands_task_id="task-003",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/z",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/z",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {
+                "answer": "## Coder Report\n\nImplementation complete."
+            }
+            role_result_impl("run-003-coder-1")
+
+        get_result = artifact_get_impl(
+            run_id="run-003", artifact_name="coder_report"
+        )
+        self.assertIsNotNone(get_result)
+        self.assertEqual(
+            get_result["content"], "## Coder Report\n\nImplementation complete."
+        )
+        self.assertEqual(get_result["artifact_name"], "coder_report")
+
+    def test_artifact_get_by_role_run_id(self):
+        """artifact_get(run_id, role_run_id=...) returns the saved content."""
+        from mcp_agent.role_tools import role_result_impl, artifact_get_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        store.create_role_run(
+            role="coder",
+            run_id="run-004",
+            role_run_id="run-004-coder-1",
+            openhands_task_id="task-004",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/w",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/w",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nDone via role_run_id."}
+            role_result_impl("run-004-coder-1")
+
+        get_result = artifact_get_impl(
+            run_id="run-004", role_run_id="run-004-coder-1"
+        )
+        self.assertIsNotNone(get_result)
+        self.assertIn("Coder Report", get_result["content"])
+
+    def test_role_result_omit_full_result_still_saves_artifact(self):
+        """role_result(include_full_result=False) still saves artifact."""
+        from mcp_agent.role_tools import role_result_impl, artifact_get_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        store.create_role_run(
+            role="coder",
+            run_id="run-005",
+            role_run_id="run-005-coder-1",
+            openhands_task_id="task-005",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/v",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/v",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nOmitted content."}
+
+            result = role_result_impl(
+                "run-005-coder-1", include_full_result=False
+            )
+
+            # full_result should be None
+            self.assertIsNone(result["full_result"])
+            self.assertTrue(result["full_result_omitted"])
+            # But artifact_path should still be set
+            self.assertIsNotNone(result["artifact_path"])
+
+        # artifact_get should still return the content
+        get_result = artifact_get_impl(
+            run_id="run-005", artifact_name="coder_report"
+        )
+        self.assertEqual(
+            get_result["content"], "## Coder Report\n\nOmitted content."
+        )
+
+    def test_role_result_idempotent_no_duplicate_artifacts(self):
+        """Calling role_result twice does not create duplicate artifact records."""
+        from mcp_agent.role_tools import role_result_impl, artifact_list_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        store.create_role_run(
+            role="coder",
+            run_id="run-006",
+            role_run_id="run-006-coder-1",
+            openhands_task_id="task-006",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/u",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/u",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nIdempotent."}
+
+            # First call
+            role_result_impl("run-006-coder-1")
+            first_list = artifact_list_impl(run_id="run-006")
+
+            # Second call (idempotent)
+            role_result_impl("run-006-coder-1")
+            second_list = artifact_list_impl(run_id="run-006")
+
+        # artifact_list should still show only one artifact (overwritten, not appended)
+        self.assertEqual(len(first_list["artifacts"]), 1)
+        self.assertEqual(len(second_list["artifacts"]), 1)
+
+
+class TestLockKeyLifecycle(unittest.TestCase):
+    """Regression tests for lock key persistence and release.
+
+    Bug 3: role_result_impl was reconstructing lock key instead of using
+    a stored lock_key, and only releasing if branch/base_branch existed.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_lock_key_lifecycle_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+        # Clear the module-level RoleRunStore singleton so tests don't share state
+        import mcp_agent.role_tools as rt
+        rt._role_store = None
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        # Clear the module-level RoleRunStore singleton so tests don't share state
+        import mcp_agent.role_tools as rt
+        rt._role_store = None
+
+    def test_mutating_role_start_stores_lock_key(self):
+        """Mutating role_start stores lock_key in role-run record."""
+        from mcp_agent.role_tools import role_start_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        with patch(
+            "mcp_agent.role_tools.get_role"
+        ) as mock_get_role, patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_start, patch(
+            "mcp_agent.role_tools.render_prompt"
+        ) as mock_render, patch(
+            "mcp_agent.server._get_store"
+        ) as mock_store:
+            mock_get_role.return_value = MagicMock(
+                name="coder",
+                readonly=False,
+                requires_artifacts=[],
+                output_artifact="coder_report",
+                timeout_minutes=30,
+                model="gpt-4",
+                prompt_template="prompts/coder.md",
+            )
+            mock_start.return_value = {"conversation_id": "conv-001"}
+            mock_render.return_value = "rendered prompt"
+            mock_store.return_value.create_task.return_value = {
+                "task_id": "task-001"
+            }
+
+            result = role_start_impl(
+                role="coder",
+                user_task="Test task",
+                repo="owner/repo",
+                base_branch="main",
+                branch="feature/test",
+            )
+
+            # Verify the role run record was created with lock_key
+            self.assertEqual(result["status"], "running")
+            role_run_id = result["role_run_id"]
+            role_run = RoleRunStore().get_role_run(role_run_id)
+            self.assertIsNotNone(role_run)
+            self.assertIsNotNone(role_run.get("lock_key"))
+            self.assertEqual(
+                role_run["lock_key"], "owner/repo|feature/test"
+            )
+
+    def test_terminal_role_result_releases_lock_via_stored_key(self):
+        """Terminal role_result releases lock using stored lock_key."""
+        from mcp_agent.role_tools import role_result_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        role_run = store.create_role_run(
+            role="coder",
+            run_id="run-007",
+            role_run_id="run-007-coder-1",
+            openhands_task_id="task-007",
+            repo="owner/repo",
+            base_branch="main",
+            branch="feature/lock",
+            artifact_name="coder_report",
+            lock_key="owner/repo|feature/lock",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nDone."}
+
+            # Patch lock_manager.release to capture the lock_key used
+            released_keys = []
+
+            def capture_release(lock_key, role_run_id):
+                released_keys.append(lock_key)
+                return True
+
+            with patch(
+                "mcp_agent.role_tools.RoleLockManager"
+            ) as mock_lock_cls:
+                mock_lock_instance = MagicMock()
+                mock_lock_instance.release = MagicMock(side_effect=capture_release)
+                mock_lock_cls.return_value = mock_lock_instance
+
+                result = role_result_impl("run-007-coder-1")
+
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(len(released_keys), 1)
+                self.assertEqual(released_keys[0], "owner/repo|feature/lock")
+
+    def test_lock_released_without_branch_base_branch(self):
+        """Lock is released even if branch and base_branch are absent but lock_key was stored."""
+        from mcp_agent.role_tools import role_result_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        # Create a role run with no branch/base_branch but with lock_key
+        role_run = store.create_role_run(
+            role="coder",
+            run_id="run-008",
+            role_run_id="run-008-coder-1",
+            openhands_task_id="task-008",
+            repo="owner/repo",
+            base_branch=None,
+            branch=None,
+            artifact_name="coder_report",
+            lock_key="owner/repo|",
+        )
+
+        with patch(
+            "mcp_agent.server.openhands_get_task_status"
+        ) as mock_status, patch(
+            "mcp_agent.server.openhands_get_task_result"
+        ) as mock_result:
+            mock_status.return_value = {"status": "completed"}
+            mock_result.return_value = {"answer": "## Coder Report\n\nDone."}
+
+            released_keys = []
+
+            def capture_release(lock_key, role_run_id):
+                released_keys.append(lock_key)
+                return True
+
+            with patch(
+                "mcp_agent.role_tools.RoleLockManager"
+            ) as mock_lock_cls:
+                mock_lock_instance = MagicMock()
+                mock_lock_instance.release = MagicMock(side_effect=capture_release)
+                mock_lock_cls.return_value = mock_lock_instance
+
+                result = role_result_impl("run-008-coder-1")
+
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(len(released_keys), 1)
+                self.assertEqual(released_keys[0], "owner/repo|")
+
+    def test_readonly_role_no_lock_key(self):
+        """Read-only roles do not acquire lock and do not store lock_key."""
+        from mcp_agent.role_tools import role_start_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        with patch(
+            "mcp_agent.role_tools.get_role"
+        ) as mock_get_role, patch(
+            "mcp_agent.server._start_conversation_on_fastapi"
+        ) as mock_start, patch(
+            "mcp_agent.role_tools.render_prompt"
+        ) as mock_render, patch(
+            "mcp_agent.server._get_store"
+        ) as mock_store:
+            mock_get_role.return_value = MagicMock(
+                name="scout",
+                readonly=True,
+                requires_artifacts=[],
+                output_artifact="scout_report",
+                timeout_minutes=10,
+                model="gpt-4",
+                prompt_template="prompts/scout.md",
+            )
+            mock_start.return_value = {"conversation_id": "conv-002"}
+            mock_render.return_value = "rendered prompt"
+            mock_store.return_value.create_task.return_value = {
+                "task_id": "task-002"
+            }
+
+            result = role_start_impl(
+                role="scout",
+                user_task="Test task",
+                repo="owner/repo",
+                base_branch="main",
+                branch="feature/test",
+            )
+
+            self.assertEqual(result["status"], "running")
+            role_run_id = result["role_run_id"]
+            role_run = RoleRunStore().get_role_run(role_run_id)
+            self.assertIsNotNone(role_run)
+            # lock_key should be None for read-only roles
+            self.assertIsNone(role_run.get("lock_key"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -225,6 +225,41 @@ class TestRoleRunStore(unittest.TestCase):
         self.assertEqual(coder_count, 2)
         self.assertEqual(scout_count, 1)
 
+    def test_save_and_find_idempotency_record(self):
+        """Idempotency index: save and find by scope."""
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        scope = "20260605-abc123:scout:initial-scout"
+        role_run_id = "20260605-abc123-scout-1"
+
+        store.save_idempotency_record(scope, role_run_id)
+
+        found = store.find_by_idempotency_scope(scope)
+        self.assertEqual(found, role_run_id)
+
+    def test_find_by_idempotency_scope_missing(self):
+        """Idempotency index: missing scope returns None."""
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        found = store.find_by_idempotency_scope("nonexistent:scope")
+        self.assertIsNone(found)
+
+    def test_clear_idempotency_scope(self):
+        """Idempotency index: clear removes scope."""
+        from mcp_agent.role_store import RoleRunStore
+
+        store = RoleRunStore()
+        scope = "20260605-xyz999:architect:plan-key"
+        role_run_id = "20260605-xyz999-architect-1"
+
+        store.save_idempotency_record(scope, role_run_id)
+        store.clear_idempotency_scope(scope)
+
+        found = store.find_by_idempotency_scope(scope)
+        self.assertIsNone(found)
+
 
 if __name__ == "__main__":
     unittest.main()
