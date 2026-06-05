@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 from .task_store import TaskStore
@@ -43,6 +44,11 @@ MCP = FastMCP(
 )
 
 OPENHANDS_URL = os.getenv("OPENHANDS_URL", "http://localhost:8000").rstrip("/")
+
+# MCP bind host/port – configurable via env, defaults to 127.0.0.1 for
+# local development and 0.0.0.0 when running in Docker.
+MCP_HOST = os.getenv("MCP_HOST", "127.0.0.1")
+MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 
 # Long-running task defaults
 OPENHANDS_POLL_INTERVAL = int(
@@ -94,6 +100,12 @@ def _start_conversation_on_fastapi(
     max_polls :
         Optional per-request max poll count.  If not provided, falls
         back to the global ``OPENHANDS_MAX_RUNTIME // OPENHANDS_POLL_INTERVAL``.
+    repo :
+        Deprecated.  Kept for backward compatibility but never included
+        in the payload so OpenHands creates an empty/default sandbox.
+    branch :
+        Deprecated.  Kept for backward compatibility but never included
+        in the payload.
     """
     base = (url or OPENHANDS_URL).rstrip("/")
     payload: dict[str, Any] = {
@@ -107,10 +119,10 @@ def _start_conversation_on_fastapi(
     }
     if llm_model:
         payload["llm_model"] = llm_model
-    if repo:
-        payload["repo"] = repo
-    if branch:
-        payload["branch"] = branch
+    # NOTE: repo and branch are intentionally NOT included in the
+    # payload.  Repository instructions live in the prompt text so
+    # OpenHands creates an empty/default sandbox with no selected
+    # repository metadata.
     if agent_type:
         payload["agent_type"] = agent_type
 
@@ -148,8 +160,10 @@ def openhands_start_task(
         prompt: The task prompt for the agent.
         api_key: OpenHands API key.
         llm_model: LLM model override (e.g. openai/qwen3:32b).
-        repo: GitHub repo full name (owner/repo).
-        branch: Branch to use.
+        repo: Deprecated. Kept for backward compatibility but no longer
+            passed to OpenHands as selected-repository metadata.
+        branch: Deprecated. Kept for backward compatibility but no longer
+            passed to OpenHands.
         agent_type: OpenHands agent type (default: 'default').
         url: OpenHands LLM base URL override.
         idempotency_key: Optional stable key to deduplicate retried calls.
@@ -840,8 +854,10 @@ def call_llm(
         prompt: The task prompt for the agent.
         api_key: OpenHands API key.
         llm_model: LLM model override (e.g. openai/qwen3:32b).
-        repo: GitHub repo full name (owner/repo).
-        branch: Branch to use.
+        repo: Deprecated. Kept for backward compatibility but no longer
+            passed to OpenHands as selected-repository metadata.
+        branch: Deprecated. Kept for backward compatibility but no longer
+            passed to OpenHands.
         agent_type: OpenHands agent type (default: 'default').
         url: OpenHands base URL override.
         conversation_id: Query existing conversation instead of creating new one.
@@ -999,10 +1015,11 @@ def role_list() -> dict:
 @MCP.tool()
 def role_start(
     role: str,
-    user_task: str,
-    repo: str | None = None,
-    base_branch: str | None = None,
-    branch: str | None = None,
+    prompt: str | None = None,
+    user_task: str | None = None,
+    repo: Any | None = None,
+    base_branch: Any | None = None,
+    branch: Any | None = None,
     context: dict | None = None,
     artifacts: dict | None = None,
     idempotency_key: str | None = None,
@@ -1015,10 +1032,16 @@ def role_start(
     Args:
         role: The role name (e.g. ``"scout"``, ``"architect"``,
             ``"coder"``, ``"reviewer"``, ``"publisher"``).
-        user_task: The user's original task description.
-        repo: GitHub repo URL or owner/repo string.
-        base_branch: The base branch to use.
-        branch: Optional feature branch (may be None to auto-create).
+        prompt: The user's task/prompt description.  Used as primary
+            input when provided.
+        user_task: Deprecated alias for ``prompt``.  Kept for backward
+            compatibility.  If both are provided, ``prompt`` takes
+            precedence.
+        repo: Deprecated.  If provided as a dict it is normalized to a
+            string or discarded.  No longer passed to OpenHands as
+            selected-repository metadata.
+        base_branch: Deprecated.  See ``repo``.
+        branch: Deprecated.  See ``repo``.
         context: Optional dict with ``run_id`` and other context
             (may include ``idempotency_key``).
         artifacts: Mapping of artifact names to their text content
@@ -1044,12 +1067,44 @@ def role_start(
             "idempotent_reuse": false
         }
     """
+    # Resolve prompt from prompt or user_task
+    effective_prompt = prompt or user_task
+    if not effective_prompt:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingPrompt",
+                "message": "Either 'prompt' or 'user_task' is required.",
+                "retryable": False,
+            },
+        }
+
+    # Normalize repo/base_branch/branch: if they are dicts extract
+    # string values; otherwise keep as-is or discard.
+    def _normalize_str(val: Any) -> str | None:
+        if val is None:
+            return None
+        if isinstance(val, str):
+            return val
+        if isinstance(val, dict):
+            # Try common keys
+            for key in ("url", "name", "value", "repo", "branch"):
+                v = val.get(key)
+                if isinstance(v, str) and v:
+                    return v
+            return None
+        return str(val) if val else None
+
+    effective_repo = _normalize_str(repo)
+    effective_base_branch = _normalize_str(base_branch)
+    effective_branch = _normalize_str(branch)
+
     return _role_tools.role_start_impl(
         role=role,
-        user_task=user_task,
-        repo=repo,
-        base_branch=base_branch,
-        branch=branch,
+        user_task=effective_prompt,
+        repo=effective_repo,
+        base_branch=effective_base_branch,
+        branch=effective_branch,
         context=context,
         artifacts=artifacts,
         idempotency_key=idempotency_key,
@@ -1225,4 +1280,8 @@ def _duration_seconds(start_iso: str | None, end_iso: str | None) -> int | None:
 
 
 if __name__ == "__main__":
-    MCP.run(transport="streamable-http")
+    # Use explicit uvicorn startup so we can control the bind host/port.
+    # FastMCP.run(transport="streamable-http") does not accept host/port
+    # kwargs in the installed mcp>=1.0.0 version.
+    app = MCP.streamable_http_app()
+    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT)
