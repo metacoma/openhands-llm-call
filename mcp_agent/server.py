@@ -353,7 +353,7 @@ def openhands_start_task(
 
 @MCP.tool()
 def openhands_get_task_status(
-    task_id: str,
+    task_id: Any,
     url: str | None = None,
 ) -> dict:
     """Get the status of a previously started OpenHands task.
@@ -382,15 +382,16 @@ def openhands_get_task_status(
             "progress_hint": "OpenHands is still working"
         }
     """
+    normalized_task_id = _normalize_str_arg(task_id)
     store = _get_store()
-    task = store.get_task(task_id)
+    task = store.get_task(normalized_task_id)
 
     if task is None:
         return {
             "status": "failed",
             "error": {
                 "type": "UnknownTaskId",
-                "message": f"No task found with task_id='{task_id}'.",
+                "message": f"No task found with task_id='{normalized_task_id}'.",
                 "retryable": False,
             },
         }
@@ -408,7 +409,7 @@ def openhands_get_task_status(
         else:
             answer = ""
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": status,
             "created_at": task.get("created_at"),
@@ -421,9 +422,9 @@ def openhands_get_task_status(
 
     # Running / queued: poll FastAPI for latest status.
     if not conversation_id:
-        store.update_task(task_id, status="unknown", updated_at=_utcnow_iso())
+        store.update_task(normalized_task_id, status="unknown", updated_at=_utcnow_iso())
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": None,
             "status": "unknown",
             "created_at": task.get("created_at"),
@@ -463,7 +464,7 @@ def openhands_get_task_status(
             "Connection error polling job %s status: %s", conversation_id, exc
         )
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": status,
             "created_at": task.get("created_at"),
@@ -479,7 +480,7 @@ def openhands_get_task_status(
             "Error polling job %s status: %s", conversation_id, exc
         )
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": status,
             "created_at": task.get("created_at"),
@@ -528,7 +529,7 @@ def openhands_get_task_status(
             "retryable": False,
         }
 
-    store.update_task(task_id, **update_fields)
+    store.update_task(normalized_task_id, **update_fields)
 
     # Build progress hint.
     progress_hints = {
@@ -540,7 +541,7 @@ def openhands_get_task_status(
     }
 
     return {
-        "task_id": task_id,
+        "task_id": normalized_task_id,
         "conversation_id": conversation_id,
         "status": new_status,
         "created_at": task.get("created_at"),
@@ -558,7 +559,7 @@ def openhands_get_task_status(
 
 @MCP.tool()
 def openhands_get_task_result(
-    task_id: str,
+    task_id: Any,
     url: str | None = None,
 ) -> dict:
     """Get the final result / answer of a completed OpenHands task.
@@ -582,15 +583,16 @@ def openhands_get_task_result(
             "duration_seconds": 3600
         }
     """
+    normalized_task_id = _normalize_str_arg(task_id)
     store = _get_store()
-    task = store.get_task(task_id)
+    task = store.get_task(normalized_task_id)
 
     if task is None:
         return {
             "status": "failed",
             "error": {
                 "type": "UnknownTaskId",
-                "message": f"No task found with task_id='{task_id}'.",
+                "message": f"No task found with task_id='{normalized_task_id}'.",
                 "retryable": False,
             },
         }
@@ -607,7 +609,7 @@ def openhands_get_task_result(
             except json.JSONDecodeError:
                 result = {"answer": result}
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": "completed",
             "answer": result.get("answer", "") if isinstance(result, dict) else result,
@@ -621,7 +623,7 @@ def openhands_get_task_result(
         if isinstance(error, str):
             error = {"type": "TaskError", "message": error}
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": status,
             "error": error,
@@ -630,7 +632,7 @@ def openhands_get_task_result(
     # Still running: try to fetch latest answer from FastAPI.
     if not conversation_id:
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": None,
             "status": status,
             "message": "No conversation_id yet; task may still be starting.",
@@ -645,9 +647,9 @@ def openhands_get_task_result(
         resp.raise_for_status()
         job_data = resp.json()
     except Exception as exc:
-        logger.warning("Error fetching result for task %s: %s", task_id, exc)
+        logger.warning("Error fetching result for task %s: %s", normalized_task_id, exc)
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": status,
             "message": "Still running; could not fetch latest result.",
@@ -662,7 +664,7 @@ def openhands_get_task_result(
         "success",
     ):
         store.update_task(
-            task_id,
+            normalized_task_id,
             status="completed",
             result={
                 "answer": answer,
@@ -675,7 +677,7 @@ def openhands_get_task_result(
             last_polled_at=_utcnow_iso(),
         )
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": "completed",
             "answer": answer,
@@ -686,7 +688,7 @@ def openhands_get_task_result(
         }
 
     return {
-        "task_id": task_id,
+        "task_id": normalized_task_id,
         "conversation_id": conversation_id,
         "status": "running",
         "message": "Task is still running. Poll again later.",
@@ -695,8 +697,8 @@ def openhands_get_task_result(
 
 @MCP.tool()
 def openhands_get_task_events(
-    task_id: str,
-    limit: int = 50,
+    task_id: Any,
+    limit: Any = 50,
     url: str | None = None,
 ) -> dict:
     """Get events (logs) for a previously started OpenHands task.
@@ -720,15 +722,17 @@ def openhands_get_task_events(
             "count": 10
         }
     """
+    normalized_task_id = _normalize_str_arg(task_id)
+    normalized_limit = _normalize_int_arg(limit, default=50)
     store = _get_store()
-    task = store.get_task(task_id)
+    task = store.get_task(normalized_task_id)
 
     if task is None:
         return {
             "status": "failed",
             "error": {
                 "type": "UnknownTaskId",
-                "message": f"No task found with task_id='{task_id}'.",
+                "message": f"No task found with task_id='{normalized_task_id}'.",
                 "retryable": False,
             },
         }
@@ -736,7 +740,7 @@ def openhands_get_task_events(
     conversation_id = task.get("conversation_id")
     if not conversation_id:
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "events": [],
             "count": 0,
             "message": "No conversation_id available for this task.",
@@ -746,15 +750,15 @@ def openhands_get_task_events(
     try:
         resp = requests.get(
             f"{base}/v1/jobs/{conversation_id}/events",
-            params={"limit": min(max(limit, 1), 100)},
+            params={"limit": min(max(normalized_limit, 1), 100)},
             timeout=OPENHANDS_REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()
     except requests.exceptions.Timeout as exc:
-        logger.warning("Timeout fetching events for task %s: %s", task_id, exc)
+        logger.warning("Timeout fetching events for task %s: %s", normalized_task_id, exc)
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "events": [],
             "count": 0,
             "error": {
@@ -765,10 +769,10 @@ def openhands_get_task_events(
         }
     except requests.exceptions.ConnectionError as exc:
         logger.warning(
-            "Connection error fetching events for task %s: %s", task_id, exc
+            "Connection error fetching events for task %s: %s", normalized_task_id, exc
         )
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "events": [],
             "count": 0,
             "error": {
@@ -778,9 +782,9 @@ def openhands_get_task_events(
             },
         }
     except Exception as exc:
-        logger.warning("Error fetching events for task %s: %s", task_id, exc)
+        logger.warning("Error fetching events for task %s: %s", normalized_task_id, exc)
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "events": [],
             "count": 0,
             "error": {
@@ -801,17 +805,17 @@ def openhands_get_task_events(
         }
         for evt in events[:20]
     ]
-    store.update_task(task_id, events_summary=summary)
+    store.update_task(normalized_task_id, events_summary=summary)
 
     return {
-        "task_id": task_id,
+        "task_id": normalized_task_id,
         "events": events,
         "count": len(events),
     }
 
 
 @MCP.tool()
-def openhands_cancel_task(task_id: str) -> dict:
+def openhands_cancel_task(task_id: Any) -> dict:
     """Cancel a previously started OpenHands task (best-effort).
 
     Note: OpenHands V1 API may not support task cancellation.  This
@@ -824,15 +828,16 @@ def openhands_cancel_task(task_id: str) -> dict:
     Returns:
         A confirmation dict with the updated status.
     """
+    normalized_task_id = _normalize_str_arg(task_id)
     store = _get_store()
-    task = store.get_task(task_id)
+    task = store.get_task(normalized_task_id)
 
     if task is None:
         return {
             "status": "failed",
             "error": {
                 "type": "UnknownTaskId",
-                "message": f"No task found with task_id='{task_id}'.",
+                "message": f"No task found with task_id='{normalized_task_id}'.",
                 "retryable": False,
             },
         }
@@ -840,16 +845,16 @@ def openhands_cancel_task(task_id: str) -> dict:
     current_status = task.get("status", "unknown")
     if current_status in ("completed", "failed", "cancelled", "timeout"):
         return {
-            "task_id": task_id,
+            "task_id": normalized_task_id,
             "status": current_status,
             "message": f"Task is already in terminal state '{current_status}'.",
         }
 
-    store.update_task(task_id, status="cancelled", updated_at=_utcnow_iso())
-    logger.info("Task %s marked as cancelled (local only)", task_id)
+    store.update_task(normalized_task_id, status="cancelled", updated_at=_utcnow_iso())
+    logger.info("Task %s marked as cancelled (local only)", normalized_task_id)
 
     return {
-        "task_id": task_id,
+        "task_id": normalized_task_id,
         "status": "cancelled",
         "message": (
             "Task marked as cancelled locally. "
@@ -1042,6 +1047,73 @@ def role_list() -> dict:
     return _role_tools.role_list_impl()
 
 
+def _unwrap_arg(value: Any) -> Any:
+    """Unwrap a scalar value that may be wrapped in a dict by OpenHands.
+
+    OpenHands may serialize scalar arguments as objects like:
+        {"default": 1800}  instead of  1800
+        {"default": "x"}   instead of  "x"
+
+    This helper extracts the inner value from both forms.
+    """
+    if isinstance(value, dict):
+        for key in ("value", "default", "text", "prompt", "name", "id",
+                     "user_task", "task"):
+            if key in value:
+                return value[key]
+    return value
+
+
+def _normalize_str_arg(value: Any) -> str | None:
+    """Normalize a string argument that may be wrapped as a dict."""
+    value = _unwrap_arg(value)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _normalize_int_arg(
+    value: Any, default: int | None = None
+) -> int | None:
+    """Normalize an integer argument that may be wrapped as a dict."""
+    value = _unwrap_arg(value)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return default
+        try:
+            return int(stripped)
+        except ValueError:
+            return default
+    return default
+
+
+def _normalize_bool_arg(
+    value: Any, default: bool = False
+) -> bool:
+    """Normalize a boolean argument that may be wrapped as a dict."""
+    value = _unwrap_arg(value)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return default
+
+
 def _normalize_text_arg(value: Any) -> str | None:
     """Normalize a prompt/user_task argument that may be wrapped as a dict.
 
@@ -1049,15 +1121,11 @@ def _normalize_text_arg(value: Any) -> str | None:
         {"text": "actual prompt text"}
     This helper extracts the string from both forms.
     """
+    value = _unwrap_arg(value)
     if value is None:
         return None
     if isinstance(value, str):
         return value
-    if isinstance(value, dict):
-        for key in ("text", "prompt", "value", "user_task", "task"):
-            nested = value.get(key)
-            if isinstance(nested, str):
-                return nested
     return str(value)
 
 
@@ -1165,11 +1233,13 @@ def role_start(
 
 
 @MCP.tool()
-def role_status(role_run_id: str) -> dict:
+def role_status(role_run_id: Any) -> dict:
     """Single-shot diagnostic status check.
 
-    Do not call repeatedly in a tight loop; use ``role_wait`` for
-    server-side polling.
+    **Diagnostic only.** Do not call repeatedly in a tight loop from an
+    LLM orchestrator.  Use ``role_wait`` for normal long-running role
+    orchestration.  Repeated identical ``role_status`` calls can trigger
+    OpenHands' stuck-loop detector in the top-level orchestrator.
 
     Args:
         role_run_id: The role run ID returned by ``role_start``.
@@ -1188,12 +1258,13 @@ def role_status(role_run_id: str) -> dict:
             "has_result": false
         }
     """
-    return _role_tools.role_status_impl(role_run_id=role_run_id)
+    normalized_role_run_id = _normalize_str_arg(role_run_id)
+    return _role_tools.role_status_impl(role_run_id=normalized_role_run_id)
 
 
 @MCP.tool()
 def role_result(
-    role_run_id: str, include_full_result: bool = True
+    role_run_id: Any, include_full_result: Any = True
 ) -> dict:
     """Get the result of a completed role.
 
@@ -1241,9 +1312,13 @@ def role_result(
             "full_result_omitted": true
         }
     """
+    normalized_role_run_id = _normalize_str_arg(role_run_id)
+    normalized_include_full_result = _normalize_bool_arg(
+        include_full_result, default=True
+    )
     return _role_tools.role_result_impl(
-        role_run_id=role_run_id,
-        include_full_result=include_full_result,
+        role_run_id=normalized_role_run_id,
+        include_full_result=normalized_include_full_result,
     )
 
 
@@ -1254,10 +1329,10 @@ def role_result(
 
 @MCP.tool()
 def role_wait(
-    role_run_id: str,
-    timeout_seconds: int | None = None,
-    poll_interval_seconds: int | None = None,
-    return_result: bool = True,
+    role_run_id: Any,
+    timeout_seconds: Any = None,
+    poll_interval_seconds: Any = None,
+    return_result: Any = True,
 ) -> dict:
     """Wait for a long-running role to finish using server-side polling.
 
@@ -1324,11 +1399,28 @@ def role_wait(
             "return_result": true
         }
     """
+    normalized_role_run_id = _normalize_str_arg(role_run_id)
+    if not normalized_role_run_id:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingRoleRunId",
+                "message": "role_run_id is required",
+                "retryable": False,
+            },
+        }
+    normalized_timeout = _normalize_int_arg(timeout_seconds, default=None)
+    normalized_poll_interval = _normalize_int_arg(
+        poll_interval_seconds, default=None
+    )
+    normalized_return_result = _normalize_bool_arg(
+        return_result, default=True
+    )
     return _role_tools.role_wait_impl(
-        role_run_id=role_run_id,
-        timeout_seconds=timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-        return_result=return_result,
+        role_run_id=normalized_role_run_id,
+        timeout_seconds=normalized_timeout,
+        poll_interval_seconds=normalized_poll_interval,
+        return_result=normalized_return_result,
     )
 
 
@@ -1338,7 +1430,7 @@ def role_wait(
 
 
 @MCP.tool()
-def artifact_list(run_id: str) -> dict:
+def artifact_list(run_id: Any) -> dict:
     """List artifacts for a given run.
 
     Args:
@@ -1363,14 +1455,15 @@ def artifact_list(run_id: str) -> dict:
             ]
         }
     """
-    return _role_tools.artifact_list_impl(run_id=run_id)
+    normalized_run_id = _normalize_str_arg(run_id)
+    return _role_tools.artifact_list_impl(run_id=normalized_run_id)
 
 
 @MCP.tool()
 def artifact_get(
-    run_id: str | None = None,
-    artifact_name: str | None = None,
-    role_run_id: str | None = None,
+    run_id: Any = None,
+    artifact_name: Any = None,
+    role_run_id: Any = None,
 ) -> dict:
     """Get an artifact by name or role_run_id.
 
@@ -1395,10 +1488,13 @@ def artifact_get(
             "content": "Full artifact text ..."
         }
     """
+    normalized_run_id = _normalize_str_arg(run_id)
+    normalized_artifact_name = _normalize_str_arg(artifact_name)
+    normalized_role_run_id = _normalize_str_arg(role_run_id)
     return _role_tools.artifact_get_impl(
-        run_id=run_id,
-        artifact_name=artifact_name,
-        role_run_id=role_run_id,
+        run_id=normalized_run_id,
+        artifact_name=normalized_artifact_name,
+        role_run_id=normalized_role_run_id,
     )
 
 
