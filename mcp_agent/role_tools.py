@@ -723,12 +723,46 @@ def artifact_get_impl(
     dict
         Artifact metadata with ``content`` key, or an error dict.
     """
+    # Resolve run_id and artifact_name from role_run_id if run_id is not provided
+    if not run_id and role_run_id:
+        role_store = _get_role_store()
+        role_run = role_store.get_role_run(role_run_id)
+        if role_run is None:
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "UnknownRoleRunId",
+                    "message": (
+                        f"No role run found for role_run_id='{role_run_id}'. "
+                        "Verify the ID returned by role_start."
+                    ),
+                    "retryable": False,
+                },
+            }
+        run_id = role_run.get("run_id")
+        if not artifact_name:
+            artifact_name = role_run.get("artifact_name")
+
     if not run_id:
         return {
             "status": "failed",
             "error": {
                 "type": "MissingRunId",
-                "message": "run_id is required.",
+                "message": (
+                    "Missing run_id. Provide either run_id or role_run_id."
+                ),
+                "retryable": False,
+            },
+        }
+
+    if not artifact_name and not role_run_id:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingArtifactName",
+                "message": (
+                    "Missing artifact_name. Provide artifact_name or role_run_id."
+                ),
                 "retryable": False,
             },
         }

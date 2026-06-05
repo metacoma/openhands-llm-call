@@ -195,12 +195,75 @@ class TestArtifactToolImpl(unittest.TestCase):
         self.assertEqual(result["content"], "scout report content")
 
     def test_artifact_get_impl_missing_run_id(self):
-        """artifact_get returns error when run_id is missing."""
+        """artifact_get returns error when both run_id and role_run_id are missing."""
         from mcp_agent.role_tools import artifact_get_impl
 
         result = artifact_get_impl()
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["type"], "MissingRunId")
+        self.assertIn("Provide either run_id or role_run_id", result["error"]["message"])
+
+    def test_artifact_get_impl_by_role_run_id_only(self):
+        """artifact_get works with role_run_id only (no run_id)."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_tools import artifact_get_impl
+        from mcp_agent.role_store import RoleRunStore
+
+        store = ArtifactStore()
+        role_store = RoleRunStore()
+
+        # Create a role run record
+        role_store.create_role_run(
+            role="scout",
+            run_id="run-020",
+            role_run_id="run-020-scout-1",
+            openhands_task_id="task-020",
+            repo="test/repo",
+            branch="main",
+            artifact_name="scout_report",
+        )
+
+        # Save an artifact
+        store.save(
+            run_id="run-020",
+            role_run_id="run-020-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="Scout analysis via role_run_id lookup.",
+        )
+
+        # Retrieve by role_run_id only
+        result = artifact_get_impl(role_run_id="run-020-scout-1")
+        self.assertNotEqual(result.get("status"), "failed")
+        self.assertEqual(result["content"], "Scout analysis via role_run_id lookup.")
+        self.assertEqual(result["artifact_name"], "scout_report")
+
+    def test_artifact_get_impl_unknown_role_run_id(self):
+        """artifact_get returns UnknownRoleRunId for unknown role_run_id."""
+        from mcp_agent.role_tools import artifact_get_impl
+
+        result = artifact_get_impl(role_run_id="nonexistent-role-run-999")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "UnknownRoleRunId")
+
+    def test_artifact_get_impl_missing_artifact_name(self):
+        """artifact_get returns MissingArtifactName when neither artifact_name nor role_run_id provided."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_tools import artifact_get_impl
+
+        store = ArtifactStore()
+        store.save(
+            run_id="run-021",
+            role_run_id="run-021-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="content",
+        )
+
+        # Provide run_id but no artifact_name and no role_run_id
+        result = artifact_get_impl(run_id="run-021")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingArtifactName")
 
     def test_artifact_get_impl_unknown_artifact(self):
         """artifact_get returns error for unknown artifact."""
