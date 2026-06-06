@@ -600,7 +600,7 @@ def role_status_impl(role_run_id: str) -> dict:
         task_id=role_run["openhands_task_id"]
     )
 
-    st = task_status.get("status", "unknown")
+    st = task_status.get("status") or "unknown"
     has_result = st == "completed"
 
     # Persist the actual OpenHands status back to the role run record
@@ -669,7 +669,7 @@ def role_result_impl(
     task_status = openhands_get_task_status(
         task_id=role_run["openhands_task_id"]
     )
-    st = task_status.get("status", "unknown")
+    st = task_status.get("status") or "unknown"
 
     if st != "completed":
         return {
@@ -790,7 +790,6 @@ TERMINAL_STATUSES = frozenset(
         "timed_out",
         "stuck",
         "error",
-        "unknown",
     }
 )
 
@@ -857,7 +856,19 @@ def _find_active_role_run(role_store: "RoleRunStore") -> Optional[dict]:
                 )
                 if refreshed is not None:
                     # Refresh succeeded — check if actual status is terminal
-                    actual_status = refreshed.get("status", "unknown")
+                    actual_status = refreshed.get("status")
+
+                    # Guard: missing, empty, or unknown status is NOT terminal.
+                    # Treating it as terminal would risk clearing the active
+                    # lock and violating single-threaded safety.
+                    if not actual_status or actual_status == "unknown":
+                        data["_refresh_failed"] = True
+                        data["_refresh_warning"] = (
+                            "OpenHands returned missing or unknown task status; "
+                            "treating role as active to preserve single-threaded safety."
+                        )
+                        return data
+
                     if actual_status in TERMINAL_STATUSES:
                         # Persist the terminal status to clear the stale lock
                         role_store.update_role_run(

@@ -159,6 +159,11 @@ the actual status is terminal, the persisted record is updated and
 the lock is cleared automatically. If the refresh fails, the server
 treats the role as active with a warning in the error message.
 
+If the refresh succeeds but returns a missing, empty, or `"unknown"`
+status, the server treats the role as active to preserve single-threaded
+safety. The error message includes `refresh_failed: true` and a
+`refresh_warning` explaining the issue.
+
 ## role_status
 
 Single-shot diagnostic status check. Do not call repeatedly in a tight loop; use `role_wait` for server-side polling.
@@ -178,10 +183,15 @@ Expected response:
   "role_run_id": "20260605-abc123-scout-1",
   "run_id": "20260605-abc123",
   "role": "scout",
-  "status": "running|completed|failed|timeout|cancelled|unknown",
+  "status": "running|completed|failed|timeout|cancelled",
   "summary": "Short progress summary if available",
   "has_result": false
 }
+
+**Note:** `"unknown"` may appear when OpenHands returns a missing or
+unrecognizable status. In that case the server treats the role as active
+to preserve single-threaded safety — see the README section on unknown
+or missing OpenHands task status.
 ```
 
 ## role_wait

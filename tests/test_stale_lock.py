@@ -303,12 +303,12 @@ class TestStaleActiveRoleLockPrevention(unittest.TestCase):
         self.assertEqual(updated["status"], "completed_empty_result")
 
     # ------------------------------------------------------------------
-    # Test 10: unknown status clears stale lock
+    # Test 10: unknown status preserves active lock (unknown is NOT terminal)
     # ------------------------------------------------------------------
 
-    def test_unknown_status_clears_stale_lock(self):
+    def test_unknown_status_preserves_active_lock(self):
         """Persisted status='running' but actual OpenHands returns 'unknown'
-        should be cleared (unknown is terminal)."""
+        should NOT be cleared (unknown is NOT terminal)."""
         role_run = {
             "run_id": "test-run-10",
             "role_run_id": "unk-scout-1",
@@ -328,9 +328,11 @@ class TestStaleActiveRoleLockPrevention(unittest.TestCase):
             store = RoleRunStore(self.tmpdir)
             active = _find_active_role_run(store)
 
-        self.assertIsNone(active)
-        updated = json.loads(filepath.read_text())
-        self.assertEqual(updated["status"], "unknown")
+        # ASSERTION CHANGED: unknown is NOT terminal, so active lock is preserved
+        self.assertIsNotNone(active)
+        self.assertEqual(active["role_run_id"], "unk-scout-1")
+        self.assertTrue(active.get("_refresh_failed", False))
+        self.assertIn("_refresh_warning", active)
 
     # ------------------------------------------------------------------
     # Test 11: missing task_id — safe fallback
@@ -378,7 +380,7 @@ class TestTerminalStatuses(unittest.TestCase):
             "timed_out",
             "stuck",
             "error",
-            "unknown",
+            # "unknown" is NOT terminal — it means "unable to determine status"
         }
         self.assertTrue(expected.issubset(TERMINAL_STATUSES))
 
@@ -386,6 +388,223 @@ class TestTerminalStatuses(unittest.TestCase):
         from mcp_agent.role_tools import TERMINAL_STATUSES
 
         self.assertNotIn("running", TERMINAL_STATUSES)
+
+
+class TestMissingEmptyExceptionRefresh(unittest.TestCase):
+    """Tests for missing/empty/exception refresh cases — none should clear lock."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_refresh_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_tools as rt
+
+        rt._role_store = None
+
+    def test_missing_status_dict_preserves_active_lock(self):
+        """Persisted status='running' but openhands_get_task_status() returns {}
+        should NOT clear the active lock."""
+        role_run = {
+            "run_id": "test-run-missing",
+            "role_run_id": "missing-scout-1",
+            "role": "scout",
+            "openhands_task_id": "task-missing",
+            "status": "running",
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        filepath = Path(self.tmpdir) / "missing-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNotNone(active)
+        self.assertEqual(active["role_run_id"], "missing-scout-1")
+        self.assertTrue(active.get("_refresh_failed", False))
+
+    def test_empty_status_preserves_active_lock(self):
+        """Persisted status='running' but actual OpenHands status='' should NOT
+        clear the lock."""
+        role_run = {
+            "run_id": "test-run-empty",
+            "role_run_id": "empty-scout-1",
+            "role": "scout",
+            "openhands_task_id": "task-empty",
+            "status": "running",
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        filepath = Path(self.tmpdir) / "empty-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": ""}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNotNone(active)
+        self.assertEqual(active["role_run_id"], "empty-scout-1")
+        self.assertTrue(active.get("_refresh_failed", False))
+
+    def test_refresh_exception_preserves_active_lock(self):
+        """Persisted status='running' but openhands_get_task_status() raises
+        should NOT clear the lock."""
+        role_run = {
+            "run_id": "test-run-exception",
+            "role_run_id": "exc-scout-1",
+            "role": "scout",
+            "openhands_task_id": "task-exc",
+            "status": "running",
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        filepath = Path(self.tmpdir) / "exc-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(
+            _OH_STATUS_PATCH, side_effect=RuntimeError("simulated failure")
+        ):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNotNone(active)
+        self.assertEqual(active["role_run_id"], "exc-scout-1")
+        self.assertTrue(active.get("_refresh_failed", False))
+
+
+class TestTerminalStatusesStillClearLock(unittest.TestCase):
+    """Additional terminal statuses that should still clear stale locks."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_terminal_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_tools as rt
+
+        rt._role_store = None
+
+    def _make_role_run(self, name, status="running"):
+        return {
+            "run_id": f"test-run-{name}",
+            "role_run_id": f"{name}-scout-1",
+            "role": "scout",
+            "openhands_task_id": f"task-{name}",
+            "status": status,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+
+    def test_terminal_status_cancelled_clears_stale_lock(self):
+        role_run = self._make_role_run("cancelled", "running")
+        filepath = Path(self.tmpdir) / "cancelled-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": "cancelled"}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNone(active)
+        updated = json.loads(filepath.read_text())
+        self.assertEqual(updated["status"], "cancelled")
+
+    def test_terminal_status_canceled_clears_stale_lock(self):
+        role_run = self._make_role_run("canceled", "running")
+        filepath = Path(self.tmpdir) / "canceled-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": "canceled"}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNone(active)
+        updated = json.loads(filepath.read_text())
+        self.assertEqual(updated["status"], "canceled")
+
+    def test_terminal_status_timeout_clears_stale_lock(self):
+        role_run = self._make_role_run("timeout", "running")
+        filepath = Path(self.tmpdir) / "timeout-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": "timeout"}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNone(active)
+        updated = json.loads(filepath.read_text())
+        self.assertEqual(updated["status"], "timeout")
+
+    def test_terminal_status_timed_out_clears_stale_lock(self):
+        role_run = self._make_role_run("timed_out", "running")
+        filepath = Path(self.tmpdir) / "timed_out-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": "timed_out"}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNone(active)
+        updated = json.loads(filepath.read_text())
+        self.assertEqual(updated["status"], "timed_out")
+
+    def test_terminal_status_stuck_clears_stale_lock(self):
+        role_run = self._make_role_run("stuck", "running")
+        filepath = Path(self.tmpdir) / "stuck-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": "stuck"}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNone(active)
+        updated = json.loads(filepath.read_text())
+        self.assertEqual(updated["status"], "stuck")
+
+    def test_terminal_status_error_clears_stale_lock(self):
+        role_run = self._make_role_run("error", "running")
+        filepath = Path(self.tmpdir) / "error-scout-1.json"
+        filepath.write_text(json.dumps(role_run))
+
+        with patch(_OH_STATUS_PATCH, return_value={"status": "error"}):
+            from mcp_agent.role_store import RoleRunStore
+            from mcp_agent.role_tools import _find_active_role_run
+
+            store = RoleRunStore(self.tmpdir)
+            active = _find_active_role_run(store)
+
+        self.assertIsNone(active)
+        updated = json.loads(filepath.read_text())
+        self.assertEqual(updated["status"], "error")
 
 
 class TestRoleStatusPersists(unittest.TestCase):

@@ -673,6 +673,26 @@ verify whether the previous role has actually finished. In this case:
 3. Alternatively, wait for the OpenHands backend to become available and
    retry.
 
+#### Unknown or missing OpenHands task status
+
+If the server cannot prove that an existing role has reached a terminal
+status (e.g., OpenHands returns `"unknown"`, an empty response, or the
+API is unavailable), it preserves single-threaded safety and treats the
+role as still active.
+
+In this case, `role_start` may return `another_role_running` with
+`refresh_failed: true` and a `refresh_warning` explaining the issue.
+
+**What to do:**
+
+1. Follow the `next_action` field and call `role_wait` for the existing
+   `role_run_id`.
+2. Do NOT start another role until the previous role is confirmed terminal.
+3. If the OpenHands backend is temporarily unavailable, wait and retry.
+4. If the task has actually completed (verified externally), manually
+   update or delete the role-run JSON file in `OPENHANDS_ROLE_STATE_DIR`
+   to clear the stale lock.
+
 ## Long-running task behavior
 
 - **Per-role timeouts**: Each role in `config/roles.yaml` specifies

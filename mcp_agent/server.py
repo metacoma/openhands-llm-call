@@ -1372,6 +1372,7 @@ def _build_another_role_running_error(
     active_role: str,
     active_status: str,
     refresh_failed: bool = False,
+    refresh_warning: str = "",
 ) -> dict:
     """Build an LLM-friendly error for single-active-role violation."""
     message = (
@@ -1385,12 +1386,14 @@ def _build_another_role_running_error(
             "the lock may be stale."
         )
 
-    return {
+    result = {
         "error": "another_role_running",
         "message": message,
         "active_role_run_id": active_id,
         "active_role": active_role,
         "active_status": active_status,
+        "refresh_failed": refresh_failed,
+        "refresh_warning": refresh_warning,
         "next_action": {
             "tool": "role_wait",
             "arguments": {
@@ -1401,6 +1404,7 @@ def _build_another_role_running_error(
             },
         },
     }
+    return result
 
 
 @MCP.tool()
@@ -1549,8 +1553,11 @@ def role_start(
 
         # Reject with LLM-friendly error
         refresh_failed = active.get("_refresh_failed", False)
+        refresh_warning = active.get("_refresh_warning", "")
         return _build_another_role_running_error(
-            active_id, active_role, active_status, refresh_failed=refresh_failed
+            active_id, active_role, active_status,
+            refresh_failed=refresh_failed,
+            refresh_warning=refresh_warning,
         )
 
     return _role_tools.role_start_impl(
