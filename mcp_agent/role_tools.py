@@ -884,7 +884,7 @@ def role_wait_impl(
                     return result
 
                 # Not yet — check if we should return empty result
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= retry_deadline:
                     # Wait timeout exceeded; return empty-result diagnostics
                     if result.get("status") == "completed_empty_result":
                         result["wait_timed_out"] = True

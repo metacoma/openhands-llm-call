@@ -1354,7 +1354,9 @@ def role_status(role_run_id: Any) -> dict:
 
 @MCP.tool()
 def role_result(
-    role_run_id: Any, include_full_result: Any = True
+    role_run_id: Any,
+    include_full_result: Any = True,
+    force_refresh: Any = False,
 ) -> dict:
     """Get the result of a completed role.
 
@@ -1367,6 +1369,9 @@ def role_result(
         include_full_result: If True (default), returns the full result
             text.  If False, omits ``full_result`` but still returns
             artifact metadata and a summary.
+        force_refresh: If True and the cached answer is empty, re-fetch
+            from the OpenHands FastAPI backend to bypass stale cached
+            results.
 
     Returns:
         Structured role result.
@@ -1406,9 +1411,13 @@ def role_result(
     normalized_include_full_result = _normalize_bool_arg(
         include_full_result, default=True
     )
+    normalized_force_refresh = _normalize_bool_arg(
+        force_refresh, default=False
+    )
     return _role_tools.role_result_impl(
         role_run_id=normalized_role_run_id,
         include_full_result=normalized_include_full_result,
+        force_refresh=normalized_force_refresh,
     )
 
 
