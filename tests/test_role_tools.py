@@ -1405,11 +1405,22 @@ class TestRoleWaitTool(unittest.TestCase):
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
     @patch("mcp_agent.role_tools.role_result_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_completed_with_result(
-        self, mock_result_impl, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
     ):
         """role_wait returns completed result when role finishes."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-001",
+            "role_run_id": "run-001",
+            "role": "scout",
+            "openhands_task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},  # initial validation
@@ -1438,9 +1449,22 @@ class TestRoleWaitTool(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_terminal_failed(self, mock_status_impl, mock_sleep):
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_terminal_failed(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
         """role_wait returns terminal failed state."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-002",
+            "role_run_id": "run-002",
+            "role": "scout",
+            "openhands_task_id": "task-002",
+            "conversation_id": "conv-002",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},  # initial validation
@@ -1462,9 +1486,22 @@ class TestRoleWaitTool(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_bounded_timeout(self, mock_status_impl, mock_sleep):
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_bounded_timeout(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
         """role_wait returns running when timeout expires."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-003",
+            "role_run_id": "run-003",
+            "role": "scout",
+            "openhands_task_id": "task-003",
+            "conversation_id": "conv-003",
+        }
 
         mock_status_impl.return_value = {"status": "running"}
 
@@ -1482,9 +1519,22 @@ class TestRoleWaitTool(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_return_result_false(self, mock_status_impl, mock_sleep):
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_return_result_false(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
         """return_result=false returns compact response."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-004",
+            "role_run_id": "run-004",
+            "role": "scout",
+            "openhands_task_id": "task-004",
+            "conversation_id": "conv-004",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},  # initial validation
@@ -1508,11 +1558,22 @@ class TestRoleWaitTool(unittest.TestCase):
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
     @patch("mcp_agent.role_tools.role_result_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_clamps_negative_timeout(
-        self, mock_result_impl, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
     ):
         """Negative timeout is clamped to minimum."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-005",
+            "role_run_id": "run-005",
+            "role": "scout",
+            "openhands_task_id": "task-005",
+            "conversation_id": "conv-005",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},
@@ -1537,11 +1598,22 @@ class TestRoleWaitTool(unittest.TestCase):
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
     @patch("mcp_agent.role_tools.role_result_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_clamps_huge_timeout(
-        self, mock_result_impl, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
     ):
         """Huge timeout is clamped to max (7200)."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-006",
+            "role_run_id": "run-006",
+            "role": "scout",
+            "openhands_task_id": "task-006",
+            "conversation_id": "conv-006",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},
@@ -1566,11 +1638,22 @@ class TestRoleWaitTool(unittest.TestCase):
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
     @patch("mcp_agent.role_tools.role_result_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_clamps_zero_poll_interval(
-        self, mock_result_impl, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
     ):
         """Zero poll interval is clamped to minimum (5)."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-007",
+            "role_run_id": "run-007",
+            "role": "scout",
+            "openhands_task_id": "task-007",
+            "conversation_id": "conv-007",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},
@@ -1595,11 +1678,22 @@ class TestRoleWaitTool(unittest.TestCase):
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
     @patch("mcp_agent.role_tools.role_result_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_clamps_huge_poll_interval(
-        self, mock_result_impl, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
     ):
         """Huge poll interval is clamped to max (120)."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-008",
+            "role_run_id": "run-008",
+            "role": "scout",
+            "openhands_task_id": "task-008",
+            "conversation_id": "conv-008",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},
@@ -1650,9 +1744,120 @@ class TestRoleWaitTool(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_cancelled_status(self, mock_status_impl, mock_sleep):
+    @patch("mcp_agent.role_tools.role_result_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_fallback_empty_result_no_name_error(
+        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
+    ):
+        """role_wait fallback empty-result path does not raise NameError.
+
+        Simulates: role completed, but role_result_impl returns empty answer
+        with status 'completed' (not 'completed_empty_result'), forcing the
+        _build_empty_result_response fallback path.
+        """
+        from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-fallback",
+            "role_run_id": "run-fallback",
+            "role": "scout",
+            "openhands_task_id": "task-fallback",
+            "conversation_id": "conv-fallback",
+        }
+
+        # Use tiny retry window so test is fast
+        with patch.dict(
+            os.environ,
+            {
+                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "1",
+                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "0",
+            },
+        ):
+            mock_status_impl.side_effect = [
+                {"status": "running"},  # initial validation
+                {"status": "completed"},  # first poll check
+            ]
+            # Return empty answer with status "completed" (not "completed_empty_result")
+            # This forces the _build_empty_result_response fallback path
+            mock_result_impl.return_value = {
+                "role_run_id": "run-fallback",
+                "status": "completed",
+                "full_result": "",
+                "result": "",
+            }
+
+            result = role_wait(
+                role_run_id="run-fallback",
+                timeout_seconds=300,
+                poll_interval_seconds=15,
+                return_result=True,
+            )
+
+        # Should NOT raise NameError
+        self.assertEqual(result["status"], "completed_empty_result")
+        self.assertFalse(result.get("has_result", True))
+        self.assertEqual(result.get("full_result"), "")
+        self.assertIsNotNone(result.get("error"))
+        self.assertEqual(result["error"]["type"], "EmptyRoleResult")
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    def test_role_wait_unknown_role_run_id_via_store(
+        self, mock_status_impl, mock_sleep
+    ):
+        """Unknown role_run_id (after initial check passes) returns structured error.
+
+        Simulates a race where role_status_impl returns non-failed but the
+        store lookup for role_run returns None.  This exercises the new
+        role_run guard added in role_wait_impl().
+        """
+        from mcp_agent.server import role_wait
+
+        # Initial check passes (non-failed), so role_wait proceeds to
+        # the store lookup that we mock to return None.
+        mock_status_impl.side_effect = [
+            {"status": "running"},  # initial validation — not failed
+            {"status": "running"},  # polling loop — never reached
+        ]
+
+        with patch("mcp_agent.role_tools._get_role_store") as mock_get_store:
+            mock_store = MagicMock()
+            mock_get_store.return_value = mock_store
+            mock_store.get_role_run.return_value = None
+
+            result = role_wait(
+                role_run_id="missing-role-run-id",
+                timeout_seconds=300,
+                poll_interval_seconds=15,
+                return_result=True,
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "UnknownRoleRunId")
+        self.assertFalse(result["error"]["retryable"])
+        # Only the initial status check should have occurred
+        self.assertEqual(mock_status_impl.call_count, 1)
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_cancelled_status(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
         """Cancelled status is terminal."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-009",
+            "role_run_id": "run-009",
+            "role": "scout",
+            "openhands_task_id": "task-009",
+            "conversation_id": "conv-009",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},  # initial validation
@@ -1673,9 +1878,22 @@ class TestRoleWaitTool(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_timeout_status(self, mock_status_impl, mock_sleep):
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_timeout_status(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
         """Timeout status is terminal."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-010",
+            "role_run_id": "run-010",
+            "role": "scout",
+            "openhands_task_id": "task-010",
+            "conversation_id": "conv-010",
+        }
 
         mock_status_impl.side_effect = [
             {"status": "running"},  # initial validation
@@ -1900,11 +2118,22 @@ class TestEmptyResultContract(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_retries_final_answer_after_completed(
-        self, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_status_impl, mock_sleep
     ):
         """role_wait retries when answer is initially empty, then succeeds."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-100",
+            "role_run_id": "run-100",
+            "role": "scout",
+            "openhands_task_id": "task-100",
+            "conversation_id": "conv-100",
+        }
 
         # First two polls return empty answer, third returns non-empty.
         call_count = [0]
@@ -1960,11 +2189,22 @@ class TestEmptyResultContract(unittest.TestCase):
 
     @patch("mcp_agent.role_tools.time.sleep")
     @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
     def test_role_wait_gives_empty_result_after_retry_window(
-        self, mock_status_impl, mock_sleep
+        self, mock_get_store, mock_status_impl, mock_sleep
     ):
         """role_wait returns EmptyRoleResult when retry window is exhausted."""
         from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-200",
+            "role_run_id": "run-200",
+            "role": "scout",
+            "openhands_task_id": "task-200",
+            "conversation_id": "conv-200",
+        }
 
         def _mock_result_impl(role_run_id, **kwargs):
             return {

@@ -818,6 +818,24 @@ def role_wait_impl(
     if init_st == "failed":
         return initial_status  # unknown / error
 
+    # Load role_run for fallback paths that need it.
+    # Guards against a race where the role_run record is deleted between
+    # the initial status check and the fallback empty-result path.
+    store = _get_role_store()
+    role_run = store.get_role_run(role_run_id)
+    if role_run is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownRoleRunId",
+                "message": (
+                    f"No role run found for role_run_id='{role_run_id}'. "
+                    "Verify the ID returned by role_start."
+                ),
+                "retryable": False,
+            },
+        }
+
     # --- Clamp parameters ---
     if timeout_seconds is None:
         timeout_seconds = _DEFAULT_ROLE_WAIT_TIMEOUT
