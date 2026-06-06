@@ -1897,6 +1897,173 @@ class TestEmptyResultContract(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    def test_role_wait_retries_final_answer_after_completed(
+        self, mock_status_impl, mock_sleep
+    ):
+        """role_wait retries when answer is initially empty, then succeeds."""
+        from mcp_agent.server import role_wait
+
+        # First two polls return empty answer, third returns non-empty.
+        call_count = [0]
+
+        def _mock_result_impl(role_run_id, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return {
+                    "role_run_id": "run-100",
+                    "status": "completed_empty_result",
+                    "has_result": False,
+                    "full_result": "",
+                    "error": {"type": "EmptyRoleResult"},
+                    "artifact_saved": False,
+                }
+            return {
+                "role_run_id": "run-100",
+                "status": "completed",
+                "has_result": True,
+                "full_result": "Final answer after retry",
+                "full_result_omitted": False,
+                "artifact_saved": True,
+            }
+
+        with patch.dict(
+            os.environ,
+            {
+                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "10",
+                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "1",
+            },
+        ):
+            with patch(
+                "mcp_agent.role_tools.role_result_impl",
+                side_effect=_mock_result_impl,
+            ):
+                mock_status_impl.side_effect = [
+                    {"status": "running"},
+                    {"status": "completed"},
+                ]
+
+                result = role_wait(
+                    role_run_id="run-100",
+                    timeout_seconds=300,
+                    poll_interval_seconds=15,
+                    return_result=True,
+                )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result.get("has_result", False))
+        self.assertEqual(result["full_result"], "Final answer after retry")
+        # Should have been called 3 times (2 empty + 1 success)
+        self.assertEqual(call_count[0], 3)
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    def test_role_wait_gives_empty_result_after_retry_window(
+        self, mock_status_impl, mock_sleep
+    ):
+        """role_wait returns EmptyRoleResult when retry window is exhausted."""
+        from mcp_agent.server import role_wait
+
+        def _mock_result_impl(role_run_id, **kwargs):
+            return {
+                "role_run_id": "run-200",
+                "status": "completed_empty_result",
+                "has_result": False,
+                "full_result": "",
+                "error": {"type": "EmptyRoleResult", "retryable": True},
+                "artifact_saved": False,
+            }
+
+        # Use fast retry env vars so the test completes quickly
+        with patch.dict(
+            os.environ,
+            {
+                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "2",
+                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "1",
+            },
+        ):
+            with patch(
+                "mcp_agent.role_tools.role_result_impl",
+                side_effect=_mock_result_impl,
+            ):
+                mock_status_impl.side_effect = [
+                    {"status": "running"},
+                    {"status": "completed"},
+                ]
+
+                result = role_wait(
+                    role_run_id="run-200",
+                    timeout_seconds=300,
+                    poll_interval_seconds=15,
+                    return_result=True,
+                )
+
+        self.assertEqual(result["status"], "completed_empty_result")
+        self.assertFalse(result.get("has_result", True))
+        self.assertEqual(result["full_result"], "")
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["type"], "EmptyRoleResult")
+        self.assertTrue(result["error"].get("retryable"))
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    def test_role_wait_retries_final_answer_after_completed_fast_retry(
+        self, mock_status_impl, mock_sleep
+    ):
+        """role_wait retries when answer is initially empty, then succeeds (fast env)."""
+        from mcp_agent.server import role_wait
+
+        call_count = [0]
+
+        def _mock_result_impl(role_run_id, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return {
+                    "role_run_id": "run-101",
+                    "status": "completed_empty_result",
+                    "has_result": False,
+                    "full_result": "",
+                    "error": {"type": "EmptyRoleResult"},
+                    "artifact_saved": False,
+                }
+            return {
+                "role_run_id": "run-101",
+                "status": "completed",
+                "has_result": True,
+                "full_result": "Final answer after retry",
+                "full_result_omitted": False,
+                "artifact_saved": True,
+            }
+
+        with patch.dict(
+            os.environ,
+            {
+                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "10",
+                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "1",
+            },
+        ):
+            with patch(
+                "mcp_agent.role_tools.role_result_impl",
+                side_effect=_mock_result_impl,
+            ):
+                mock_status_impl.side_effect = [
+                    {"status": "running"},
+                    {"status": "completed"},
+                ]
+
+                result = role_wait(
+                    role_run_id="run-101",
+                    timeout_seconds=300,
+                    poll_interval_seconds=15,
+                    return_result=True,
+                )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result.get("has_result", False))
+        self.assertEqual(result["full_result"], "Final answer after retry")
+        self.assertEqual(call_count[0], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

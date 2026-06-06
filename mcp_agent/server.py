@@ -620,7 +620,7 @@ def openhands_get_task_result(
 
         # If force_refresh is requested and the cached answer is empty,
         # re-fetch from FastAPI to avoid permanently caching empty answers.
-        if force_refresh and not cached_answer:
+        if force_refresh and not cached_answer.strip():
             if not conversation_id:
                 return {
                     "task_id": normalized_task_id,

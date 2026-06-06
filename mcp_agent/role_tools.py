@@ -19,6 +19,58 @@ logger = logging.getLogger("openhands-mcp")
 
 
 # ---------------------------------------------------------------------------
+# Empty-result response helper (Issue 2: eliminate duplication)
+# ---------------------------------------------------------------------------
+
+
+def _build_empty_result_response(
+    role_run_id: str,
+    role_run: Optional[dict],
+    last_status: str,
+) -> dict:
+    """Build a canonical empty-result response dict.
+
+    Centralises the empty-result shape so that changes to the schema
+    only need to be made in one place.
+    """
+    diagnostics = {
+        "conversation_id": role_run.get("conversation_id") if role_run else None,
+        "task_id": role_run["openhands_task_id"] if role_run else None,
+        "last_status": last_status,
+        "answer_empty": True,
+        "final_answer_retry_seconds": int(
+            os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_SECONDS", "60")
+        ),
+    }
+    return {
+        "role_run_id": role_run_id,
+        "run_id": role_run["run_id"] if role_run else None,
+        "role": role_run["role"] if role_run else None,
+        "status": "completed_empty_result",
+        "has_result": False,
+        "full_result": "",
+        "result_summary": "",
+        "artifact_name": role_run.get("artifact_name") if role_run else None,
+        "artifact_path": None,
+        "artifact_saved": False,
+        "action": None,
+        "risk": None,
+        "error": {
+            "type": "EmptyRoleResult",
+            "message": (
+                "Role completed but did not return a final LLM answer."
+            ),
+            "retryable": True,
+            "suggested_next_action": (
+                "Retry this role once with a stricter final-answer prompt."
+            ),
+        },
+        "diagnostics": diagnostics,
+        "timeout_minutes": role_run.get("timeout_minutes") if role_run else None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Action/Risk parsing helpers
 # ---------------------------------------------------------------------------
 
@@ -640,42 +692,9 @@ def role_result_impl(
 
     # --- Validate non-empty final answer ---
     if not full_result.strip():
-        # Build diagnostics for debugging
-        diagnostics = {
-            "conversation_id": role_run.get("conversation_id"),
-            "task_id": role_run["openhands_task_id"],
-            "last_status": st,
-            "answer_empty": True,
-            "final_answer_retry_seconds": int(
-                os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_SECONDS", "60")
-            ),
-        }
-        return {
-            "role_run_id": role_run_id,
-            "run_id": role_run["run_id"],
-            "role": role_run["role"],
-            "status": "completed_empty_result",
-            "has_result": False,
-            "full_result": "",
-            "result_summary": "",
-            "artifact_name": role_run.get("artifact_name"),
-            "artifact_path": None,
-            "artifact_saved": False,
-            "action": None,
-            "risk": None,
-            "error": {
-                "type": "EmptyRoleResult",
-                "message": (
-                    "Role completed but did not return a final LLM answer."
-                ),
-                "retryable": True,
-                "suggested_next_action": (
-                    "Retry this role once with a stricter final-answer prompt."
-                ),
-            },
-            "diagnostics": diagnostics,
-            "timeout_minutes": role_run.get("timeout_minutes"),
-        }
+        return _build_empty_result_response(
+            role_run_id, role_run, st
+        )
 
     # Save artifact through ArtifactStore (single persistence mechanism)
     artifact_store = ArtifactStore()
@@ -870,49 +889,11 @@ def role_wait_impl(
                     if result.get("status") == "completed_empty_result":
                         result["wait_timed_out"] = True
                         return result
-                    # Build empty-result response from scratch
-                    role_run = _get_role_store().get_role_run(role_run_id)
-                    diagnostics = {
-                        "conversation_id": (
-                            role_run.get("conversation_id") if role_run else None
-                        ),
-                        "task_id": (
-                            role_run["openhands_task_id"] if role_run else None
-                        ),
-                        "last_status": st,
-                        "answer_empty": True,
-                        "final_answer_retry_seconds": final_answer_retry_seconds,
-                    }
+                    # Build empty-result response via helper (Issue 2+3)
                     return {
-                        "role_run_id": role_run_id,
-                        "run_id": (
-                            role_run["run_id"] if role_run else None
+                        **_build_empty_result_response(
+                            role_run_id, role_run, st
                         ),
-                        "role": (
-                            role_run["role"] if role_run else None
-                        ),
-                        "status": "completed_empty_result",
-                        "has_result": False,
-                        "full_result": "",
-                        "result_summary": "",
-                        "artifact_name": (
-                            role_run.get("artifact_name") if role_run else None
-                        ),
-                        "artifact_path": None,
-                        "artifact_saved": False,
-                        "action": None,
-                        "risk": None,
-                        "error": {
-                            "type": "EmptyRoleResult",
-                            "message": (
-                                "Role completed but did not return a final LLM answer."
-                            ),
-                            "retryable": True,
-                            "suggested_next_action": (
-                                "Retry this role once with a stricter final-answer prompt."
-                            ),
-                        },
-                        "diagnostics": diagnostics,
                         "wait_timed_out": True,
                         "duration_seconds": duration_seconds,
                     }
@@ -923,44 +904,11 @@ def role_wait_impl(
             # Exhausted retry window — return empty result
             if result.get("status") == "completed_empty_result":
                 return result
-            role_run = _get_role_store().get_role_run(role_run_id)
-            diagnostics = {
-                "conversation_id": (
-                    role_run.get("conversation_id") if role_run else None
-                ),
-                "task_id": (
-                    role_run["openhands_task_id"] if role_run else None
-                ),
-                "last_status": st,
-                "answer_empty": True,
-                "final_answer_retry_seconds": final_answer_retry_seconds,
-            }
+            # Build empty-result response via helper (Issue 2+3)
             return {
-                "role_run_id": role_run_id,
-                "run_id": role_run["run_id"] if role_run else None,
-                "role": role_run["role"] if role_run else None,
-                "status": "completed_empty_result",
-                "has_result": False,
-                "full_result": "",
-                "result_summary": "",
-                "artifact_name": (
-                    role_run.get("artifact_name") if role_run else None
+                **_build_empty_result_response(
+                    role_run_id, role_run, st
                 ),
-                "artifact_path": None,
-                "artifact_saved": False,
-                "action": None,
-                "risk": None,
-                "error": {
-                    "type": "EmptyRoleResult",
-                    "message": (
-                        "Role completed but did not return a final LLM answer."
-                    ),
-                    "retryable": True,
-                    "suggested_next_action": (
-                        "Retry this role once with a stricter final-answer prompt."
-                    ),
-                },
-                "diagnostics": diagnostics,
                 "duration_seconds": duration_seconds,
             }
         else:
