@@ -301,6 +301,103 @@ role_start -> role_wait
   }
   ```
 
+## Role Result Contract
+
+A role is successful only when it returns a non-empty final LLM answer.
+
+`status=completed` with an empty answer is treated as `completed_empty_result`
+or `EmptyRoleResult`.
+
+### role_wait behavior
+
+`role_wait(return_result=true)` waits for completion and validates the final
+answer. It includes a post-completion retry window (default 60 seconds,
+5-second intervals) to handle races where OpenHands marks the conversation
+completed before the final assistant answer is visible through the API.
+
+Example request:
+
+```json
+{
+  "role_run_id": "...",
+  "timeout_seconds": 1800,
+  "poll_interval_seconds": 30,
+  "return_result": true
+}
+```
+
+Successful response:
+
+```json
+{
+  "status": "completed",
+  "has_result": true,
+  "full_result": "...non-empty answer...",
+  "artifact_path_scope": "mcp_agent_state_internal",
+  "artifact_access": "Use artifact_get to read this artifact. Do not read artifact_path from an OpenHands terminal."
+}
+```
+
+Empty response:
+
+```json
+{
+  "status": "completed_empty_result",
+  "has_result": false,
+  "error": {
+    "type": "EmptyRoleResult",
+    "message": "Role completed but did not return a final LLM answer.",
+    "retryable": true,
+    "suggested_next_action": "Retry this role once with a stricter final-answer prompt."
+  },
+  "diagnostics": {
+    "conversation_id": "...",
+    "task_id": "...",
+    "answer_empty": true
+  }
+}
+```
+
+### Orchestrator rule
+
+If `role_wait` returns `completed_empty_result`, do **not** continue to the
+next role. Retry the same role once with a stricter final-answer prompt, or
+stop and report the issue to the user.
+
+### Force refresh
+
+`role_result_impl(role_run_id, force_refresh=True)` bypasses cached empty
+answers by re-fetching from the OpenHands FastAPI backend. This is used
+internally by `role_wait` during its post-completion retry window.
+
+### Artifact path scope
+
+The `artifact_path` field in role result responses is MCP-internal and must
+be read via `artifact_get`, not via terminal commands (e.g. `cat`).
+
+```json
+{
+  "artifact_path": "state_dir/run_id/filename.artifact",
+  "artifact_path_scope": "mcp_agent_state_internal"
+}
+```
+
+### Empty artifact diagnostics
+
+When `artifact_get` returns an artifact with empty content:
+
+```json
+{
+  "content": "",
+  "content_empty": true,
+  "valid_role_report": false,
+  "warning": {
+    "type": "EmptyArtifactContent",
+    "message": "Artifact exists but content is empty."
+  }
+}
+```
+
 ### Artifact tools
 
 | Tool | Purpose |

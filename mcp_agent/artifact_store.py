@@ -277,4 +277,6 @@ class ArtifactStore:
 
         result = dict(meta)
         result["content"] = content
+        result["content_empty"] = not content.strip()
+        result["valid_role_report"] = bool(content.strip())
         return result
