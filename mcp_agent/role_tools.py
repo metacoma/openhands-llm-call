@@ -663,7 +663,6 @@ def role_result_impl(
             "artifact_saved": False,
             "action": None,
             "risk": None,
-            "has_result": False,
             "error": {
                 "type": "EmptyRoleResult",
                 "message": (
@@ -848,12 +847,10 @@ def role_wait_impl(
                 os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS", "5")
             )
 
-            # Cap retry deadline by the remaining wait timeout
-            remaining_wait = deadline - time.monotonic()
-            retry_deadline = start_mono + min(
-                timeout_seconds,
-                remaining_wait + final_answer_retry_seconds,
-            )
+            # Retry deadline is relative to the current time so the full
+            # retry window is available even when polling consumed most of
+            # the original wait timeout.
+            retry_deadline = time.monotonic() + final_answer_retry_seconds
 
             while time.monotonic() < retry_deadline:
                 result = role_result_impl(
