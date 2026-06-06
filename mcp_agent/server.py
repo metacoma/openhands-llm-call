@@ -1368,17 +1368,26 @@ def _build_invalid_role_run_id_error(field_name: str = "role_run_id") -> dict:
 
 
 def _build_another_role_running_error(
-    active_id: str, active_role: str, active_status: str
+    active_id: str,
+    active_role: str,
+    active_status: str,
+    refresh_failed: bool = False,
 ) -> dict:
     """Build an LLM-friendly error for single-active-role violation."""
+    message = (
+        "Another role is already running. This MCP server is configured for "
+        "single-threaded model execution. Wait for the current role using "
+        "role_wait before starting the next role."
+    )
+    if refresh_failed:
+        message += (
+            " The active role status could not be refreshed from OpenHands; "
+            "the lock may be stale."
+        )
+
     return {
         "error": "another_role_running",
-        "message": (
-            "Another role is already running. This MCP server is configured for "
-            "single-threaded model execution. Wait for the current role using "
-            "role_wait before starting the next role. Do not call role_start again "
-            "until the active role is completed."
-        ),
+        "message": message,
         "active_role_run_id": active_id,
         "active_role": active_role,
         "active_status": active_status,
@@ -1539,8 +1548,9 @@ def role_start(
                 }
 
         # Reject with LLM-friendly error
+        refresh_failed = active.get("_refresh_failed", False)
         return _build_another_role_running_error(
-            active_id, active_role, active_status
+            active_id, active_role, active_status, refresh_failed=refresh_failed
         )
 
     return _role_tools.role_start_impl(

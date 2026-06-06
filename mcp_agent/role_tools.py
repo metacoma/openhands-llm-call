@@ -603,6 +603,15 @@ def role_status_impl(role_run_id: str) -> dict:
     st = task_status.get("status", "unknown")
     has_result = st == "completed"
 
+    # Persist the actual OpenHands status back to the role run record
+    try:
+        store.update_role_run(role_run_id, status=st)
+    except Exception:
+        logger.warning(
+            "Failed to persist status '%s' for role_run_id=%s",
+            st, role_run_id,
+        )
+
     summary: Optional[str] = None
     if has_result:
         answer = task_status.get("answer", "")
@@ -692,6 +701,14 @@ def role_result_impl(
 
     # --- Validate non-empty final answer ---
     if not full_result.strip():
+        # Persist completed_empty_result to prevent stale lock
+        try:
+            store.update_role_run(role_run_id, status="completed_empty_result")
+        except Exception:
+            logger.warning(
+                "Failed to persist 'completed_empty_result' for role_run_id=%s",
+                role_run_id,
+            )
         return _build_empty_result_response(
             role_run_id, role_run, st
         )
@@ -763,25 +780,59 @@ def role_result_impl(
 # ---------------------------------------------------------------------------
 
 TERMINAL_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "timeout", "stuck", "completed_empty_result"}
+    {
+        "completed",
+        "completed_empty_result",
+        "failed",
+        "cancelled",
+        "canceled",
+        "timeout",
+        "timed_out",
+        "stuck",
+        "error",
+        "unknown",
+    }
 )
+
+
+def _refresh_role_status_from_openhands(
+    role_store: "RoleRunStore",
+    role_run_id: str,
+    task_id: str,
+) -> Optional[dict]:
+    """Refresh actual OpenHands task status for a role run.
+
+    Returns the refreshed status dict, or None if refresh failed.
+    """
+    try:
+        from .server import openhands_get_task_status
+
+        return openhands_get_task_status(task_id=task_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to refresh OpenHands status for role_run_id=%s, "
+            "task_id=%s: %s",
+            role_run_id,
+            task_id,
+            exc,
+        )
+        return None
 
 
 def _find_active_role_run(role_store: "RoleRunStore") -> Optional[dict]:
     """Find any non-terminal role run in the store.
 
-    Returns the role run dict if an active (non-terminal) role exists,
-    or None if all roles are in terminal states or no roles exist.
+    Terminal statuses: see ``TERMINAL_STATUSES``.
 
-    Terminal statuses: completed, failed, cancelled, timeout, stuck,
-    completed_empty_result
+    IMPORTANT: Before returning a candidate as active, this function
+    refreshes its actual OpenHands task status. If the actual status
+    is terminal, the persisted record is updated and the candidate is
+    skipped. This prevents stale "running" locks from blocking future
+    ``role_start`` calls.
 
-    Note: This scans all role run JSON files. For large deployments,
-    a dedicated index would be more efficient. But for typical usage
-    (a few dozen role runs), this is acceptable.
-
-    Only records with a ``role`` field are considered (to avoid matching
-    generic task records from TaskStore).
+    If the actual status cannot be refreshed (missing metadata or
+    OpenHands unavailable), the candidate is returned as active with
+    a clear error message including the ``role_run_id``.
     """
     state_dir = role_store.state_dir
     if not state_dir.exists():
@@ -794,8 +845,43 @@ def _find_active_role_run(role_store: "RoleRunStore") -> Optional[dict]:
             if "role" not in data:
                 continue
             status = data.get("status", "")
-            if status not in TERMINAL_STATUSES:
-                return data
+            if status in TERMINAL_STATUSES:
+                continue
+
+            # Candidate has a non-terminal persisted status.
+            # Refresh actual OpenHands task status before trusting it.
+            task_id = data.get("openhands_task_id")
+            if task_id:
+                refreshed = _refresh_role_status_from_openhands(
+                    role_store, data["role_run_id"], task_id
+                )
+                if refreshed is not None:
+                    # Refresh succeeded — check if actual status is terminal
+                    actual_status = refreshed.get("status", "unknown")
+                    if actual_status in TERMINAL_STATUSES:
+                        # Persist the terminal status to clear the stale lock
+                        role_store.update_role_run(
+                            data["role_run_id"], status=actual_status
+                        )
+                        logger.info(
+                            "Stale active lock cleared for role_run_id=%s "
+                            "(persisted=%s, actual=%s)",
+                            data["role_run_id"],
+                            status,
+                            actual_status,
+                        )
+                        continue  # Skip this candidate, continue scanning
+                    else:
+                        # Actual status is still non-terminal — return as active
+                        return data
+
+            # Cannot refresh (missing task_id or refresh failed) —
+            # treat as active with a warning flag.
+            # The caller (_build_another_role_running_error) will include
+            # this information in the LLM-friendly error.
+            data["_refresh_failed"] = True
+            return data
+
         except (json.JSONDecodeError, OSError):
             continue
 
@@ -903,6 +989,16 @@ def role_wait_impl(
         sleep_secs = min(poll_interval_seconds, max(remaining, 0))
         if sleep_secs > 0:
             time.sleep(sleep_secs)
+
+    # --- Persist terminal status after polling loop exits ---
+    if st in TERMINAL_STATUSES:
+        try:
+            store.update_role_run(role_run_id, status=st)
+        except Exception:
+            logger.warning(
+                "Failed to persist terminal status '%s' for role_run_id=%s",
+                st, role_run_id,
+            )
 
     # --- Build response ---
     duration_seconds = int(time.monotonic() - start_mono)

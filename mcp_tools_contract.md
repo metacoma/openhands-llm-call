@@ -145,6 +145,20 @@ When another role is already running and the idempotency key does not match:
 }
 ```
 
+**Note**: If the server could not refresh the active role status from
+OpenHands, the `message` field will include the text "The active role
+status could not be refreshed from OpenHands; the lock may be stale."
+In this case, check the OpenHands backend directly or wait for it to
+become available.
+
+### Stale active lock prevention
+
+The server refreshes actual OpenHands task status before treating a
+non-terminal persisted record as active. If the refresh succeeds and
+the actual status is terminal, the persisted record is updated and
+the lock is cleared automatically. If the refresh fails, the server
+treats the role as active with a warning in the error message.
+
 ## role_status
 
 Single-shot diagnostic status check. Do not call repeatedly in a tight loop; use `role_wait` for server-side polling.

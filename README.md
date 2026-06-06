@@ -637,6 +637,42 @@ If you attempt to start a second role while the first is still running, the serv
 }
 ```
 
+### Stale active lock prevention
+
+The server prevents parallel role execution by scanning persisted role-run
+records. To avoid **stale locks** (where a persisted `status: "running"`
+persists after the actual OpenHands task has completed), the server
+refreshes the actual OpenHands task status before treating a non-terminal
+record as active.
+
+If the refresh succeeds and the actual status is terminal, the persisted
+record is updated and the lock is cleared automatically.
+
+If the refresh fails (OpenHands unavailable), the server treats the role
+as active and includes a warning in the error message.
+
+### Troubleshooting
+
+#### another_role_running
+
+This means a previous role is still active or could not be proven terminal.
+
+Use the `next_action` field and call `role_wait` with the provided
+`role_run_id`.
+
+Do not call `role_start` again unless the previous role reached a
+terminal state.
+
+If you see the message "The active role status could not be refreshed
+from OpenHands; the lock may be stale," it means the server could not
+verify whether the previous role has actually finished. In this case:
+
+1. Check the OpenHands backend directly for the task status.
+2. If the task has completed, you can manually delete or update the
+   role-run JSON file in `OPENHANDS_ROLE_STATE_DIR` to clear the stale lock.
+3. Alternatively, wait for the OpenHands backend to become available and
+   retry.
+
 ## Long-running task behavior
 
 - **Per-role timeouts**: Each role in `config/roles.yaml` specifies
