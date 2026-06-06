@@ -1219,6 +1219,181 @@ def _normalize_text_arg(value: Any) -> str | None:
     return str(value)
 
 
+# ---------------------------------------------------------------------------
+# New LLM-friendly normalization helpers (Section 2 of task)
+# ---------------------------------------------------------------------------
+
+
+def unwrap_text(value: Any) -> Any:
+    """Accept raw MCP/SHTTP values.
+
+    Examples:
+    - {"text": "abc"} -> "abc"
+    - {"text": True} -> True
+    - "abc" -> "abc"
+    - 123 -> 123
+    """
+    if isinstance(value, dict) and "text" in value and len(value) == 1:
+        return value["text"]
+    return value
+
+
+def _unwrap_to_scalar(value: Any) -> Any:
+    """Unwrap a scalar value that may be wrapped in a dict.
+
+    Handles both MCP TextContent ({"text": ...}) and OpenHands scalar
+    wrapping ({"default": ...}, {"value": ...}, etc.).
+    """
+    # Try MCP text wrapper first
+    unwrapped = unwrap_text(value)
+    if unwrapped is not value:
+        return unwrapped
+    # Fall back to general _unwrap_arg keys
+    if isinstance(value, dict):
+        for key in ("value", "default", "prompt", "name", "id",
+                     "user_task", "task"):
+            if key in value:
+                return value[key]
+    return value
+
+
+def normalize_bool(value: Any, default: bool = False) -> bool:
+    """Normalize a boolean value that may be wrapped or string-encoded."""
+    value = _unwrap_to_scalar(value)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("true", "1", "yes", "y", "on"):
+            return True
+        if lowered in ("false", "0", "no", "n", "off"):
+            return False
+    return bool(value)
+
+
+def normalize_int(value: Any, default: int | None = None) -> int | None:
+    """Normalize an integer value that may be wrapped or string-encoded."""
+    value = _unwrap_to_scalar(value)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value.strip())
+    raise ValueError(
+        f"Expected int-compatible value, got {type(value).__name__}: {value!r}"
+    )
+
+
+def normalize_string(value: Any, field_name: str) -> str:
+    """Normalize a string value that may be wrapped."""
+    value = _unwrap_to_scalar(value)
+    if isinstance(value, str):
+        return value
+    raise ValueError(
+        f"{field_name} must be a string, got {type(value).__name__}: {value!r}"
+    )
+
+
+def normalize_role_run_id(value: Any) -> str:
+    """Extract role_run_id from common LLM/MCP mistake shapes.
+
+    Accepts:
+    - "RUN-scout-1"
+    - {"text": "RUN-scout-1"}
+    - {"default": "RUN-scout-1"}
+    - {"value": "RUN-scout-1"}
+    - {"role_run_id": "RUN-scout-1", ...}
+    - {"role_run_id": {"text": "RUN-scout-1"}}
+    - {"role_run_id": {"role_run_id": "RUN-scout-1", ...}}
+    """
+    value = _unwrap_to_scalar(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        if "role_run_id" in value:
+            return normalize_role_run_id(value["role_run_id"])
+        if "id" in value:
+            return normalize_role_run_id(value["id"])
+        if "text" in value:
+            return normalize_role_run_id(value["text"])
+    raise ValueError(
+        "role_run_id must be a string or an object containing role_run_id/text/id; "
+        f"got {type(value).__name__}: {value!r}"
+    )
+
+
+def normalize_artifact_name(value: Any) -> str | None:
+    """Normalize artifact_name that may be wrapped or nested."""
+    value = _unwrap_to_scalar(value)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        if "name" in value:
+            return normalize_artifact_name(value["name"])
+        if "artifact_name" in value:
+            return normalize_artifact_name(value["artifact_name"])
+        if "text" in value:
+            return normalize_artifact_name(value["text"])
+    raise ValueError(
+        "artifact_name must be a string or object containing name/artifact_name/text; "
+        f"got {type(value).__name__}: {value!r}"
+    )
+
+
+def _build_invalid_role_run_id_error(field_name: str = "role_run_id") -> dict:
+    """Build an LLM-friendly error for invalid role_run_id."""
+    return {
+        "status": "failed",
+        "error": {
+            "type": "InvalidRoleRunId",
+            "message": (
+                f"Invalid {field_name}. Expected a plain string like "
+                f'"20260606-215637-1c1074-scout-1". You passed an object. '
+                f"If this object came from role_start, pass only its "
+                f'"{field_name}" field. Do not call role_start again. '
+                f"Retry with the existing {field_name} string."
+            ),
+            "retryable": True,
+        },
+    }
+
+
+def _build_another_role_running_error(
+    active_id: str, active_role: str, active_status: str
+) -> dict:
+    """Build an LLM-friendly error for single-active-role violation."""
+    return {
+        "error": "another_role_running",
+        "message": (
+            "Another role is already running. This MCP server is configured for "
+            "single-threaded model execution. Wait for the current role using "
+            "role_wait before starting the next role. Do not call role_start again "
+            "until the active role is completed."
+        ),
+        "active_role_run_id": active_id,
+        "active_role": active_role,
+        "active_status": active_status,
+        "next_action": {
+            "tool": "role_wait",
+            "arguments": {
+                "role_run_id": active_id,
+                "timeout_seconds": 1800,
+                "poll_interval_seconds": 15,
+                "return_result": True,
+            },
+        },
+    }
+
+
 @MCP.tool()
 def role_start(
     role: str,
@@ -1233,8 +1408,16 @@ def role_start(
 ) -> dict:
     """Start a named worker role as an OpenHands task.
 
-    The server renders the role-specific prompt, selects the model,
-    and starts an OpenHands task using the existing backend.
+    **Important: Only one role run may be active at a time.**
+    This MCP server is configured for single-threaded model execution.
+    Do not start another role until the previous role is completed.
+
+    After this call, copy ONLY the string value of the ``role_run_id``
+    field and pass it to ``role_wait``.  Do **not** pass the whole
+    ``role_start`` response object to ``role_wait``.
+
+    If ``role_wait`` arguments were malformed, retry ``role_wait`` with
+    the existing ``role_run_id``.  Do **not** call ``role_start`` again.
 
     Args:
         role: The role name (e.g. ``"scout"``, ``"architect"``,
@@ -1262,18 +1445,23 @@ def role_start(
     Returns:
         On success: ``{run_id, role_run_id, role, status, poll_after_seconds,
         timeout_minutes, idempotent_reuse}``
-        On failure: ``{status: "failed", error: {...}}``
+        On failure: ``{status: "failed", error: {...}}`` or
+        ``{error: "another_role_running", ...}``
 
-    Example::
+    Example input::
 
         {
-            "run_id": "20260605-abc123",
-            "role_run_id": "20260605-abc123-scout-1",
             "role": "scout",
-            "status": "running",
-            "poll_after_seconds": 30,
-            "timeout_minutes": 60,
-            "idempotent_reuse": false
+            "prompt": "Investigate repository ...",
+            "run_id": "ruby-grpc-client-20260606-215637",
+            "idempotency_key": "scout-ruby-grpc-client"
+        }
+
+    Example output::
+
+        {
+            "role_run_id": "ruby-grpc-client-20260606-215637-scout-1",
+            "status": "running"
         }
     """
     # Normalize prompt/user_task: handle both plain strings and
@@ -1309,6 +1497,51 @@ def role_start(
     effective_repo = _normalize_str(repo)
     effective_base_branch = _normalize_str(base_branch)
     effective_branch = _normalize_str(branch)
+
+    # ------------------------------------------------------------------
+    # Single-active-role protection (Section 7 of task)
+    # ------------------------------------------------------------------
+    from .role_tools import _find_active_role_run, _get_role_store
+
+    active = _find_active_role_run(_get_role_store())
+    if active is not None:
+        active_id = active.get("role_run_id", "unknown")
+        active_role = active.get("role", "unknown")
+        active_status = active.get("status", "unknown")
+
+        # Idempotent reuse of same active run: if the same
+        # idempotency_key refers to the same already-running role,
+        # return the existing run metadata instead of launching a
+        # duplicate.
+        effective_idem_key = idempotency_key or (
+            context.get("idempotency_key") if context else None
+        )
+        if effective_idem_key:
+            run_id_from_context = _normalize_str(
+                context.get("run_id") if context else None
+            )
+            idem_scope = f"{run_id_from_context}:{role}:{effective_idem_key}"
+            existing_id = _get_role_store().find_by_idempotency_scope(idem_scope)
+            if existing_id == active_id:
+                # Same active run — return it (idempotent reuse)
+                logger.info(
+                    "Idempotent reuse of same active role run %s",
+                    active_id,
+                )
+                return {
+                    "role_run_id": active_id,
+                    "run_id": run_id_from_context,
+                    "role": active_role,
+                    "status": active_status,
+                    "poll_after_seconds": 30,
+                    "timeout_minutes": active.get("timeout_minutes", 60),
+                    "idempotent_reuse": True,
+                }
+
+        # Reject with LLM-friendly error
+        return _build_another_role_running_error(
+            active_id, active_role, active_status
+        )
 
     return _role_tools.role_start_impl(
         role=role,
@@ -1360,12 +1593,16 @@ def role_result(
 ) -> dict:
     """Get the result of a completed role.
 
+    **Pass ONLY the ``role_run_id`` string, not the whole role object.**
+    Use ``role_wait`` first when possible.
+
     If the role is not yet completed, returns status without full result.
     If completed, fetches the full result, saves the artifact, and
     derives summary/action/risk.
 
     Args:
         role_run_id: The role run ID returned by ``role_start``.
+            Accepts both plain strings and dict-wrapped values.
         include_full_result: If True (default), returns the full result
             text.  If False, omits ``full_result`` but still returns
             artifact metadata and a summary.
@@ -1407,11 +1644,15 @@ def role_result(
             "full_result_omitted": true
         }
     """
-    normalized_role_run_id = _normalize_str_arg(role_run_id)
-    normalized_include_full_result = _normalize_bool_arg(
+    try:
+        normalized_role_run_id = normalize_role_run_id(role_run_id)
+    except ValueError:
+        return _build_invalid_role_run_id_error("role_run_id")
+
+    normalized_include_full_result = normalize_bool(
         include_full_result, default=True
     )
-    normalized_force_refresh = _normalize_bool_arg(
+    normalized_force_refresh = normalize_bool(
         force_refresh, default=False
     )
     return _role_tools.role_result_impl(
@@ -1433,13 +1674,25 @@ def role_wait(
     poll_interval_seconds: Any = None,
     return_result: Any = True,
 ) -> dict:
-    """Wait for a long-running role to finish using server-side polling.
+    """Wait for an existing role run.
 
-    Use this after ``role_start`` instead of repeatedly calling ``role_status``.
-    Returns completed result, terminal error, or bounded running state.
+    **Pass ONLY the ``role_run_id`` string returned by ``role_start``.**
+
+    Correct::
+
+        {"role_run_id":"RUN-scout-1","timeout_seconds":1800,"poll_interval_seconds":15,"return_result":true}
+
+    Incorrect::
+
+        {"role_run_id":{"role_run_id":"RUN-scout-1","status":"running"}}
+
+    If your previous ``role_wait`` call had malformed arguments, retry
+    ``role_wait`` with the same ``role_run_id``.
+    Do **not** start the role again.
 
     Args:
         role_run_id: The role run ID returned by ``role_start``.
+            Accepts both plain strings and dict-wrapped values.
         timeout_seconds: Maximum seconds to wait (default 1800, clamped to [1, 7200]).
             Override with env var ``OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS``.
         poll_interval_seconds: Seconds between status checks (default 15, clamped to [5, 120]).
@@ -1498,7 +1751,30 @@ def role_wait(
             "return_result": true
         }
     """
-    normalized_role_run_id = _normalize_str_arg(role_run_id)
+    # Defensive parsing for nested LLM mistakes (Section 3 of task).
+    # When the model passes the full role_start response as role_run_id,
+    # extract the nested role_run_id and any nested timeout/poll/return args.
+    raw_role_arg = role_run_id
+    _timeout = timeout_seconds
+    _poll = poll_interval_seconds
+    _return = return_result
+
+    if isinstance(raw_role_arg, dict):
+        has_nested_timeout = "timeout_seconds" in raw_role_arg
+        has_nested_poll = "poll_interval_seconds" in raw_role_arg
+        has_nested_return = "return_result" in raw_role_arg
+
+        if has_nested_timeout or has_nested_poll or has_nested_return:
+            # LLM passed the full role_start response as role_run_id
+            _timeout = _timeout if _timeout is not None else raw_role_arg.get("timeout_seconds")
+            _poll = _poll if _poll is not None else raw_role_arg.get("poll_interval_seconds")
+            _return = _return if _return is not None else raw_role_arg.get("return_result")
+
+    try:
+        normalized_role_run_id = normalize_role_run_id(raw_role_arg)
+    except ValueError:
+        return _build_invalid_role_run_id_error("role_run_id")
+
     if not normalized_role_run_id:
         return {
             "status": "failed",
@@ -1508,13 +1784,11 @@ def role_wait(
                 "retryable": False,
             },
         }
-    normalized_timeout = _normalize_int_arg(timeout_seconds, default=None)
-    normalized_poll_interval = _normalize_int_arg(
-        poll_interval_seconds, default=None
-    )
-    normalized_return_result = _normalize_bool_arg(
-        return_result, default=True
-    )
+
+    normalized_timeout = normalize_int(_timeout, default=None)
+    normalized_poll_interval = normalize_int(_poll, default=None)
+    normalized_return_result = normalize_bool(_return, default=True)
+
     return _role_tools.role_wait_impl(
         role_run_id=normalized_role_run_id,
         timeout_seconds=normalized_timeout,
@@ -1529,11 +1803,17 @@ def role_wait(
 
 
 @MCP.tool()
-def artifact_list(run_id: Any) -> dict:
+def artifact_list(run_id: Any = None, role_run_id: Any = None) -> dict:
     """List artifacts for a given run.
+
+    **Pass ``role_run_id`` as a plain string.**
+    Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
 
     Args:
         run_id: The top-level run identifier returned by ``role_start``.
+        role_run_id: The role-specific run ID. If provided, the ``run_id``
+            is resolved from the role run record.  Accepts both plain
+            strings and dict-wrapped values.
 
     Returns:
         A dict with ``run_id`` and ``artifacts`` (list of artifact
@@ -1554,7 +1834,18 @@ def artifact_list(run_id: Any) -> dict:
             ]
         }
     """
-    normalized_run_id = _normalize_str_arg(run_id)
+    # If role_run_id is provided, resolve to run_id (Section 6 of task).
+    if role_run_id is not None:
+        try:
+            resolved_rid = normalize_role_run_id(role_run_id)
+        except ValueError:
+            return _build_invalid_role_run_id_error("role_run_id")
+        store = _get_role_store()
+        role_run = store.get_role_run(resolved_rid)
+        if role_run is not None:
+            run_id = role_run.get("run_id", run_id)
+
+    normalized_run_id = _normalize_str_arg(run_id) if run_id is not None else None
     return _role_tools.artifact_list_impl(run_id=normalized_run_id)
 
 
@@ -1564,14 +1855,21 @@ def artifact_get(
     artifact_name: Any = None,
     role_run_id: Any = None,
 ) -> dict:
-    """Get an artifact by name or role_run_id.
+    """Read artifact content produced by a role run.
+
+    **Prefer this tool over reading artifact_path from the sandbox filesystem.**
+
+    **Pass ``role_run_id`` as a plain string.**
+    Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
 
     Args:
         run_id: The top-level run identifier.
         artifact_name: Logical artifact name (e.g. ``"scout_report"``).
             Mutually exclusive with ``role_run_id``; if both are
-            provided, ``artifact_name`` is preferred.
-        role_run_id: The role-specific run ID.
+            provided, ``artifact_name`` is preferred.  Accepts both
+            plain strings and dict-wrapped values.
+        role_run_id: The role-specific run ID.  Accepts both plain
+            strings and dict-wrapped values.
 
     Returns:
         Artifact metadata with ``content`` key, or an error dict.
@@ -1587,9 +1885,17 @@ def artifact_get(
             "content": "Full artifact text ..."
         }
     """
-    normalized_run_id = _normalize_str_arg(run_id)
-    normalized_artifact_name = _normalize_str_arg(artifact_name)
-    normalized_role_run_id = _normalize_str_arg(role_run_id)
+    try:
+        normalized_role_run_id = (
+            normalize_role_run_id(role_run_id) if role_run_id is not None else None
+        )
+    except ValueError:
+        return _build_invalid_role_run_id_error("role_run_id")
+
+    normalized_artifact_name = (
+        normalize_artifact_name(artifact_name) if artifact_name is not None else None
+    )
+    normalized_run_id = _normalize_str_arg(run_id) if run_id is not None else None
     return _role_tools.artifact_get_impl(
         run_id=normalized_run_id,
         artifact_name=normalized_artifact_name,

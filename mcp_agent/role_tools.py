@@ -766,6 +766,42 @@ TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "timeout", "stuck", "completed_empty_result"}
 )
 
+
+def _find_active_role_run(role_store: "RoleRunStore") -> Optional[dict]:
+    """Find any non-terminal role run in the store.
+
+    Returns the role run dict if an active (non-terminal) role exists,
+    or None if all roles are in terminal states or no roles exist.
+
+    Terminal statuses: completed, failed, cancelled, timeout, stuck,
+    completed_empty_result
+
+    Note: This scans all role run JSON files. For large deployments,
+    a dedicated index would be more efficient. But for typical usage
+    (a few dozen role runs), this is acceptable.
+
+    Only records with a ``role`` field are considered (to avoid matching
+    generic task records from TaskStore).
+    """
+    state_dir = role_store.state_dir
+    if not state_dir.exists():
+        return None
+
+    for filepath in state_dir.glob("*.json"):
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            # Only consider role-specific records (not generic tasks)
+            if "role" not in data:
+                continue
+            status = data.get("status", "")
+            if status not in TERMINAL_STATUSES:
+                return data
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return None
+
+
 _DEFAULT_ROLE_WAIT_TIMEOUT = int(
     os.getenv("OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS", "1800")
 )

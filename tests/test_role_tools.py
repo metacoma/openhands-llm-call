@@ -1175,11 +1175,13 @@ class TestPromptOnlyRoleStart(unittest.TestCase):
         import mcp_agent.server as server_mod
         server_mod._store = None
 
+    @patch("mcp_agent.role_tools._find_active_role_run")
     @patch("mcp_agent.server.requests.post")
-    def test_role_start_with_prompt_only(self, mock_post):
+    def test_role_start_with_prompt_only(self, mock_post, mock_find):
         """role_start works with only role and prompt (no user_task)."""
         from mcp_agent.server import role_start
 
+        mock_find.return_value = None
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "conversation_id": "conv-prompt-only",
@@ -1199,11 +1201,13 @@ class TestPromptOnlyRoleStart(unittest.TestCase):
         self.assertIn("role_run_id", result)
         self.assertIn("scout", result.get("role", ""))
 
+    @patch("mcp_agent.role_tools._find_active_role_run")
     @patch("mcp_agent.server.requests.post")
-    def test_role_start_user_task_backward_compat(self, mock_post):
+    def test_role_start_user_task_backward_compat(self, mock_post, mock_find):
         """role_start still works with user_task (backward compatibility)."""
         from mcp_agent.server import role_start
 
+        mock_find.return_value = None
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "conversation_id": "conv-user-task",
@@ -1222,11 +1226,13 @@ class TestPromptOnlyRoleStart(unittest.TestCase):
         self.assertEqual(result["status"], "running")
         self.assertIn("role_run_id", result)
 
+    @patch("mcp_agent.role_tools._find_active_role_run")
     @patch("mcp_agent.server.requests.post")
-    def test_role_start_prompt_takes_precedence_over_user_task(self, mock_post):
+    def test_role_start_prompt_takes_precedence_over_user_task(self, mock_post, mock_find):
         """When both prompt and user_task are provided, prompt takes precedence."""
         from mcp_agent.server import role_start
 
+        mock_find.return_value = None
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "conversation_id": "conv-precedence",

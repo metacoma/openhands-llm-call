@@ -122,6 +122,29 @@ When a duplicate idempotency key is detected:
 }
 ```
 
+### Response (single-active-role violation)
+
+When another role is already running and the idempotency key does not match:
+
+```json
+{
+  "error": "another_role_running",
+  "message": "Another role is already running. This MCP server is configured for single-threaded model execution. Wait for the current role using role_wait before starting the next role.",
+  "active_role_run_id": "20260606-215637-1c1074-scout-1",
+  "active_role": "scout",
+  "active_status": "running",
+  "next_action": {
+    "tool": "role_wait",
+    "arguments": {
+      "role_run_id": "20260606-215637-1c1074-scout-1",
+      "timeout_seconds": 1800,
+      "poll_interval_seconds": 15,
+      "return_result": true
+    }
+  }
+}
+```
+
 ## role_status
 
 Single-shot diagnostic status check. Do not call repeatedly in a tight loop; use `role_wait` for server-side polling.
@@ -149,7 +172,24 @@ Expected response:
 
 ## role_wait
 
-Wait for a long-running role to finish using server-side polling. Use this after `role_start` instead of repeatedly calling `role_status`.
+Wait for an existing role run using server-side polling. Use this after `role_start` instead of repeatedly calling `role_status`.
+
+**Pass ONLY the ``role_run_id`` string returned by ``role_start``.**
+
+Correct:
+
+```json
+{"role_run_id":"RUN-scout-1","timeout_seconds":1800,"poll_interval_seconds":15,"return_result":true}
+```
+
+Incorrect (do not pass the full role_start response object):
+
+```json
+{"role_run_id":{"role_run_id":"RUN-scout-1","status":"running"}}
+```
+
+If your previous ``role_wait`` call had malformed arguments, retry ``role_wait`` with the same ``role_run_id``.
+Do **not** start the role again.
 
 ### Input
 
@@ -162,10 +202,33 @@ Wait for a long-running role to finish using server-side polling. Use this after
 }
 ```
 
-- `role_run_id` — required. The role run ID returned by `role_start`.
+- `role_run_id` — required. The role run ID returned by `role_start`. Accepts both plain strings and dict-wrapped values (e.g. `{"text": "..."}`).
 - `timeout_seconds` — optional. Maximum seconds to wait (default 1800, clamped to [1, 7200]). Override with env var `OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS`.
 - `poll_interval_seconds` — optional. Seconds between status checks (default 15, clamped to [5, 120]). Override with env var `OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS`.
 - `return_result` — optional. If `true` (default) and the role completed, inline the full result. If `false`, return a compact response with `result_available: true`.
+
+### Error (single-active-role violation)
+
+If another role is already running, `role_start` returns:
+
+```json
+{
+  "error": "another_role_running",
+  "message": "Another role is already running. This MCP server is configured for single-threaded model execution. Wait for the current role using role_wait before starting the next role.",
+  "active_role_run_id": "20260606-215637-1c1074-scout-1",
+  "active_role": "scout",
+  "active_status": "running",
+  "next_action": {
+    "tool": "role_wait",
+    "arguments": {
+      "role_run_id": "20260606-215637-1c1074-scout-1",
+      "timeout_seconds": 1800,
+      "poll_interval_seconds": 15,
+      "return_result": true
+    }
+  }
+}
+```
 
 ### Response (completed with inline result)
 
@@ -296,13 +359,25 @@ Wait for a long-running role to finish using server-side polling. Use this after
 
 List artifacts for a given run.
 
-### Input
+**Pass ``role_run_id`` as a plain string.** Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
+
+### Input (by run_id)
 
 ```json
 {
   "run_id": "20260605-abc123"
 }
 ```
+
+### Input (by role_run_id)
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1"
+}
+```
+
+When ``role_run_id`` is provided, the ``run_id`` is resolved from the role run record.
 
 ### Response
 
@@ -323,7 +398,9 @@ List artifacts for a given run.
 
 ## artifact_get
 
-Get an artifact by name or role_run_id.
+Read artifact content produced by a role run. Prefer this tool over reading artifact_path from the sandbox filesystem.
+
+**Pass ``role_run_id`` as a plain string.** Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
 
 ### Input (by artifact name)
 
@@ -338,7 +415,6 @@ Get an artifact by name or role_run_id.
 
 ```json
 {
-  "run_id": "20260605-abc123",
   "role_run_id": "20260605-abc123-scout-1"
 }
 ```
