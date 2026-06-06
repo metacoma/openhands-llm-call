@@ -724,5 +724,607 @@ class TestPromptNormalization(unittest.TestCase):
         self.assertEqual(server_mod._fastmcp_port, 7777)
 
 
+class TestWrappedScalarArgs(unittest.TestCase):
+    """Tests for OpenHands-wrapped scalar argument compatibility.
+
+    OpenHands may serialize scalar arguments as objects like:
+        {"default": 1800}  instead of  1800
+        {"default": "x"}   instead of  "x"
+
+    These tests verify that all affected MCP tools accept both plain scalars
+    and wrapped dict values.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_wrapped_scalar_")
+        os.environ["OPENHANDS_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_STATE_DIR", None)
+        import mcp_agent.server as server_mod
+        server_mod._store = None
+
+    # -- _unwrap_arg direct tests -------------------------------------------
+
+    def test_unwrap_arg_default_key(self):
+        """_unwrap_arg({'default': 'x'}) returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({"default": "x"}), "x")
+
+    def test_unwrap_arg_value_key(self):
+        """_unwrap_arg({'value': 'x'}) returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({"value": "x"}), "x")
+
+    def test_unwrap_arg_text_key(self):
+        """_unwrap_arg({'text': 'x'}) returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({"text": "x"}), "x")
+
+    def test_unwrap_arg_prompt_key(self):
+        """_unwrap_arg({'prompt': 'x'}) returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({"prompt": "x"}), "x")
+
+    def test_unwrap_arg_name_key(self):
+        """_unwrap_arg({'name': 'x'}) returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({"name": "x"}), "x")
+
+    def test_unwrap_arg_id_key(self):
+        """_unwrap_arg({'id': 'x'}) returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({"id": "x"}), "x")
+
+    def test_unwrap_arg_plain_scalar(self):
+        """_unwrap_arg('x') returns 'x'."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg("x"), "x")
+
+    def test_unwrap_arg_int_scalar(self):
+        """_unwrap_arg(42) returns 42."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg(42), 42)
+
+    def test_unwrap_arg_empty_dict(self):
+        """_unwrap_arg({}) returns {}."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertEqual(_unwrap_arg({}), {})
+
+    def test_unwrap_arg_none(self):
+        """_unwrap_arg(None) returns None."""
+        from mcp_agent.server import _unwrap_arg
+
+        self.assertIsNone(_unwrap_arg(None))
+
+    # -- _normalize_str_arg direct tests ------------------------------------
+
+    def test_normalize_str_arg_plain(self):
+        """_normalize_str_arg('x') returns 'x'."""
+        from mcp_agent.server import _normalize_str_arg
+
+        self.assertEqual(_normalize_str_arg("x"), "x")
+
+    def test_normalize_str_arg_wrapped_default(self):
+        """_normalize_str_arg({'default': 'x'}) returns 'x'."""
+        from mcp_agent.server import _normalize_str_arg
+
+        self.assertEqual(_normalize_str_arg({"default": "x"}), "x")
+
+    def test_normalize_str_arg_none(self):
+        """_normalize_str_arg(None) returns None."""
+        from mcp_agent.server import _normalize_str_arg
+
+        self.assertIsNone(_normalize_str_arg(None))
+
+    def test_normalize_str_arg_int(self):
+        """_normalize_str_arg(42) returns '42'."""
+        from mcp_agent.server import _normalize_str_arg
+
+        self.assertEqual(_normalize_str_arg(42), "42")
+
+    # -- _normalize_int_arg direct tests ------------------------------------
+
+    def test_normalize_int_arg_plain_int(self):
+        """_normalize_int_arg(1800) returns 1800."""
+        from mcp_agent.server import _normalize_int_arg
+
+        self.assertEqual(_normalize_int_arg(1800), 1800)
+
+    def test_normalize_int_arg_wrapped_default(self):
+        """_normalize_int_arg({'default': 1800}) returns 1800."""
+        from mcp_agent.server import _normalize_int_arg
+
+        self.assertEqual(_normalize_int_arg({"default": 1800}), 1800)
+
+    def test_normalize_int_arg_wrapped_string(self):
+        """_normalize_int_arg({'default': '1800'}) returns 1800."""
+        from mcp_agent.server import _normalize_int_arg
+
+        self.assertEqual(_normalize_int_arg({"default": "1800"}), 1800)
+
+    def test_normalize_int_arg_none_returns_default(self):
+        """_normalize_int_arg(None, default=42) returns 42."""
+        from mcp_agent.server import _normalize_int_arg
+
+        self.assertEqual(_normalize_int_arg(None, default=42), 42)
+
+    def test_normalize_int_arg_float(self):
+        """_normalize_int_arg(1800.7) returns 1800."""
+        from mcp_agent.server import _normalize_int_arg
+
+        self.assertEqual(_normalize_int_arg(1800.7), 1800)
+
+    def test_normalize_int_arg_bool(self):
+        """_normalize_int_arg(True) returns 1."""
+        from mcp_agent.server import _normalize_int_arg
+
+        self.assertEqual(_normalize_int_arg(True), 1)
+        self.assertEqual(_normalize_int_arg(False), 0)
+
+    # -- _normalize_bool_arg direct tests -----------------------------------
+
+    def test_normalize_bool_arg_plain_true(self):
+        """_normalize_bool_arg(True) returns True."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertTrue(_normalize_bool_arg(True))
+
+    def test_normalize_bool_arg_plain_false(self):
+        """_normalize_bool_arg(False) returns False."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertFalse(_normalize_bool_arg(False))
+
+    def test_normalize_bool_arg_wrapped_default(self):
+        """_normalize_bool_arg({'default': True}) returns True."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertTrue(_normalize_bool_arg({"default": True}))
+
+    def test_normalize_bool_arg_wrapped_string_true(self):
+        """_normalize_bool_arg({'default': 'true'}) returns True."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertTrue(_normalize_bool_arg({"default": "true"}))
+
+    def test_normalize_bool_arg_wrapped_string_yes(self):
+        """_normalize_bool_arg({'default': 'yes'}) returns True."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertTrue(_normalize_bool_arg({"default": "yes"}))
+
+    def test_normalize_bool_arg_none_returns_default(self):
+        """_normalize_bool_arg(None, default=False) returns False."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertFalse(_normalize_bool_arg(None, default=False))
+
+    def test_normalize_bool_arg_int(self):
+        """_normalize_bool_arg(1) returns True."""
+        from mcp_agent.server import _normalize_bool_arg
+
+        self.assertTrue(_normalize_bool_arg(1))
+        self.assertFalse(_normalize_bool_arg(0))
+
+    # -- role_wait with wrapped arguments -----------------------------------
+
+    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    def test_role_wait_wrapped_timeout_seconds(self, mock_impl):
+        """role_wait accepts wrapped timeout_seconds."""
+        mock_impl.return_value = {
+            "status": "completed",
+            "has_result": False,
+            "result_available": True,
+        }
+
+        from mcp_agent.server import role_wait
+
+        result = role_wait(
+            role_run_id="role-1",
+            timeout_seconds={"default": 1800},
+            poll_interval_seconds={"default": 15},
+            return_result={"default": True},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["timeout_seconds"], 1800)
+        self.assertEqual(call_kwargs["poll_interval_seconds"], 15)
+        self.assertTrue(call_kwargs["return_result"])
+
+    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    def test_role_wait_wrapped_role_run_id(self, mock_impl):
+        """role_wait accepts wrapped role_run_id."""
+        mock_impl.return_value = {"status": "running"}
+
+        from mcp_agent.server import role_wait
+
+        result = role_wait(
+            role_run_id={"default": "role-1"},
+            timeout_seconds=1,
+        )
+
+        self.assertEqual(result["status"], "running")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "role-1")
+
+    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    def test_role_wait_missing_role_run_id_returns_error(self, mock_impl):
+        """role_wait with empty/None role_run_id returns MissingRoleRunId error."""
+        from mcp_agent.server import role_wait
+
+        result = role_wait(role_run_id={"default": ""})
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingRoleRunId")
+        self.assertFalse(result["error"]["retryable"])
+        mock_impl.assert_not_called()
+
+    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    def test_role_wait_plain_scalars_still_work(self, mock_impl):
+        """role_wait with plain scalars still works."""
+        mock_impl.return_value = {"status": "completed", "has_result": False}
+
+        from mcp_agent.server import role_wait
+
+        result = role_wait(
+            role_run_id="role-1",
+            timeout_seconds=1800,
+            poll_interval_seconds=15,
+            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "role-1")
+        self.assertEqual(call_kwargs["timeout_seconds"], 1800)
+
+    # -- artifact_get with wrapped arguments --------------------------------
+
+    @patch("mcp_agent.server._role_tools.artifact_get_impl")
+    def test_artifact_get_wrapped_run_id_and_artifact_name(self, mock_impl):
+        """artifact_get accepts wrapped run_id and artifact_name."""
+        mock_impl.return_value = {
+            "run_id": "test-run",
+            "artifact_name": "scout_report",
+            "content": "report content",
+        }
+
+        from mcp_agent.server import artifact_get
+
+        result = artifact_get(
+            run_id={"default": "20260605-abc123"},
+            artifact_name={"default": "scout_report"},
+        )
+
+        self.assertEqual(result["run_id"], "test-run")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["run_id"], "20260605-abc123")
+        self.assertEqual(call_kwargs["artifact_name"], "scout_report")
+
+    @patch("mcp_agent.server._role_tools.artifact_get_impl")
+    def test_artifact_get_wrapped_role_run_id(self, mock_impl):
+        """artifact_get accepts wrapped role_run_id."""
+        mock_impl.return_value = {
+            "role_run_id": "test-role-run",
+            "content": "artifact content",
+        }
+
+        from mcp_agent.server import artifact_get
+
+        result = artifact_get(
+            role_run_id={"default": "20260605-abc123-scout-1"}
+        )
+
+        self.assertEqual(result["role_run_id"], "test-role-run")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "20260605-abc123-scout-1")
+
+    @patch("mcp_agent.server._role_tools.artifact_get_impl")
+    def test_artifact_get_plain_scalars_still_work(self, mock_impl):
+        """artifact_get with plain scalars still works."""
+        mock_impl.return_value = {"artifact_name": "test", "content": "data"}
+
+        from mcp_agent.server import artifact_get
+
+        result = artifact_get(
+            run_id="20260605-abc123",
+            artifact_name="scout_report",
+        )
+
+        self.assertEqual(result["artifact_name"], "test")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["run_id"], "20260605-abc123")
+
+    # -- role_status with wrapped role_run_id -------------------------------
+
+    @patch("mcp_agent.server._role_tools.role_status_impl")
+    def test_role_status_wrapped_role_run_id(self, mock_impl):
+        """role_status accepts wrapped role_run_id."""
+        mock_impl.return_value = {"status": "running"}
+
+        from mcp_agent.server import role_status
+
+        result = role_status(role_run_id={"default": "role-1"})
+
+        self.assertEqual(result["status"], "running")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "role-1")
+
+    @patch("mcp_agent.server._role_tools.role_status_impl")
+    def test_role_status_plain_role_run_id_still_works(self, mock_impl):
+        """role_status with plain role_run_id still works."""
+        mock_impl.return_value = {"status": "completed"}
+
+        from mcp_agent.server import role_status
+
+        result = role_status(role_run_id="role-1")
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "role-1")
+
+    # -- role_result with wrapped arguments ---------------------------------
+
+    @patch("mcp_agent.server._role_tools.role_result_impl")
+    def test_role_result_wrapped_role_run_id(self, mock_impl):
+        """role_result accepts wrapped role_run_id."""
+        mock_impl.return_value = {"status": "completed", "result": "data"}
+
+        from mcp_agent.server import role_result
+
+        result = role_result(role_run_id={"default": "role-1"})
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "role-1")
+
+    @patch("mcp_agent.server._role_tools.role_result_impl")
+    def test_role_result_wrapped_include_full_result(self, mock_impl):
+        """role_result accepts wrapped include_full_result."""
+        mock_impl.return_value = {"status": "completed"}
+
+        from mcp_agent.server import role_result
+
+        result = role_result(
+            role_run_id="role-1",
+            include_full_result={"default": False},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertFalse(call_kwargs["include_full_result"])
+
+    @patch("mcp_agent.server._role_tools.role_result_impl")
+    def test_role_result_plain_scalars_still_work(self, mock_impl):
+        """role_result with plain scalars still works."""
+        mock_impl.return_value = {"status": "completed"}
+
+        from mcp_agent.server import role_result
+
+        result = role_result(
+            role_run_id="role-1",
+            include_full_result=True,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertTrue(call_kwargs["include_full_result"])
+
+    # -- artifact_list with wrapped run_id ----------------------------------
+
+    @patch("mcp_agent.server._role_tools.artifact_list_impl")
+    def test_artifact_list_wrapped_run_id(self, mock_impl):
+        """artifact_list accepts wrapped run_id."""
+        mock_impl.return_value = {"run_id": "test-run", "artifacts": []}
+
+        from mcp_agent.server import artifact_list
+
+        result = artifact_list(run_id={"default": "20260605-abc123"})
+
+        self.assertEqual(result["run_id"], "test-run")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["run_id"], "20260605-abc123")
+
+    @patch("mcp_agent.server._role_tools.artifact_list_impl")
+    def test_artifact_list_plain_run_id_still_works(self, mock_impl):
+        """artifact_list with plain run_id still works."""
+        mock_impl.return_value = {"run_id": "test-run", "artifacts": []}
+
+        from mcp_agent.server import artifact_list
+
+        result = artifact_list(run_id="20260605-abc123")
+
+        self.assertEqual(result["run_id"], "test-run")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["run_id"], "20260605-abc123")
+
+    # -- openhands_get_task_status with wrapped task_id ---------------------
+
+    @patch("mcp_agent.server.requests.get")
+    def test_openhands_get_task_status_wrapped_task_id(self, mock_get):
+        """openhands_get_task_status accepts wrapped task_id."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "status": "completed",
+            "answer": "test answer",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        from mcp_agent.server import openhands_start_task, openhands_get_task_status
+        from mcp_agent.server import _get_store
+
+        # Create a task first
+        mock_post = MagicMock()
+        mock_resp_post = MagicMock()
+        mock_resp_post.json.return_value = {
+            "conversation_id": "conv-mock",
+            "status": "no_wait",
+        }
+        mock_resp_post.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp_post
+
+        with patch("mcp_agent.server.requests.post", mock_post):
+            openhands_start_task(
+                prompt="Test prompt", api_key="test-key"
+            )
+
+        store = _get_store()
+        task_ids = store.list_tasks()
+        task_id = task_ids[0] if task_ids else "test-task-1"
+
+        # Mark the task as completed so the endpoint returns the cached result
+        store.update_task(task_id, status="completed", result={"answer": "test answer"})
+
+        result = openhands_get_task_status(
+            task_id={"default": task_id}
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["answer"], "test answer")
+
+    # -- openhands_get_task_result with wrapped task_id ---------------------
+
+    @patch("mcp_agent.server.requests.get")
+    def test_openhands_get_task_result_wrapped_task_id(self, mock_get):
+        """openhands_get_task_result accepts wrapped task_id."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "status": "completed",
+            "answer": "test answer",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        from mcp_agent.server import openhands_start_task, openhands_get_task_result
+        from mcp_agent.server import _get_store
+
+        # Create a task first
+        mock_post = MagicMock()
+        mock_resp_post = MagicMock()
+        mock_resp_post.json.return_value = {
+            "conversation_id": "conv-mock",
+            "status": "no_wait",
+        }
+        mock_resp_post.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp_post
+
+        with patch("mcp_agent.server.requests.post", mock_post):
+            openhands_start_task(
+                prompt="Test prompt", api_key="test-key"
+            )
+
+        store = _get_store()
+        task_ids = store.list_tasks()
+        task_id = task_ids[0] if task_ids else "test-task-1"
+
+        # Mark the task as completed so the endpoint returns the cached result
+        store.update_task(task_id, status="completed", result={"answer": "test answer"})
+
+        result = openhands_get_task_result(
+            task_id={"default": task_id}
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    # -- openhands_get_task_events with wrapped task_id and limit -----------
+
+    @patch("mcp_agent.server.requests.get")
+    def test_openhands_get_task_events_wrapped_task_id_and_limit(self, mock_get):
+        """openhands_get_task_events accepts wrapped task_id and limit."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"events": [], "count": 0}
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        from mcp_agent.server import openhands_start_task, openhands_get_task_events
+        from mcp_agent.server import _get_store
+
+        # Create a task first
+        mock_post = MagicMock()
+        mock_resp_post = MagicMock()
+        mock_resp_post.json.return_value = {
+            "conversation_id": "conv-mock",
+            "status": "no_wait",
+        }
+        mock_resp_post.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp_post
+
+        with patch("mcp_agent.server.requests.post", mock_post):
+            openhands_start_task(
+                prompt="Test prompt", api_key="test-key"
+            )
+
+        store = _get_store()
+        task_ids = store.list_tasks()
+        task_id = task_ids[0] if task_ids else "test-task-1"
+
+        # Set conversation_id so events can be fetched
+        store.update_task(task_id, conversation_id="conv-mock")
+
+        result = openhands_get_task_events(
+            task_id={"default": task_id},
+            limit={"default": 25},
+        )
+
+        self.assertEqual(result["count"], 0)
+
+    # -- openhands_cancel_task with wrapped task_id -------------------------
+
+    @patch("mcp_agent.server.requests.post")
+    def test_openhands_cancel_task_wrapped_task_id(self, mock_post):
+        """openhands_cancel_task accepts wrapped task_id."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "conversation_id": "conv-mock",
+            "status": "no_wait",
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        from mcp_agent.server import openhands_start_task, openhands_cancel_task
+        from mcp_agent.server import _get_store
+
+        # Create a task first
+        openhands_start_task(
+            prompt="Test prompt", api_key="test-key"
+        )
+
+        store = _get_store()
+        task_ids = store.list_tasks()
+        task_id = task_ids[0] if task_ids else "test-task-1"
+
+        result = openhands_cancel_task(
+            task_id={"default": task_id}
+        )
+
+        self.assertEqual(result["status"], "cancelled")
+
+
 if __name__ == "__main__":
     unittest.main()

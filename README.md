@@ -119,7 +119,7 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 | `role_list` | List available worker roles |
 | `role_start` | Start a named worker role |
 | `role_wait` | Wait for a long-running role to finish (server-side polling) |
-| `role_status` | Single-shot diagnostic status check (do not poll repeatedly) |
+| `role_status` | Single-shot diagnostic status check (**diagnostic only** — do not poll repeatedly) |
 | `role_result` | Get the result of a completed role |
 
 #### `role_start`
@@ -182,6 +182,17 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 For mutating roles (`readonly: false`, currently only `coder`), a file-based
 lock is acquired on `repo|branch`. Concurrent starts for the same repo/branch
 fail with a clear error.
+
+#### `role_status`
+
+`role_status` is a **single-shot diagnostic status check**. It is **diagnostic
+only** — do not call it repeatedly in a tight loop from an LLM orchestrator.
+Use `role_wait` for normal long-running role orchestration.
+
+> **Warning:** Do not implement orchestration by repeatedly calling
+> `role_status` in a tight loop. Use `role_wait` for server-side polling.
+> Repeated identical `role_status` calls can trigger OpenHands' stuck-loop
+> detector in the top-level orchestrator.
 
 #### `role_result`
 
@@ -250,9 +261,45 @@ role_start -> role_wait
 
 **Responses:**
 
-- **Completed**: Returns the same structure as `role_result` with an added `duration_seconds` field.
-- **Terminal failure**: Returns `status: "failed"`, `has_result: false`, and an `error` dict with `type`, `message`, and `retryable`.
-- **Bounded timeout**: Returns `status: "running"`, `wait_timed_out: true`, and `poll_after_seconds: 60`.
+- **Completed** (with result)::
+
+  ```json
+  {
+    "role_run_id": "20260605-abc123-scout-1",
+    "status": "completed",
+    "has_result": true,
+    "result": "...",
+    "duration_seconds": 742
+  }
+  ```
+
+- **Terminal failure**::
+
+  ```json
+  {
+    "role_run_id": "20260605-abc123-scout-1",
+    "status": "failed",
+    "has_result": false,
+    "error": {
+      "type": "RoleFailed",
+      "message": "...",
+      "retryable": true
+    }
+  }
+  ```
+
+- **Bounded timeout** (role still running)::
+
+  ```json
+  {
+    "role_run_id": "20260605-abc123-scout-1",
+    "status": "running",
+    "has_result": false,
+    "wait_timed_out": true,
+    "message": "Role is still running after bounded wait. Call role_wait again later.",
+    "poll_after_seconds": 60
+  }
+  ```
 
 ### Artifact tools
 
@@ -274,6 +321,16 @@ Returns `{run_id, artifacts: [...]}` where each artifact includes
 
 #### `artifact_get`
 
+Prefer `role_run_id` when available:
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1"
+}
+```
+
+Or by `run_id` and `artifact_name`:
+
 ```json
 {
   "run_id": "20260605-abc123",
@@ -281,21 +338,85 @@ Returns `{run_id, artifacts: [...]}` where each artifact includes
 }
 ```
 
-Or by role_run_id:
-
-```json
-{
-  "run_id": "20260605-abc123",
-  "role_run_id": "20260605-abc123-scout-1"
-}
-```
-
 Returns artifact metadata with `content` field. Path traversal is
 prevented — artifacts can only be read from the configured state directory.
 
+> **Note:** If OpenHands wraps these values as `{"default": "..."}`, the server
+> will normalize them automatically.
+
+### OpenHands scalar argument wrapping compatibility
+
+Some OpenHands versions may wrap scalar MCP arguments into objects like:
+
+```json
+{
+  "timeout_seconds": {
+    "default": 1800
+  }
+}
+```
+
+or:
+
+```json
+{
+  "run_id": {
+    "default": "20260605-abc123"
+  }
+}
+```
+
+The MCP server normalizes these wrapped values at the tool boundary before
+passing clean types to internal implementations.
+
+Recommended user-facing examples still use plain scalar values:
+
+```json
+{
+  "timeout_seconds": 1800,
+  "run_id": "20260605-abc123"
+}
+```
+
 ## Head-of-IT Usage Example
 
-A typical orchestration sequence:
+### Recommended orchestration flow
+
+After `role_start`, call `role_wait`. Do not repeatedly call `role_status`.
+
+```text
+1. role_list()
+   → Returns available roles
+
+2. role_start(
+      role="scout",
+      prompt="Analyze repository https://github.com/metacoma/example on main branch. Do not modify files.",
+      context={"run_id": "20260605-abc123", "idempotency_key": "initial-scout"}
+   )
+   → Returns: {run_id, role_run_id, role, status: "running", poll_after_seconds: 30, timeout_minutes: 60}
+
+3. role_wait(role_run_id="20260605-abc123-scout-1", timeout_seconds=1800, return_result=true)
+   → If completed: continue to the next role
+   → If running with wait_timed_out=true: call role_wait again later
+   → If failed/stuck/timeout/cancelled: stop and decide whether to retry or report to the user
+
+4. artifact_get(role_run_id="20260605-abc123-scout-1")
+   → Returns artifact content
+
+5. role_start(
+      role="architect",
+      prompt="Plan implementation based on scout report",
+      artifacts={"scout_report": "<content from step 4>"}
+   )
+   → Returns: {run_id, role_run_id, role, status: "running", ...}
+
+6. Continue the pipeline: role_wait → artifact_get → role_start
+```
+
+### Legacy example (deprecated — uses `role_status` polling)
+
+> The following example uses `role_status` polling which is **not recommended**
+> for LLM orchestrators. Use `role_wait` instead.
 
 ```text
 1. role_list()
