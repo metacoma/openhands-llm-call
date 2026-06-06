@@ -1690,6 +1690,210 @@ class TestRoleWaitTool(unittest.TestCase):
         self.assertEqual(result["error"]["type"], "RoleTimeout")
 
 
+class TestEmptyResultContract(unittest.TestCase):
+    """Tests for the non-empty final answer role result contract."""
+
+    def _make_role_run(self, tmp_dir, **kwargs):
+        """Helper to create a minimal role_run dict."""
+        base = {
+            "run_id": "test-run-001",
+            "role_run_id": "20260606-000000-test-1",
+            "role": "scout",
+            "openhands_task_id": "task-001",
+            "conversation_id": "conv-001",
+            "artifact_name": "scout_report",
+            "status": "completed",
+        }
+        base.update(kwargs)
+        return base
+
+    def test_role_result_completed_with_answer_succeeds(self):
+        """Simulate completed with non-empty answer; expect status=completed, has_result=True."""
+        from mcp_agent.role_tools import role_result_impl
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch(
+                "mcp_agent.role_tools._get_role_store"
+            ) as mock_store_cls, patch(
+                "mcp_agent.role_tools.ArtifactStore"
+            ) as mock_artifact:
+                mock_store = MagicMock()
+                mock_store_cls.return_value = mock_store
+
+                role_run = self._make_role_run(tmp_dir)
+                mock_store.get_role_run.return_value = role_run
+
+                mock_store.update_role_run.return_value = None
+
+                mock_artifact_instance = MagicMock()
+                mock_artifact_instance.save.return_value = {
+                    "artifact_name": "scout_report",
+                    "artifact_path": "test-run-001/scout_report.artifact",
+                }
+                mock_artifact.return_value = mock_artifact_instance
+
+                with patch(
+                    "mcp_agent.server.openhands_get_task_status"
+                ) as mock_status, patch(
+                    "mcp_agent.server.openhands_get_task_result"
+                ) as mock_result:
+                    mock_status.return_value = {"status": "completed"}
+                    mock_result.return_value = {
+                        "answer": "# Scout report\n\n## Repository\nexample/repo\n",
+                    }
+
+                    resp = role_result_impl(
+                        "20260606-000000-test-1", include_full_result=True
+                    )
+
+                self.assertEqual(resp["status"], "completed")
+                self.assertTrue(resp.get("has_result", False))
+                self.assertIn("# Scout report", resp.get("full_result", ""))
+                self.assertIsNotNone(resp.get("artifact_path"))
+                self.assertEqual(
+                    resp.get("artifact_path_scope"), "mcp_agent_state_internal"
+                )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_role_result_completed_with_empty_answer_returns_empty_result(self):
+        """Simulate completed with empty answer; expect EmptyRoleResult."""
+        from mcp_agent.role_tools import role_result_impl
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch(
+                "mcp_agent.role_tools._get_role_store"
+            ) as mock_store_cls, patch(
+                "mcp_agent.role_tools.ArtifactStore"
+            ) as mock_artifact:
+                mock_store = MagicMock()
+                mock_store_cls.return_value = mock_store
+
+                role_run = self._make_role_run(tmp_dir)
+                mock_store.get_role_run.return_value = role_run
+
+                mock_artifact_instance = MagicMock()
+                mock_artifact.return_value = mock_artifact_instance
+
+                with patch(
+                    "mcp_agent.server.openhands_get_task_status"
+                ) as mock_status, patch(
+                    "mcp_agent.server.openhands_get_task_result"
+                ) as mock_result:
+                    mock_status.return_value = {"status": "completed"}
+                    mock_result.return_value = {"answer": ""}
+
+                    resp = role_result_impl(
+                        "20260606-000000-test-1", include_full_result=True
+                    )
+
+                self.assertEqual(resp["status"], "completed_empty_result")
+                self.assertFalse(resp.get("has_result", True))
+                self.assertEqual(resp.get("full_result"), "")
+                self.assertFalse(resp.get("artifact_saved", True))
+                self.assertIsNotNone(resp.get("error"))
+                self.assertEqual(resp["error"]["type"], "EmptyRoleResult")
+                self.assertTrue(resp["error"].get("retryable"))
+                # Artifact should NOT be saved for empty results
+                mock_artifact_instance.save.assert_not_called()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_completed_empty_result_is_terminal_status(self):
+        """Verify completed_empty_result is in TERMINAL_STATUSES."""
+        from mcp_agent.role_tools import TERMINAL_STATUSES
+
+        self.assertIn("completed_empty_result", TERMINAL_STATUSES)
+
+    def test_role_result_no_artifact_saved_for_empty_result(self):
+        """Verify artifact is not saved when answer is empty."""
+        from mcp_agent.role_tools import role_result_impl
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch(
+                "mcp_agent.role_tools._get_role_store"
+            ) as mock_store_cls, patch(
+                "mcp_agent.role_tools.ArtifactStore"
+            ) as mock_artifact:
+                mock_store = MagicMock()
+                mock_store_cls.return_value = mock_store
+
+                role_run = self._make_role_run(tmp_dir)
+                mock_store.get_role_run.return_value = role_run
+
+                mock_artifact_instance = MagicMock()
+                mock_artifact.return_value = mock_artifact_instance
+
+                with patch(
+                    "mcp_agent.server.openhands_get_task_status"
+                ) as mock_status, patch(
+                    "mcp_agent.server.openhands_get_task_result"
+                ) as mock_result:
+                    mock_status.return_value = {"status": "completed"}
+                    mock_result.return_value = {"answer": "   "}  # whitespace only
+
+                    resp = role_result_impl(
+                        "20260606-000000-test-1", include_full_result=True
+                    )
+
+                self.assertEqual(resp["status"], "completed_empty_result")
+                mock_artifact_instance.save.assert_not_called()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_role_result_force_refresh_passed_to_server(self):
+        """Verify force_refresh parameter is passed to openhands_get_task_result."""
+        from mcp_agent.role_tools import role_result_impl
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch(
+                "mcp_agent.role_tools._get_role_store"
+            ) as mock_store_cls, patch(
+                "mcp_agent.role_tools.ArtifactStore"
+            ) as mock_artifact:
+                mock_store = MagicMock()
+                mock_store_cls.return_value = mock_store
+
+                role_run = self._make_role_run(tmp_dir)
+                mock_store.get_role_run.return_value = role_run
+
+                mock_store.update_role_run.return_value = None
+
+                mock_artifact_instance = MagicMock()
+                mock_artifact_instance.save.return_value = {
+                    "artifact_name": "scout_report",
+                    "artifact_path": "test-run-001/scout_report.artifact",
+                }
+                mock_artifact.return_value = mock_artifact_instance
+
+                with patch(
+                    "mcp_agent.server.openhands_get_task_status"
+                ) as mock_status, patch(
+                    "mcp_agent.server.openhands_get_task_result"
+                ) as mock_result:
+                    mock_status.return_value = {"status": "completed"}
+                    mock_result.return_value = {
+                        "answer": "# Scout report\n\n## Repository\nexample/repo\n",
+                    }
+
+                    resp = role_result_impl(
+                        "20260606-000000-test-1",
+                        include_full_result=True,
+                        force_refresh=True,
+                    )
+
+                self.assertEqual(resp["status"], "completed")
+                mock_result.assert_called_once_with(
+                    task_id="task-001", force_refresh=True
+                )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
 

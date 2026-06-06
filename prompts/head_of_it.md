@@ -161,6 +161,7 @@ Roles may run for 30–120 minutes. Use the recommended async pattern:
 1. role_start(...)
 2. role_wait(role_run_id, timeout_seconds=1800, poll_interval_seconds=15, return_result=true)
 3. If role_wait returns status="completed", continue to next role.
+3a. If role_wait returns status="completed_empty_result", do NOT continue to the next role. Retry the same role once with a stricter final-answer prompt, or stop and report the issue to the user.
 4. If role_wait returns status="failed"/"stuck"/"timeout", stop and decide whether to retry or report to user.
 5. If role_wait returns status="running" with wait_timed_out=true, wait or call role_wait again later.
 ```

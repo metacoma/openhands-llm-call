@@ -753,5 +753,57 @@ class TestArtifactStoreListGetPathValidation(unittest.TestCase):
         self.assertEqual(result["content"], "ACTION: PASS\nRISK: LOW")
 
 
+class TestEmptyArtifactDiagnostics(unittest.TestCase):
+    """Tests for empty-content diagnostics in ArtifactStore."""
+
+    def test_get_empty_content_returns_content_empty_true(self):
+        """Save empty artifact; verify content_empty=True, valid_role_report=False."""
+        from mcp_agent.artifact_store import ArtifactStore
+        store = ArtifactStore(state_dir=tempfile.mkdtemp())
+        meta = store.save(
+            run_id="run-empty-001",
+            role_run_id="run-empty-001-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="",
+        )
+        result = store.get("run-empty-001", artifact_name="scout_report")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["content"], "")
+        self.assertTrue(result.get("content_empty"))
+        self.assertFalse(result.get("valid_role_report"))
+
+    def test_get_whitespace_only_content_returns_content_empty_true(self):
+        """Save whitespace-only artifact; verify content_empty=True."""
+        from mcp_agent.artifact_store import ArtifactStore
+        store = ArtifactStore(state_dir=tempfile.mkdtemp())
+        meta = store.save(
+            run_id="run-empty-002",
+            role_run_id="run-empty-002-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="   \n\t  \n",
+        )
+        result = store.get("run-empty-002", artifact_name="scout_report")
+        self.assertTrue(result.get("content_empty"))
+        self.assertFalse(result.get("valid_role_report"))
+
+    def test_get_nonempty_content_returns_valid(self):
+        """Save non-empty artifact; verify content_empty=False, valid_role_report=True."""
+        from mcp_agent.artifact_store import ArtifactStore
+        store = ArtifactStore(state_dir=tempfile.mkdtemp())
+        meta = store.save(
+            run_id="run-valid-004",
+            role_run_id="run-valid-004-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="# Scout report\n\n## Repository\nexample/repo\n",
+        )
+        result = store.get("run-valid-004", artifact_name="scout_report")
+        self.assertIsNotNone(result)
+        self.assertFalse(result.get("content_empty"))
+        self.assertTrue(result.get("valid_role_report"))
+
+
 if __name__ == "__main__":
     unittest.main()

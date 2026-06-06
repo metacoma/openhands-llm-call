@@ -561,12 +561,18 @@ def openhands_get_task_status(
 def openhands_get_task_result(
     task_id: Any,
     url: str | None = None,
+    force_refresh: bool = False,
 ) -> dict:
     """Get the final result / answer of a completed OpenHands task.
 
     Args:
         task_id: The task_id returned by openhands_start_task.
         url: OpenHands LLM base URL override.
+        force_refresh: If True and the cached answer is empty, re-fetch
+            from the OpenHands FastAPI backend instead of returning the
+            cached empty answer.  This bypasses stale cached results
+            when the LLM final answer may not have been captured on
+            the first fetch.
 
     Returns:
         A dict with task_id, conversation_id, status, answer, and
@@ -608,11 +614,95 @@ def openhands_get_task_result(
                 result = json.loads(result)
             except json.JSONDecodeError:
                 result = {"answer": result}
+        cached_answer = (
+            result.get("answer", "") if isinstance(result, dict) else result
+        )
+
+        # If force_refresh is requested and the cached answer is empty,
+        # re-fetch from FastAPI to avoid permanently caching empty answers.
+        if force_refresh and not cached_answer:
+            if not conversation_id:
+                return {
+                    "task_id": normalized_task_id,
+                    "conversation_id": conversation_id,
+                    "status": "completed",
+                    "answer": "",
+                    "completed_at": None,
+                    "duration_seconds": None,
+                    "message": "No conversation_id; cannot force-refresh.",
+                }
+
+            base = (url or OPENHANDS_URL).rstrip("/")
+            try:
+                resp = requests.get(
+                    f"{base}/v1/jobs/{conversation_id}",
+                    timeout=OPENHANDS_REQUEST_TIMEOUT,
+                )
+                resp.raise_for_status()
+                job_data = resp.json()
+            except Exception as exc:
+                logger.warning(
+                    "Error force-refreshing result for task %s: %s",
+                    normalized_task_id,
+                    exc,
+                )
+                return {
+                    "task_id": normalized_task_id,
+                    "conversation_id": conversation_id,
+                    "status": "completed",
+                    "answer": cached_answer,
+                    "completed_at": result.get("completed_at") if isinstance(result, dict) else None,
+                    "duration_seconds": result.get("duration_seconds") if isinstance(result, dict) else None,
+                    "force_refresh_error": str(exc),
+                }
+
+            api_status = job_data.get("status", "unknown")
+            fresh_answer = job_data.get("answer", "")
+
+            if api_status == "completed" or job_data.get("execution_status") in (
+                "finished",
+                "success",
+            ):
+                store.update_task(
+                    normalized_task_id,
+                    status="completed",
+                    result={
+                        "answer": fresh_answer,
+                        "completed_at": _utcnow_iso(),
+                        "duration_seconds": _duration_seconds(
+                            task.get("created_at"), _utcnow_iso()
+                        ),
+                    },
+                    updated_at=_utcnow_iso(),
+                    last_polled_at=_utcnow_iso(),
+                )
+                return {
+                    "task_id": normalized_task_id,
+                    "conversation_id": conversation_id,
+                    "status": "completed",
+                    "answer": fresh_answer,
+                    "completed_at": _utcnow_iso(),
+                    "duration_seconds": _duration_seconds(
+                        task.get("created_at"), _utcnow_iso()
+                    ),
+                }
+
+            # API still shows non-completed; return cached empty answer
+            return {
+                "task_id": normalized_task_id,
+                "conversation_id": conversation_id,
+                "status": "completed",
+                "answer": cached_answer,
+                "completed_at": result.get("completed_at") if isinstance(result, dict) else None,
+                "duration_seconds": result.get("duration_seconds") if isinstance(result, dict) else None,
+                "force_refresh_status": api_status,
+            }
+
         return {
             "task_id": normalized_task_id,
             "conversation_id": conversation_id,
             "status": "completed",
-            "answer": result.get("answer", "") if isinstance(result, dict) else result,
+            "answer": cached_answer,
             "completed_at": result.get("completed_at") if isinstance(result, dict) else None,
             "duration_seconds": result.get("duration_seconds") if isinstance(result, dict) else None,
         }

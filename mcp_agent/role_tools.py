@@ -568,7 +568,9 @@ def role_status_impl(role_run_id: str) -> dict:
 
 
 def role_result_impl(
-    role_run_id: str, include_full_result: bool = True
+    role_run_id: str,
+    include_full_result: bool = True,
+    force_refresh: bool = False,
 ) -> dict:
     """Implementation of the ``role_result`` MCP tool.
 
@@ -580,6 +582,9 @@ def role_result_impl(
         If True (default), returns the full result text.
         If False, omits ``full_result`` but still returns artifact
         metadata and a summary.
+    force_refresh :
+        If True and the cached answer is empty, re-fetch from the
+        OpenHands FastAPI backend to bypass stale cached results.
     """
     store = _get_role_store()
     role_run = store.get_role_run(role_run_id)
@@ -627,8 +632,51 @@ def role_result_impl(
     # Fetch the full result
     from .server import openhands_get_task_result
 
-    result = openhands_get_task_result(task_id=role_run["openhands_task_id"])
+    result = openhands_get_task_result(
+        task_id=role_run["openhands_task_id"],
+        force_refresh=force_refresh,
+    )
     full_result = result.get("answer", "") or ""
+
+    # --- Validate non-empty final answer ---
+    if not full_result.strip():
+        # Build diagnostics for debugging
+        diagnostics = {
+            "conversation_id": role_run.get("conversation_id"),
+            "task_id": role_run["openhands_task_id"],
+            "last_status": st,
+            "answer_empty": True,
+            "final_answer_retry_seconds": int(
+                os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_SECONDS", "60")
+            ),
+        }
+        return {
+            "role_run_id": role_run_id,
+            "run_id": role_run["run_id"],
+            "role": role_run["role"],
+            "status": "completed_empty_result",
+            "has_result": False,
+            "full_result": "",
+            "result_summary": "",
+            "artifact_name": role_run.get("artifact_name"),
+            "artifact_path": None,
+            "artifact_saved": False,
+            "action": None,
+            "risk": None,
+            "has_result": False,
+            "error": {
+                "type": "EmptyRoleResult",
+                "message": (
+                    "Role completed but did not return a final LLM answer."
+                ),
+                "retryable": True,
+                "suggested_next_action": (
+                    "Retry this role once with a stricter final-answer prompt."
+                ),
+            },
+            "diagnostics": diagnostics,
+            "timeout_minutes": role_run.get("timeout_minutes"),
+        }
 
     # Save artifact through ArtifactStore (single persistence mechanism)
     artifact_store = ArtifactStore()
@@ -673,12 +721,18 @@ def role_result_impl(
         "run_id": role_run["run_id"],
         "role": role_run["role"],
         "status": "completed",
+        "has_result": True,
+        "full_result": full_result if include_full_result else None,
+        "result_summary": result_summary,
         "action": display_action,
         "risk": display_risk,
         "artifact_name": artifact["artifact_name"],
         "artifact_path": artifact["artifact_path"],
-        "result_summary": result_summary,
-        "full_result": full_result if include_full_result else None,
+        "artifact_path_scope": "mcp_agent_state_internal",
+        "artifact_access": (
+            "Use artifact_get to read this artifact. "
+            "Do not read artifact_path from an OpenHands terminal."
+        ),
         "full_result_omitted": not include_full_result,
         "timeout_minutes": role_run.get("timeout_minutes"),
     }
@@ -691,7 +745,7 @@ def role_result_impl(
 # ---------------------------------------------------------------------------
 
 TERMINAL_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "timeout", "stuck"}
+    {"completed", "failed", "cancelled", "timeout", "stuck", "completed_empty_result"}
 )
 
 _DEFAULT_ROLE_WAIT_TIMEOUT = int(
@@ -784,9 +838,134 @@ def role_wait_impl(
 
     if st == "completed":
         if return_result:
-            result = role_result_impl(role_run_id, include_full_result=True)
-            result["duration_seconds"] = duration_seconds
-            return result
+            # Post-completion retry window for final answer.
+            # Handles races where OpenHands marks completed before the
+            # final assistant answer is visible through the API.
+            final_answer_retry_seconds = int(
+                os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_SECONDS", "60")
+            )
+            final_answer_retry_interval = int(
+                os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS", "5")
+            )
+
+            # Cap retry deadline by the remaining wait timeout
+            remaining_wait = deadline - time.monotonic()
+            retry_deadline = start_mono + min(
+                timeout_seconds,
+                remaining_wait + final_answer_retry_seconds,
+            )
+
+            while time.monotonic() < retry_deadline:
+                result = role_result_impl(
+                    role_run_id,
+                    include_full_result=True,
+                    force_refresh=True,
+                )
+                result["duration_seconds"] = duration_seconds
+
+                answer = result.get("full_result") or result.get("result") or ""
+                if answer.strip():
+                    return result
+
+                # Not yet — check if we should return empty result
+                if time.monotonic() >= deadline:
+                    # Wait timeout exceeded; return empty-result diagnostics
+                    if result.get("status") == "completed_empty_result":
+                        result["wait_timed_out"] = True
+                        return result
+                    # Build empty-result response from scratch
+                    role_run = _get_role_store().get_role_run(role_run_id)
+                    diagnostics = {
+                        "conversation_id": (
+                            role_run.get("conversation_id") if role_run else None
+                        ),
+                        "task_id": (
+                            role_run["openhands_task_id"] if role_run else None
+                        ),
+                        "last_status": st,
+                        "answer_empty": True,
+                        "final_answer_retry_seconds": final_answer_retry_seconds,
+                    }
+                    return {
+                        "role_run_id": role_run_id,
+                        "run_id": (
+                            role_run["run_id"] if role_run else None
+                        ),
+                        "role": (
+                            role_run["role"] if role_run else None
+                        ),
+                        "status": "completed_empty_result",
+                        "has_result": False,
+                        "full_result": "",
+                        "result_summary": "",
+                        "artifact_name": (
+                            role_run.get("artifact_name") if role_run else None
+                        ),
+                        "artifact_path": None,
+                        "artifact_saved": False,
+                        "action": None,
+                        "risk": None,
+                        "error": {
+                            "type": "EmptyRoleResult",
+                            "message": (
+                                "Role completed but did not return a final LLM answer."
+                            ),
+                            "retryable": True,
+                            "suggested_next_action": (
+                                "Retry this role once with a stricter final-answer prompt."
+                            ),
+                        },
+                        "diagnostics": diagnostics,
+                        "wait_timed_out": True,
+                        "duration_seconds": duration_seconds,
+                    }
+
+                # Sleep before next retry
+                time.sleep(final_answer_retry_interval)
+
+            # Exhausted retry window — return empty result
+            if result.get("status") == "completed_empty_result":
+                return result
+            role_run = _get_role_store().get_role_run(role_run_id)
+            diagnostics = {
+                "conversation_id": (
+                    role_run.get("conversation_id") if role_run else None
+                ),
+                "task_id": (
+                    role_run["openhands_task_id"] if role_run else None
+                ),
+                "last_status": st,
+                "answer_empty": True,
+                "final_answer_retry_seconds": final_answer_retry_seconds,
+            }
+            return {
+                "role_run_id": role_run_id,
+                "run_id": role_run["run_id"] if role_run else None,
+                "role": role_run["role"] if role_run else None,
+                "status": "completed_empty_result",
+                "has_result": False,
+                "full_result": "",
+                "result_summary": "",
+                "artifact_name": (
+                    role_run.get("artifact_name") if role_run else None
+                ),
+                "artifact_path": None,
+                "artifact_saved": False,
+                "action": None,
+                "risk": None,
+                "error": {
+                    "type": "EmptyRoleResult",
+                    "message": (
+                        "Role completed but did not return a final LLM answer."
+                    ),
+                    "retryable": True,
+                    "suggested_next_action": (
+                        "Retry this role once with a stricter final-answer prompt."
+                    ),
+                },
+                "diagnostics": diagnostics,
+                "duration_seconds": duration_seconds,
+            }
         else:
             return {
                 "role_run_id": role_run_id,
@@ -978,6 +1157,20 @@ def artifact_get_impl(
                 ),
                 "retryable": False,
             },
+        }
+
+    # Ensure empty-content diagnostics are always present
+    if "content_empty" not in artifact:
+        artifact["content_empty"] = not artifact.get("content", "").strip()
+    if "valid_role_report" not in artifact:
+        artifact["valid_role_report"] = bool(artifact.get("content", "").strip())
+
+    # Add warning for empty artifacts
+    if artifact.get("content_empty"):
+        artifact["valid_role_report"] = False
+        artifact["warning"] = {
+            "type": "EmptyArtifactContent",
+            "message": "Artifact exists but content is empty.",
         }
 
     return artifact

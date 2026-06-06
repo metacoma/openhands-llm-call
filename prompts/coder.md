@@ -219,6 +219,13 @@ None known.
 
 Tell reviewer where to focus.
 
+## Final Answer Contract
+
+When you are done, send a final plain-text answer to the user.
+Do not leave the answer only inside command output, file content, tool output, or observations.
+Do not finish without a final answer.
+If you cannot complete the full task, return a partial final answer explaining what happened.
+
 ## Final Lines
 
 End with:
