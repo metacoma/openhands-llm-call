@@ -1520,6 +1520,7 @@ class TestRoleWaitTool(unittest.TestCase):
         mock_result_impl.return_value = {
             "role_run_id": "run-005",
             "status": "completed",
+            "full_result": "test answer",
             "full_result_omitted": False,
         }
 
@@ -1548,6 +1549,7 @@ class TestRoleWaitTool(unittest.TestCase):
         mock_result_impl.return_value = {
             "role_run_id": "run-006",
             "status": "completed",
+            "full_result": "test answer",
             "full_result_omitted": False,
         }
 
@@ -1576,6 +1578,7 @@ class TestRoleWaitTool(unittest.TestCase):
         mock_result_impl.return_value = {
             "role_run_id": "run-007",
             "status": "completed",
+            "full_result": "test answer",
             "full_result_omitted": False,
         }
 
@@ -1604,6 +1607,7 @@ class TestRoleWaitTool(unittest.TestCase):
         mock_result_impl.return_value = {
             "role_run_id": "run-008",
             "status": "completed",
+            "full_result": "test answer",
             "full_result_omitted": False,
         }
 
