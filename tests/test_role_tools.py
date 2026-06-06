@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
@@ -2005,6 +2006,202 @@ class TestEmptyResultContract(unittest.TestCase):
         self.assertIn("error", result)
         self.assertEqual(result["error"]["type"], "EmptyRoleResult")
         self.assertTrue(result["error"].get("retryable"))
+
+
+class TestCachedEmptyResultForceRefresh(unittest.TestCase):
+    """Tests for cached empty result handling with force_refresh."""
+
+    def _make_completed_empty_task(self, store, conversation_id):
+        """Helper: create a task and mark it completed with empty answer."""
+        task = store.create_task(
+            conversation_id=conversation_id,
+            prompt="test prompt",
+            idempotency_key=None,
+        )
+        store.update_task(
+            task["task_id"],
+            status="completed",
+            result={"answer": "", "completed_at": "2026-06-06T00:00:00+00:00"},
+        )
+        return task
+
+    def test_force_refresh_updates_cache_when_remote_returns_non_empty(self):
+        """When force_refresh=True and remote returns non-empty answer,
+        the cache is updated and the fresh answer is returned."""
+        from mcp_agent.server import openhands_get_task_result
+        from mcp_agent.task_store import TaskStore
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            store = TaskStore(tmp_dir)
+            task = self._make_completed_empty_task(store, "conv-refresh-001")
+            task_id = task["task_id"]
+
+            with patch("mcp_agent.server.requests.get") as mock_get, patch(
+                "mcp_agent.server._get_store"
+            ) as mock_store:
+                mock_store.return_value = store
+                mock_resp = MagicMock()
+                mock_resp.json.return_value = {
+                    "status": "completed",
+                    "answer": "Fresh answer from remote",
+                }
+                mock_resp.raise_for_status = MagicMock()
+                mock_get.return_value = mock_resp
+
+                result = openhands_get_task_result(
+                    task_id, url="http://localhost:3000", force_refresh=True
+                )
+
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["answer"], "Fresh answer from remote")
+
+                # Verify the task store was updated with the fresh answer
+                updated_task = store.get_task(task_id)
+                self.assertIsNotNone(updated_task)
+                self.assertEqual(updated_task["status"], "completed")
+                self.assertEqual(
+                    updated_task["result"]["answer"], "Fresh answer from remote"
+                )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_force_refresh_returns_empty_when_remote_still_empty(self):
+        """When force_refresh=True and remote also returns empty answer,
+        the original cached empty answer is returned."""
+        from mcp_agent.server import openhands_get_task_result
+        from mcp_agent.task_store import TaskStore
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            store = TaskStore(tmp_dir)
+            task = self._make_completed_empty_task(store, "conv-refresh-002")
+            task_id = task["task_id"]
+
+            with patch("mcp_agent.server.requests.get") as mock_get, patch(
+                "mcp_agent.server._get_store"
+            ) as mock_store:
+                mock_store.return_value = store
+                mock_resp = MagicMock()
+                mock_resp.json.return_value = {
+                    "status": "completed",
+                    "answer": "",
+                }
+                mock_resp.raise_for_status = MagicMock()
+                mock_get.return_value = mock_resp
+
+                result = openhands_get_task_result(
+                    task_id, url="http://localhost:3000", force_refresh=True
+                )
+
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["answer"], "")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_force_refresh_skipped_when_cached_answer_non_empty(self):
+        """When force_refresh=True but cached answer is non-empty,
+        no HTTP request is made and the cached answer is returned."""
+        from mcp_agent.server import openhands_get_task_result
+        from mcp_agent.task_store import TaskStore
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            store = TaskStore(tmp_dir)
+            task = store.create_task(
+                conversation_id="conv-refresh-003",
+                prompt="test prompt",
+                idempotency_key=None,
+            )
+            task_id = task["task_id"]
+
+            # Manually update the task to simulate completed with non-empty answer
+            store.update_task(
+                task_id,
+                status="completed",
+                result={
+                    "answer": "Already cached answer",
+                    "completed_at": "2026-06-06T00:00:00+00:00",
+                },
+            )
+
+            with patch("mcp_agent.server.requests.get") as mock_get, patch(
+                "mcp_agent.server._get_store"
+            ) as mock_store:
+                mock_store.return_value = store
+                result = openhands_get_task_result(
+                    task_id, url="http://localhost:3000", force_refresh=True
+                )
+
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["answer"], "Already cached answer")
+                # No HTTP request should be made
+                mock_get.assert_not_called()
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+class TestPromptTemplatesIncludeFinalMarkers(unittest.TestCase):
+    """Tests that all role prompt templates include required final markers."""
+
+    def setUp(self):
+        """Resolve the prompts directory path."""
+        self.prompts_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts"
+        )
+
+    def test_scout_prompt_has_final_answer_contract_and_marker(self):
+        """scout.md contains Final Answer Contract section and SCOUT_STATUS marker."""
+        prompt_path = os.path.join(self.prompts_dir, "scout.md")
+        content = Path(prompt_path).read_text(encoding="utf-8")
+        self.assertIn("## Final Answer Contract", content)
+        self.assertIn("SCOUT_STATUS: COMPLETE", content)
+
+    def test_architect_prompt_has_final_answer_contract_and_marker(self):
+        """architect.md contains Final Answer Contract section and ARCHITECT_STATUS marker."""
+        prompt_path = os.path.join(self.prompts_dir, "architect.md")
+        content = Path(prompt_path).read_text(encoding="utf-8")
+        self.assertIn("## Final Answer Contract", content)
+        self.assertIn("ARCHITECT_STATUS: COMPLETE", content)
+
+    def test_coder_prompt_has_final_answer_contract_and_marker(self):
+        """coder.md contains Final Answer Contract section and CODER_STATUS marker."""
+        prompt_path = os.path.join(self.prompts_dir, "coder.md")
+        content = Path(prompt_path).read_text(encoding="utf-8")
+        self.assertIn("## Final Answer Contract", content)
+        self.assertIn("CODER_STATUS: COMPLETE", content)
+
+    def test_reviewer_prompt_has_final_answer_contract_and_marker(self):
+        """reviewer.md contains Final Answer Contract section and REVIEWER_STATUS marker."""
+        prompt_path = os.path.join(self.prompts_dir, "reviewer.md")
+        content = Path(prompt_path).read_text(encoding="utf-8")
+        self.assertIn("## Final Answer Contract", content)
+        self.assertIn("REVIEWER_STATUS", content)
+
+    def test_publisher_prompt_has_final_answer_contract_and_marker(self):
+        """publisher.md contains Final Answer Contract section and PUBLISHER_STATUS marker."""
+        prompt_path = os.path.join(self.prompts_dir, "publisher.md")
+        content = Path(prompt_path).read_text(encoding="utf-8")
+        self.assertIn("## Final Answer Contract", content)
+        self.assertIn("PUBLISHER_STATUS: COMPLETE", content)
+
+    def test_all_prompts_require_final_plain_text_answer(self):
+        """All role prompts instruct the role to send a final plain-text answer."""
+        prompt_files = [
+            "scout.md",
+            "architect.md",
+            "coder.md",
+            "reviewer.md",
+            "publisher.md",
+        ]
+        for prompt_file in prompt_files:
+            prompt_path = os.path.join(self.prompts_dir, prompt_file)
+            content = Path(prompt_path).read_text(encoding="utf-8")
+            self.assertIn(
+                "final plain-text answer",
+                content.lower(),
+                f"{prompt_file} should instruct role to send a final plain-text answer",
+            )
 
 
 if __name__ == "__main__":
