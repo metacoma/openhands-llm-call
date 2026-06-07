@@ -218,10 +218,61 @@ from mcp_agent.server import (
     normalize_artifact_name,
     normalize_bool,
     normalize_int,
+    normalize_role,
     normalize_role_run_id,
     normalize_string,
     unwrap_text,
 )
+
+
+class TestNormalizeRole(unittest.TestCase):
+    """Tests 2-5, 7: normalize_role helper."""
+
+    def test_plain_string(self):
+        """Test 2: normalize_role('scout') == 'scout'"""
+        self.assertEqual(normalize_role("scout"), "scout")
+
+    def test_text_wrapper(self):
+        """Test 3: normalize_role({'text': 'scout'}) == 'scout'"""
+        self.assertEqual(normalize_role({"text": "scout"}), "scout")
+
+    def test_name_wrapper(self):
+        """Test 4: normalize_role({'name': 'scout'}) == 'scout'"""
+        self.assertEqual(normalize_role({"name": "scout"}), "scout")
+
+    def test_role_wrapper(self):
+        """normalize_role({'role': 'scout'}) == 'scout'"""
+        self.assertEqual(normalize_role({"role": "scout"}), "scout")
+
+    def test_nested_name_text(self):
+        """Test 5: normalize_role({'name': {'text': 'scout'}}) == 'scout'"""
+        self.assertEqual(
+            normalize_role({"name": {"text": "scout"}}), "scout"
+        )
+
+    def test_nested_role_text(self):
+        """normalize_role({'role': {'text': 'scout'}}) == 'scout'"""
+        self.assertEqual(
+            normalize_role({"role": {"text": "scout"}}), "scout"
+        )
+
+    def test_value_wrapper(self):
+        """normalize_role({'value': 'scout'}) == 'scout'"""
+        self.assertEqual(normalize_role({"value": "scout"}), "scout")
+
+    def test_id_wrapper(self):
+        """normalize_role({'id': 'scout'}) == 'scout'"""
+        self.assertEqual(normalize_role({"id": "scout"}), "scout")
+
+    def test_deeply_nested(self):
+        """normalize_role({'name': {'role': {'text': 'scout'}}}) == 'scout'"""
+        self.assertEqual(
+            normalize_role({"name": {"role": {"text": "scout"}}}), "scout"
+        )
+
+    def test_whitespace_stripped(self):
+        """normalize_role('  scout  ') == 'scout'"""
+        self.assertEqual(normalize_role("  scout  "), "scout")
 
 
 if __name__ == "__main__":
