@@ -490,6 +490,142 @@ class TestPublicToolDiscovery(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Test 3: summary job polling (first running, then completed)
+# ---------------------------------------------------------------------------
+
+class TestSummaryJobPolling(unittest.TestCase):
+    """Test that role_wait polls for summary until terminal."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_rw_summary_poll_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_summary_first_running_then_completed(self, mock_start, mock_get_status):
+        """Summary job first returns running, then completed. role_wait waits and uses real summary."""
+        call_count = 0
+
+        def get_status_side_effect(task_id, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call: main job -> completed
+            if call_count == 1:
+                return {"_normalized_status": "completed", "status": "completed",
+                         "answer": json.dumps({"status": "completed", "role": "scout",
+                                               "summary": "Scout done.", "primary_artifact_name": "scout_report",
+                                               "blocking": False, "risk_level": "LOW", "action": None,
+                                               "blocking_summary": []})}
+            # Second call: summary job -> running
+            if call_count == 2:
+                return {"_normalized_status": "running", "status": "running"}
+            # Third call: summary job -> completed
+            return {"_normalized_status": "completed", "status": "completed",
+                     "answer": json.dumps({"status": "completed", "role": "scout",
+                                           "summary": "Real summary.", "primary_artifact_name": "scout_report",
+                                           "blocking": False, "risk_level": "LOW", "action": None,
+                                           "blocking_summary": []})}
+
+        mock_get_status.side_effect = get_status_side_effect
+        mock_start.side_effect = [
+            {"task_id": "task-main", "conversation_id": "conv-1"},
+            {"task_id": "task-summary", "conversation_id": "conv-1"},
+        ]
+
+        role_run_id = _setup_store(self.tmpdir)
+
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=30,
+            poll_interval_seconds=1,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # Verify real summary was used (not fallback)
+        self.assertEqual(result["control_summary"]["summary"], "Real summary.")
+        # Verify polling happened (at least 3 calls: main, summary-running, summary-completed)
+        self.assertGreaterEqual(call_count, 3)
+
+
+# ---------------------------------------------------------------------------
+# Test 4: repair job polling (first running, then completed)
+# ---------------------------------------------------------------------------
+
+class TestRepairJobPolling(unittest.TestCase):
+    """Test that role_wait polls for repair until terminal."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_rw_repair_poll_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_repair_first_running_then_completed(self, mock_start, mock_get_status):
+        """Repair job first returns running, then completed. role_wait polls for it."""
+        call_count = 0
+
+        def get_status_side_effect(task_id, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            # First call: main job -> completed
+            if call_count == 1:
+                return {"_normalized_status": "completed", "status": "completed",
+                         "answer": json.dumps({"status": "completed", "role": "scout",
+                                               "summary": "Scout done.", "primary_artifact_name": "scout_report",
+                                               "blocking": False, "risk_level": "LOW", "action": None,
+                                               "blocking_summary": []})}
+            # Second call: summary job -> completed (but invalid)
+            if call_count == 2:
+                return {"_normalized_status": "completed", "status": "completed",
+                         "answer": json.dumps({"status": "invalid", "role": "scout"})}
+            # Third call: repair job -> running
+            if call_count == 3:
+                return {"_normalized_status": "running", "status": "running"}
+            # Fourth call: repair job -> completed
+            return {"_normalized_status": "completed", "status": "completed",
+                     "answer": json.dumps({"status": "completed", "role": "scout",
+                                           "summary": "Repaired summary.", "primary_artifact_name": "scout_report",
+                                           "blocking": False, "risk_level": "LOW", "action": None,
+                                           "blocking_summary": []})}
+
+        mock_get_status.side_effect = get_status_side_effect
+        mock_start.side_effect = [
+            {"task_id": "task-main", "conversation_id": "conv-1"},
+            {"task_id": "task-summary", "conversation_id": "conv-1"},
+            # Third call (repair) will succeed
+            {"task_id": "task-repair", "conversation_id": "conv-1"},
+        ]
+
+        role_run_id = _setup_store(self.tmpdir)
+
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=30,
+            poll_interval_seconds=1,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # Verify polling happened (at least 4 calls)
+        self.assertGreaterEqual(call_count, 4)
+
+
+# ---------------------------------------------------------------------------
 # Test 7: role_wait wrapped args (already in test_malformed_role_wait.py)
 # ---------------------------------------------------------------------------
 

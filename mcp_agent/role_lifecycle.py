@@ -428,6 +428,47 @@ def _get_task_status_once(
     return data
 
 
+def wait_job_until_terminal(
+    job_id: str,
+    deadline: float,
+    poll_interval_seconds: int = 30,
+) -> tuple[str, dict[str, Any]]:
+    """Poll a job until it reaches a terminal state or the deadline expires.
+
+    Parameters
+    ----------
+    job_id :
+        The OpenHands task/job ID to poll.
+    deadline :
+        ``time.monotonic()`` value representing the absolute deadline.
+    poll_interval_seconds :
+        Seconds between status checks.
+
+    Returns
+    -------
+    tuple[str, dict]
+        ``(status, response_data)`` where *status* is one of:
+        ``"completed"``, ``"completed_empty_result"``, ``"failed"``,
+        ``"error"``, ``"cancelled"``, ``"timeout"``.
+        *response_data* is the last response from ``_get_task_status_once``.
+    """
+    while time.monotonic() < deadline:
+        response = _get_task_status_once(job_id)
+        status = response.get("_normalized_status", "unknown")
+
+        if status in ("completed", "completed_empty_result",
+                       "failed", "error", "cancelled", "timeout"):
+            return (status, response)
+
+        # Still running — wait
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(poll_interval_seconds)
+
+    # Deadline exceeded — return last known state
+    return ("timeout", response)
+
+
 def _to_public_artifact_ref(raw: dict, *, role: str) -> dict[str, Any]:
     """Sanitize an artifact metadata dict to a public reference.
 
@@ -1048,12 +1089,14 @@ def role_lifecycle_wait_impl(
     # ------------------------------------------------------------------
     # Poll for main response (Blocker 1: use _get_task_status_once)
     # ------------------------------------------------------------------
+    main_completed = False
     while time.monotonic() < deadline:
         main_response_data = _get_task_status_once(job_id)
         main_status = main_response_data.get("_normalized_status",
                                               main_response_data.get("status", "unknown"))
 
         if main_status in ("completed", "completed_empty_result"):
+            main_completed = True
             break
         elif main_status in ("failed", "error", "cancelled"):
             role_store.update_role_run(
@@ -1096,16 +1139,21 @@ def role_lifecycle_wait_impl(
     )
 
     # ------------------------------------------------------------------
-    # Save primary artifact
+    # Save primary artifact (only if main job completed — Blocker 1)
     # ------------------------------------------------------------------
     artifact_store = ArtifactStore()
-    primary_meta = artifact_store.save(
-        run_id=role_run.get("run_id", ""),
-        role_run_id=role_run_id,
-        role=role_run.get("role", ""),
-        artifact_name=role_run.get("artifact_name", "unknown"),
-        content=main_response,
-    )
+    primary_meta = None
+    primary_artifact_path = ""
+    primary_artifact_id = ""
+
+    if main_completed:
+        primary_meta = artifact_store.save(
+            run_id=role_run.get("run_id", ""),
+            role_run_id=role_run_id,
+            role=role_run.get("role", ""),
+            artifact_name=role_run.get("artifact_name", "unknown"),
+            content=main_response,
+        )
 
     if primary_meta is None:
         return {
@@ -1272,10 +1320,24 @@ def role_lifecycle_wait_impl(
         summary_job_id = conversation_id or "unknown"
 
     # ------------------------------------------------------------------
-    # Wait for summary response (use _get_task_status_once for consistency)
+    # Compute remaining deadline for summary/repair phase (Blocker 3)
     # ------------------------------------------------------------------
-    summary_response_data = _get_task_status_once(summary_job_id)
-    summary_text = summary_response_data.get("answer", "") or ""
+    remaining_deadline = max(deadline, time.monotonic())
+
+    # ------------------------------------------------------------------
+    # Wait for summary response using polling helper (Blocker 2)
+    # ------------------------------------------------------------------
+    summary_status, summary_response_data = wait_job_until_terminal(
+        job_id=summary_job_id,
+        deadline=remaining_deadline,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+
+    if summary_status == "timeout":
+        # Deadline expired while waiting for summary — use fallback
+        summary_text = ""
+    else:
+        summary_text = summary_response_data.get("answer", "") or ""
 
     role_store.update_role_run(
         role_run_id,
@@ -1326,8 +1388,20 @@ def role_lifecycle_wait_impl(
             )
             if not repair_job_id:
                 repair_job_id = conversation_id or "unknown"
-            repair_response_data = _get_task_status_once(repair_job_id)
-            repair_text = repair_response_data.get("answer", "") or ""
+
+            # ------------------------------------------------------------------
+            # Wait for repair response using polling helper (Blocker 2)
+            # ------------------------------------------------------------------
+            repair_status, repair_response_data = wait_job_until_terminal(
+                job_id=repair_job_id,
+                deadline=remaining_deadline,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+
+            if repair_status == "timeout":
+                repair_text = ""
+            else:
+                repair_text = repair_response_data.get("answer", "") or ""
             role_store.update_role_run(
                 role_run_id,
                 lifecycle_state="summary_repair_response_received",
