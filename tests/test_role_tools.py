@@ -151,13 +151,13 @@ class TestRoleListTool(unittest.TestCase):
         import mcp_agent.server as server_mod
         server_mod._store = None
 
-    def test_role_list_returns_five_roles(self):
-        """role_list returns five roles."""
+    def test_role_list_returns_six_roles(self):
+        """role_list returns six roles (including coder_fix)."""
         from mcp_agent.server import role_list
 
         result = role_list()
         self.assertIn("roles", result)
-        self.assertEqual(len(result["roles"]), 5)
+        self.assertEqual(len(result["roles"]), 6)
 
     def test_role_list_contains_scout(self):
         """role_list includes scout role."""

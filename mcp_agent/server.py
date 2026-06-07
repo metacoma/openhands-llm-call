@@ -1921,6 +1921,276 @@ def artifact_get(
 
 
 # ---------------------------------------------------------------------------
+# v2 Role MCP tools (artifact-reference API with in-conversation summary)
+# ---------------------------------------------------------------------------
+
+
+@MCP.tool()
+def shttp_role_start_v2(
+    role: Any,
+    user_task: Any,
+    input_artifacts: Any = None,
+    metadata: Any = None,
+    api_key: Any = None,
+    llm_model: Any = None,
+    url: Any = None,
+    idempotency_key: Any = None,
+) -> dict:
+    """Start a role using the v2 artifact-reference API.
+
+    Accepts artifact IDs/paths (not content). MCP server resolves them.
+    Returns control summary inline after two-step same-conversation lifecycle.
+
+    **Deprecation notice:** ``role_start`` is legacy.
+    Head of Engineering should use ``shttp_role_start_v2``.
+
+    Args:
+        role: The role name (e.g. 'scout', 'architect', 'coder').
+        user_task: The user task text. Required and must be non-empty.
+        input_artifacts: Mapping of artifact names to their ID/path strings.
+            The MCP server resolves these to content server-side.
+        metadata: Optional metadata dict (e.g. {'repository': '...'}).
+        api_key: OpenHands API key.
+        llm_model: LLM model override.
+        url: OpenHands LLM base URL override.
+        idempotency_key: Optional stable key to deduplicate retried calls.
+
+    Returns:
+        A dict with ``role_run_id``, ``status``, ``control_summary``,
+        and ``artifacts`` (primary and summary paths).
+
+    Example::
+
+        {
+            "role": {"text": "architect"},
+            "user_task": {"text": "Implement a Ruby gRPC client."},
+            "input_artifacts": {
+                "scout_report": {"text": "20260607-010712-scout_report.artifact"}
+            },
+            "metadata": {
+                "repository": {"text": "https://github.com/example/repo"}
+            }
+        }
+    """
+    # Normalize inputs using existing helpers
+    normalized_role = normalize_string(role, "role")
+    normalized_user_task = unwrap_text(user_task)
+    normalized_input_artifacts = (
+        unwrap_text(input_artifacts)
+        if input_artifacts is not None
+        else None
+    )
+    normalized_metadata = (
+        unwrap_text(metadata) if metadata is not None else None
+    )
+    normalized_api_key = unwrap_text(api_key) if api_key is not None else ""
+    normalized_llm_model = unwrap_text(llm_model) if llm_model is not None else None
+    normalized_url = unwrap_text(url) if url is not None else None
+    normalized_idempotency_key = unwrap_text(
+        idempotency_key
+    ) if idempotency_key is not None else None
+
+    # Convert input_artifacts from unwrapped dict to string-value mapping
+    if isinstance(normalized_input_artifacts, dict):
+        resolved_artifacts: dict[str, str] = {}
+        for k, v in normalized_input_artifacts.items():
+            resolved_artifacts[k] = str(v) if v is not None else ""
+        normalized_input_artifacts = resolved_artifacts
+    elif isinstance(normalized_input_artifacts, str):
+        try:
+            normalized_input_artifacts = json.loads(normalized_input_artifacts)
+        except (json.JSONDecodeError, TypeError):
+            normalized_input_artifacts = {}
+    else:
+        normalized_input_artifacts = {}
+
+    # Convert metadata from unwrapped dict to string-value mapping
+    if isinstance(normalized_metadata, dict):
+        resolved_metadata: dict[str, str] = {}
+        for k, v in normalized_metadata.items():
+            resolved_metadata[k] = str(v) if v is not None else ""
+        normalized_metadata = resolved_metadata
+    elif isinstance(normalized_metadata, str):
+        try:
+            normalized_metadata = json.loads(normalized_metadata)
+        except (json.JSONDecodeError, TypeError):
+            normalized_metadata = {}
+    else:
+        normalized_metadata = {}
+
+    # Import and call the v2 lifecycle implementation
+    from . import role_lifecycle
+
+    return role_lifecycle.start_role_v2_impl(
+        role=normalized_role,
+        user_task=str(normalized_user_task) if normalized_user_task else "",
+        input_artifacts=normalized_input_artifacts,
+        metadata=normalized_metadata,
+        api_key=str(normalized_api_key) if normalized_api_key else "",
+        llm_model=str(normalized_llm_model) if normalized_llm_model else None,
+        url=str(normalized_url) if normalized_url else None,
+        idempotency_key=str(normalized_idempotency_key) if normalized_idempotency_key else None,
+    )
+
+
+@MCP.tool()
+def shttp_role_wait_v2(
+    role_run_id: Any,
+    timeout_seconds: Any = None,
+    poll_interval_seconds: Any = None,
+    return_result: Any = None,
+) -> dict:
+    """Wait for a v2 role run.
+
+    Same shape as ``role_wait`` but operates on v2 role runs.
+
+    Args:
+        role_run_id: The role run ID returned by ``shttp_role_start_v2``.
+        timeout_seconds: Maximum seconds to wait (default 1800).
+        poll_interval_seconds: Seconds between status checks (default 15).
+        return_result: If true, inline the full result (default true).
+
+    Returns:
+        Same shape as ``role_wait`` response.
+    """
+    # Normalize inputs
+    try:
+        normalized_role_run_id = normalize_role_run_id(role_run_id)
+    except ValueError:
+        return _build_invalid_role_run_id_error("role_run_id")
+
+    if not normalized_role_run_id:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingRoleRunId",
+                "message": "role_run_id is required",
+                "retryable": False,
+            },
+        }
+
+    normalized_timeout = normalize_int(timeout_seconds, default=None)
+    normalized_poll_interval = normalize_int(poll_interval_seconds, default=None)
+    normalized_return_result = normalize_bool(return_result, default=True)
+
+    return _role_tools.role_wait_impl(
+        role_run_id=normalized_role_run_id,
+        timeout_seconds=normalized_timeout,
+        poll_interval_seconds=normalized_poll_interval,
+        return_result=normalized_return_result,
+    )
+
+
+@MCP.tool()
+def shttp_role_result_v2(
+    role_run_id: Any,
+    include_full_artifacts: Any = None,
+    return_control_summary: Any = None,
+) -> dict:
+    """Get result for a v2 role run.
+
+    Returns control summary inline and artifact paths (not content).
+
+    Args:
+        role_run_id: The role run ID returned by ``shttp_role_start_v2``.
+        include_full_artifacts: If true, include full artifact content.
+        return_control_summary: If true, include the control summary.
+
+    Returns:
+        A dict with ``role_run_id``, ``status``, ``control_summary``,
+        and ``artifacts`` (paths, optionally with content).
+    """
+    # Normalize inputs
+    try:
+        normalized_role_run_id = normalize_role_run_id(role_run_id)
+    except ValueError:
+        return _build_invalid_role_run_id_error("role_run_id")
+
+    if not normalized_role_run_id:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingRoleRunId",
+                "message": "role_run_id is required",
+                "retryable": False,
+            },
+        }
+
+    normalized_include_full = normalize_bool(include_full_artifacts, default=False)
+    normalized_return_control = normalize_bool(return_control_summary, default=True)
+
+    # Get role run record
+    role_store = _role_tools._get_role_store()
+    role_run = role_store.get_role_run(normalized_role_run_id)
+
+    if role_run is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownRoleRunId",
+                "message": f"No role run found for role_run_id='{normalized_role_run_id}'.",
+                "retryable": False,
+            },
+        }
+
+    # Build base response
+    result: dict[str, Any] = {
+        "role_run_id": normalized_role_run_id,
+        "run_id": role_run.get("run_id"),
+        "role": role_run.get("role"),
+        "status": role_run.get("status", "unknown"),
+    }
+
+    # Parse result_summary if present (JSON string)
+    control_summary = None
+    if normalized_return_control and role_run.get("result_summary"):
+        try:
+            control_summary = json.loads(role_run["result_summary"])
+        except (json.JSONDecodeError, TypeError):
+            control_summary = {"raw": role_run["result_summary"]}
+
+    if control_summary is not None:
+        result["control_summary"] = control_summary
+
+    # Add artifact paths
+    artifact_store = ArtifactStore()
+    artifacts_list = artifact_store.list(role_run.get("run_id", ""))
+
+    artifacts_result: dict[str, Any] = {}
+    for art in artifacts_list:
+        art_name = art.get("artifact_name", "")
+        if art_name.endswith("_summary"):
+            artifacts_result["summary"] = {
+                "artifact_name": art_name,
+                "artifact_path": art.get("artifact_path"),
+            }
+        else:
+            artifacts_result["primary"] = {
+                "artifact_name": art_name,
+                "artifact_path": art.get("artifact_path"),
+            }
+
+    result["artifacts"] = artifacts_result
+
+    # Optionally include full artifact content
+    if normalized_include_full:
+        for art in artifacts_list:
+            art_name = art.get("artifact_name", "")
+            art_path = art.get("artifact_path", "")
+            if art_path:
+                try:
+                    full_content = art.get("content", "")
+                    if "summary" in art_name:
+                        result.setdefault("summary_artifact", full_content)
+                    else:
+                        result.setdefault("primary_artifact", full_content)
+                except Exception:
+                    pass
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
 

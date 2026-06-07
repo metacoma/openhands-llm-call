@@ -24,6 +24,7 @@ class TestRolesYamlLoad(unittest.TestCase):
         self.assertIn("coder", roles)
         self.assertIn("reviewer", roles)
         self.assertIn("publisher", roles)
+        self.assertIn("coder_fix", roles)
 
     def test_load_roles_from_custom_path(self):
         """roles.yaml loads from a custom config path."""
@@ -41,7 +42,7 @@ class TestRolesYamlLoad(unittest.TestCase):
 
             from mcp_agent.roles import load_roles
             roles = load_roles(config_path=config_dst)
-            self.assertEqual(len(roles), 5)
+            self.assertEqual(len(roles), 6)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -115,14 +116,14 @@ class TestListRoles(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    def test_list_roles_returns_five_roles(self):
-        """role_list returns five roles."""
+    def test_list_roles_returns_six_roles(self):
+        """role_list returns six roles (including coder_fix)."""
         from mcp_agent.roles import list_roles
         roles = list_roles()
-        self.assertEqual(len(roles), 5)
+        self.assertEqual(len(roles), 6)
 
     def test_list_roles_contains_expected_fields(self):
-        """Each role dict has expected fields."""
+        """Each role dict has expected fields including summary_artifact."""
         from mcp_agent.roles import list_roles
         roles = list_roles()
 
@@ -133,6 +134,7 @@ class TestListRoles(unittest.TestCase):
             "readonly",
             "requires_artifacts",
             "output_artifact",
+            "summary_artifact",
             "timeout_minutes",
         }
 
@@ -140,6 +142,32 @@ class TestListRoles(unittest.TestCase):
             self.assertTrue(
                 expected_fields.issubset(set(role.keys())),
                 f"Missing fields: {expected_fields - set(role.keys())}",
+            )
+
+    def test_coder_fix_role_has_required_fields(self):
+        """coder_fix role has all required fields."""
+        from mcp_agent.roles import get_role
+
+        role = get_role("coder_fix")
+        self.assertEqual(role.name, "coder_fix")
+        self.assertFalse(role.readonly)
+        self.assertEqual(role.timeout_minutes, 120)
+        self.assertIn("architect_plan", role.requires_artifacts)
+        self.assertIn("coder_report", role.requires_artifacts)
+        self.assertIn("reviewer_report", role.requires_artifacts)
+        self.assertEqual(role.output_artifact, "coder_fix_result")
+        self.assertEqual(role.summary_artifact, "coder_fix_summary")
+
+    def test_summary_artifact_field_present_for_all_roles(self):
+        """All roles have summary_artifact field."""
+        from mcp_agent.roles import get_role
+
+        for role_name in ["scout", "architect", "coder", "reviewer", "publisher", "coder_fix"]:
+            role = get_role(role_name)
+            self.assertIsNotNone(role.summary_artifact)
+            self.assertTrue(
+                role.summary_artifact.endswith("_summary"),
+                f"Role {role_name} summary_artifact should end with '_summary'",
             )
 
 

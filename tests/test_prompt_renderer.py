@@ -207,6 +207,75 @@ class TestPromptRenderer(unittest.TestCase):
         self.assertIn("Investigate the repo.", result)
         self.assertIn("Python project.", result)
 
+    def test_render_summary_prompt_template(self):
+        """Render the summary prompt template."""
+        from mcp_agent.prompt_renderer import render_prompt
+
+        repo_root = os.path.join(os.path.dirname(__file__), "..")
+        result = render_prompt(
+            template_path="prompts/summaries/role_summary.md",
+            variables={
+                "role": "scout",
+                "primary_artifact_name": "scout_report",
+            },
+            template_root=repo_root,
+        )
+
+        self.assertIn("Summarize your previous answer", result)
+        self.assertIn("JSON", result)
+        self.assertIn("status", result)
+        self.assertIn("role", result)
+        self.assertIn("summary", result)
+        self.assertIn("primary_artifact_name", result)
+        self.assertIn("blocking", result)
+        self.assertIn("risk_level", result)
+        self.assertIn("action", result)
+        self.assertIn("blocking_summary", result)
+
+    def test_render_summary_prompt_for_reviewer(self):
+        """Render summary prompt for reviewer role includes reviewer rules."""
+        from mcp_agent.prompt_renderer import render_prompt
+
+        repo_root = os.path.join(os.path.dirname(__file__), "..")
+        result = render_prompt(
+            template_path="prompts/summaries/role_summary.md",
+            variables={
+                "role": "reviewer",
+                "primary_artifact_name": "reviewer_report",
+            },
+            template_root=repo_root,
+        )
+
+        self.assertIn("reviewer", result.lower())
+        self.assertIn("PASS", result)
+        self.assertIn("BLOCKER", result)
+
+    def test_render_coder_fix_template(self):
+        """Render the coder_fix.md template."""
+        from mcp_agent.prompt_renderer import render_prompt
+
+        repo_root = os.path.join(os.path.dirname(__file__), "..")
+        result = render_prompt(
+            template_path="prompts/coder_fix.md",
+            variables={
+                "user_task": "Fix blocking issues",
+                "repo": "https://github.com/example/repo",
+                "base_branch": "main",
+                "branch": "feature/fix",
+                "context": "",
+                "architect_plan": "Plan content",
+                "coder_report": "Coder report content",
+                "reviewer_report": "Reviewer blockers",
+            },
+            template_root=repo_root,
+        )
+
+        self.assertIn("Fix blocking issues", result)
+        self.assertIn("Plan content", result)
+        self.assertIn("Coder report content", result)
+        self.assertIn("Reviewer blockers", result)
+        self.assertIn("CODER_STATUS: COMPLETE", result)
+
 
 if __name__ == "__main__":
     unittest.main()
