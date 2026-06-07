@@ -916,6 +916,61 @@ class TestResolveInputArtifactsWrapped(TestCase):
 
         self.assertEqual(result["status"], "completed")
 
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    def test_role_call_impl_accepts_wrapped_dict_input_artifacts(
+        self, mock_poll, mock_start
+    ):
+        """role_call_impl correctly normalizes wrapped dict input_artifacts.
+
+        When ``input_artifacts`` is already a dict but values are wrapped
+        (e.g. ``{"scout_report": {"text": "art_scout"}}``), the guard
+        ``if not isinstance(input_artifacts, dict)`` would have skipped
+        normalization.  The unconditional call to ``resolve_input_artifacts``
+        must unwrap them so ``get_content_by_id`` receives a valid ID.
+        """
+        # Save a scout artifact so the lifecycle can resolve it
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-wrapped-dict",
+            role_run_id="test-run-wrapped-dict-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="Scout report content",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        mock_start.return_value = {"task_id": "task-2", "conversation_id": "conv-2"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "architect",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+
+        # Pass wrapped dict values — role_call_impl must normalize them
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Test task",
+            input_artifacts={
+                "scout_report": {"text": scout_artifact_id},
+            },
+            metadata={"run_id": "test-run-wrapped-dict"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+        # Verify the artifact was actually resolved — get_content_by_id
+        # should succeed with the unwrapped ID
+        content = store.get_content_by_id(scout_artifact_id)
+        self.assertEqual(content, "Scout report content")
+
 
 class TestArtifactContentInjection(TestCase):
     """Test that artifact content is injected into prompts via Jinja."""

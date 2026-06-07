@@ -280,10 +280,9 @@ def role_call_impl(
     if metadata is None:
         metadata = {}
 
-    # Normalize input_artifacts if it arrives as list-of-objects or other
-    # non-dict format — makes the lifecycle self-contained.
-    if not isinstance(input_artifacts, dict):
-        input_artifacts = resolve_input_artifacts(input_artifacts)
+    # Always normalize input_artifacts — handles list-of-objects, wrapped
+    # dict values like {"text": "art_xxx"}, or plain strings.
+    input_artifacts = resolve_input_artifacts(input_artifacts)
 
     # ------------------------------------------------------------------
     # Step 1: Validate role
