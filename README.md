@@ -549,6 +549,150 @@ After `role_start`, call `role_wait`. Do not repeatedly call `role_status`.
 7. Continue the pipeline: role_status → role_result → artifact_get → role_start
 ```
 
+## LLM-safe MCP usage
+
+### Correct role flow
+
+1. Call ``role_start``.
+2. Extract only the string field ``role_run_id``.
+3. Call ``role_wait`` with flat JSON arguments.
+4. Use ``artifact_get`` to read artifacts.
+5. Pass artifact contents to the next role.
+6. Start the next role only after the previous role has completed.
+
+**Correct:**
+
+```json
+{
+  "role_run_id": "RUN-scout-1",
+  "timeout_seconds": 1800,
+  "poll_interval_seconds": 15,
+  "return_result": true
+}
+```
+
+**Incorrect:**
+
+```json
+{
+  "role_run_id": {
+    "role_run_id": "RUN-scout-1",
+    "status": "running"
+  }
+}
+```
+
+If ``role_wait`` fails because of malformed arguments, do **not** call ``role_start`` again.
+Retry ``role_wait`` with the existing ``role_run_id``.
+
+### Single-threaded execution
+
+This server assumes the underlying model may only run one role at a time.
+
+**Do not start multiple roles in parallel.**
+
+**Correct:**
+
+```text
+role_start scout
+role_wait scout
+artifact_get scout
+role_start architect
+role_wait architect
+artifact_get architect
+role_start coder
+role_wait coder
+artifact_get coder
+role_start reviewer
+role_wait reviewer
+artifact_get reviewer
+```
+
+**Incorrect:**
+
+```text
+role_start scout
+role_start architect
+role_start coder
+```
+
+If you attempt to start a second role while the first is still running, the server returns:
+
+```json
+{
+  "error": "another_role_running",
+  "message": "Another role is already running. This MCP server is configured for single-threaded model execution. Wait for the current role using role_wait before starting the next role.",
+  "active_role_run_id": "20260606-215637-1c1074-scout-1",
+  "active_role": "scout",
+  "active_status": "running",
+  "next_action": {
+    "tool": "role_wait",
+    "arguments": {
+      "role_run_id": "20260606-215637-1c1074-scout-1",
+      "timeout_seconds": 1800,
+      "poll_interval_seconds": 15,
+      "return_result": true
+    }
+  }
+}
+```
+
+### Stale active lock prevention
+
+The server prevents parallel role execution by scanning persisted role-run
+records. To avoid **stale locks** (where a persisted `status: "running"`
+persists after the actual OpenHands task has completed), the server
+refreshes the actual OpenHands task status before treating a non-terminal
+record as active.
+
+If the refresh succeeds and the actual status is terminal, the persisted
+record is updated and the lock is cleared automatically.
+
+If the refresh fails (OpenHands unavailable), the server treats the role
+as active and includes a warning in the error message.
+
+### Troubleshooting
+
+#### another_role_running
+
+This means a previous role is still active or could not be proven terminal.
+
+Use the `next_action` field and call `role_wait` with the provided
+`role_run_id`.
+
+Do not call `role_start` again unless the previous role reached a
+terminal state.
+
+If you see the message "The active role status could not be refreshed
+from OpenHands; the lock may be stale," it means the server could not
+verify whether the previous role has actually finished. In this case:
+
+1. Check the OpenHands backend directly for the task status.
+2. If the task has completed, you can manually delete or update the
+   role-run JSON file in `OPENHANDS_ROLE_STATE_DIR` to clear the stale lock.
+3. Alternatively, wait for the OpenHands backend to become available and
+   retry.
+
+#### Unknown or missing OpenHands task status
+
+If the server cannot prove that an existing role has reached a terminal
+status (e.g., OpenHands returns `"unknown"`, an empty response, or the
+API is unavailable), it preserves single-threaded safety and treats the
+role as still active.
+
+In this case, `role_start` may return `another_role_running` with
+`refresh_failed: true` and a `refresh_warning` explaining the issue.
+
+**What to do:**
+
+1. Follow the `next_action` field and call `role_wait` for the existing
+   `role_run_id`.
+2. Do NOT start another role until the previous role is confirmed terminal.
+3. If the OpenHands backend is temporarily unavailable, wait and retry.
+4. If the task has actually completed (verified externally), manually
+   update or delete the role-run JSON file in `OPENHANDS_ROLE_STATE_DIR`
+   to clear the stale lock.
+
 ## Long-running task behavior
 
 - **Per-role timeouts**: Each role in `config/roles.yaml` specifies

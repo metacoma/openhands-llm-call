@@ -1175,11 +1175,13 @@ class TestPromptOnlyRoleStart(unittest.TestCase):
         import mcp_agent.server as server_mod
         server_mod._store = None
 
+    @patch("mcp_agent.role_tools._find_active_role_run")
     @patch("mcp_agent.server.requests.post")
-    def test_role_start_with_prompt_only(self, mock_post):
+    def test_role_start_with_prompt_only(self, mock_post, mock_find):
         """role_start works with only role and prompt (no user_task)."""
         from mcp_agent.server import role_start
 
+        mock_find.return_value = None
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "conversation_id": "conv-prompt-only",
@@ -1199,11 +1201,13 @@ class TestPromptOnlyRoleStart(unittest.TestCase):
         self.assertIn("role_run_id", result)
         self.assertIn("scout", result.get("role", ""))
 
+    @patch("mcp_agent.role_tools._find_active_role_run")
     @patch("mcp_agent.server.requests.post")
-    def test_role_start_user_task_backward_compat(self, mock_post):
+    def test_role_start_user_task_backward_compat(self, mock_post, mock_find):
         """role_start still works with user_task (backward compatibility)."""
         from mcp_agent.server import role_start
 
+        mock_find.return_value = None
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "conversation_id": "conv-user-task",
@@ -1222,11 +1226,13 @@ class TestPromptOnlyRoleStart(unittest.TestCase):
         self.assertEqual(result["status"], "running")
         self.assertIn("role_run_id", result)
 
+    @patch("mcp_agent.role_tools._find_active_role_run")
     @patch("mcp_agent.server.requests.post")
-    def test_role_start_prompt_takes_precedence_over_user_task(self, mock_post):
+    def test_role_start_prompt_takes_precedence_over_user_task(self, mock_post, mock_find):
         """When both prompt and user_task are provided, prompt takes precedence."""
         from mcp_agent.server import role_start
 
+        mock_find.return_value = None
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "conversation_id": "conv-precedence",
@@ -1911,6 +1917,232 @@ class TestRoleWaitTool(unittest.TestCase):
         self.assertFalse(result.get("has_result", True))
         self.assertIn("error", result)
         self.assertEqual(result["error"]["type"], "RoleTimeout")
+
+
+class TestRoleWaitMissingTerminalStatuses(unittest.TestCase):
+    """Tests for terminal statuses that were missing response branches.
+
+    These statuses are in TERMINAL_STATUSES but did not have explicit
+    response branches in role_wait_impl(), causing them to fall through
+    to the 'running' fallback.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_role_wait_missing_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+        for k in (
+            "OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS",
+            "OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS",
+            "OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS",
+        ):
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        for k in (
+            "OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS",
+            "OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS",
+            "OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS",
+        ):
+            os.environ.pop(k, None)
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_error_status(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
+        """Error status returns terminal response, not running."""
+        from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-err",
+            "role_run_id": "run-err",
+            "role": "scout",
+            "openhands_task_id": "task-err",
+            "conversation_id": "conv-err",
+        }
+
+        mock_status_impl.side_effect = [
+            {"status": "running"},  # initial validation
+            {"status": "error"},  # first poll check
+        ]
+
+        result = role_wait(
+            role_run_id="run-err",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertNotEqual(result["status"], "running")
+        self.assertFalse(result.get("has_result", True))
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["type"], "RoleError")
+        self.assertTrue(result["error"]["retryable"])
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_timed_out_status(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
+        """Timed_out status returns terminal response, not running."""
+        from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-to",
+            "role_run_id": "run-to",
+            "role": "scout",
+            "openhands_task_id": "task-to",
+            "conversation_id": "conv-to",
+        }
+
+        mock_status_impl.side_effect = [
+            {"status": "running"},  # initial validation
+            {"status": "timed_out"},  # first poll check
+        ]
+
+        result = role_wait(
+            role_run_id="run-to",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "timed_out")
+        self.assertNotEqual(result["status"], "running")
+        self.assertFalse(result.get("has_result", True))
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["type"], "RoleTimeout")
+        self.assertTrue(result["error"]["retryable"])
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_canceled_status(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
+        """Canceled status returns terminal response, not running."""
+        from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-ca",
+            "role_run_id": "run-ca",
+            "role": "scout",
+            "openhands_task_id": "task-ca",
+            "conversation_id": "conv-ca",
+        }
+
+        mock_status_impl.side_effect = [
+            {"status": "running"},  # initial validation
+            {"status": "canceled"},  # first poll check
+        ]
+
+        result = role_wait(
+            role_run_id="run-ca",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "canceled")
+        self.assertNotEqual(result["status"], "running")
+        self.assertFalse(result.get("has_result", True))
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["type"], "RoleCancelled")
+        self.assertTrue(result["error"]["retryable"])
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_role_wait_completed_empty_result_status(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
+        """completed_empty_result returns terminal response, not running."""
+        from mcp_agent.server import role_wait
+
+        mock_store = MagicMock()
+        mock_get_store.return_value = mock_store
+        mock_store.get_role_run.return_value = {
+            "run_id": "test-run-er",
+            "role_run_id": "run-er",
+            "role": "scout",
+            "openhands_task_id": "task-er",
+            "conversation_id": "conv-er",
+        }
+
+        mock_status_impl.side_effect = [
+            {"status": "running"},  # initial validation
+            {"status": "completed_empty_result"},  # first poll check
+        ]
+
+        result = role_wait(
+            role_run_id="run-er",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "completed_empty_result")
+        self.assertNotEqual(result["status"], "running")
+        self.assertFalse(result.get("has_result", True))
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["type"], "EmptyRoleResult")
+
+    @patch("mcp_agent.role_tools.time.sleep")
+    @patch("mcp_agent.role_tools.role_status_impl")
+    @patch("mcp_agent.role_tools._get_role_store")
+    def test_all_terminal_statuses_return_terminal_response(
+        self, mock_get_store, mock_status_impl, mock_sleep
+    ):
+        """Parametrized: every TERMINAL_STATUSES must not return 'running'."""
+        from mcp_agent.server import role_wait
+        from mcp_agent.role_tools import TERMINAL_STATUSES
+
+        terminal_statuses = [
+            s for s in TERMINAL_STATUSES
+            if s not in ("completed",)  # completed requires result mocking
+        ]
+
+        for st in terminal_statuses:
+            mock_store = MagicMock()
+            mock_get_store.return_value = mock_store
+            mock_store.get_role_run.return_value = {
+                "run_id": f"test-run-{st}",
+                "role_run_id": f"run-{st}",
+                "role": "scout",
+                "openhands_task_id": f"task-{st}",
+                "conversation_id": f"conv-{st}",
+            }
+
+            mock_status_impl.side_effect = [
+                {"status": "running"},
+                {"status": st},
+            ]
+
+            result = role_wait(
+                role_run_id=f"run-{st}",
+                timeout_seconds=300,
+                poll_interval_seconds=15,
+                return_result=True,
+            )
+
+            self.assertNotEqual(
+                result["status"],
+                "running",
+                f"Terminal status '{st}' returned 'running'",
+            )
 
 
 class TestEmptyResultContract(unittest.TestCase):

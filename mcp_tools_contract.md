@@ -122,6 +122,48 @@ When a duplicate idempotency key is detected:
 }
 ```
 
+### Response (single-active-role violation)
+
+When another role is already running and the idempotency key does not match:
+
+```json
+{
+  "error": "another_role_running",
+  "message": "Another role is already running. This MCP server is configured for single-threaded model execution. Wait for the current role using role_wait before starting the next role.",
+  "active_role_run_id": "20260606-215637-1c1074-scout-1",
+  "active_role": "scout",
+  "active_status": "running",
+  "next_action": {
+    "tool": "role_wait",
+    "arguments": {
+      "role_run_id": "20260606-215637-1c1074-scout-1",
+      "timeout_seconds": 1800,
+      "poll_interval_seconds": 15,
+      "return_result": true
+    }
+  }
+}
+```
+
+**Note**: If the server could not refresh the active role status from
+OpenHands, the `message` field will include the text "The active role
+status could not be refreshed from OpenHands; the lock may be stale."
+In this case, check the OpenHands backend directly or wait for it to
+become available.
+
+### Stale active lock prevention
+
+The server refreshes actual OpenHands task status before treating a
+non-terminal persisted record as active. If the refresh succeeds and
+the actual status is terminal, the persisted record is updated and
+the lock is cleared automatically. If the refresh fails, the server
+treats the role as active with a warning in the error message.
+
+If the refresh succeeds but returns a missing, empty, or `"unknown"`
+status, the server treats the role as active to preserve single-threaded
+safety. The error message includes `refresh_failed: true` and a
+`refresh_warning` explaining the issue.
+
 ## role_status
 
 Single-shot diagnostic status check. Do not call repeatedly in a tight loop; use `role_wait` for server-side polling.
@@ -141,15 +183,37 @@ Expected response:
   "role_run_id": "20260605-abc123-scout-1",
   "run_id": "20260605-abc123",
   "role": "scout",
-  "status": "running|completed|failed|timeout|cancelled|unknown",
+  "status": "running|completed|failed|timeout|cancelled",
   "summary": "Short progress summary if available",
   "has_result": false
 }
+
+**Note:** `"unknown"` may appear when OpenHands returns a missing or
+unrecognizable status. In that case the server treats the role as active
+to preserve single-threaded safety — see the README section on unknown
+or missing OpenHands task status.
 ```
 
 ## role_wait
 
-Wait for a long-running role to finish using server-side polling. Use this after `role_start` instead of repeatedly calling `role_status`.
+Wait for an existing role run using server-side polling. Use this after `role_start` instead of repeatedly calling `role_status`.
+
+**Pass ONLY the ``role_run_id`` string returned by ``role_start``.**
+
+Correct:
+
+```json
+{"role_run_id":"RUN-scout-1","timeout_seconds":1800,"poll_interval_seconds":15,"return_result":true}
+```
+
+Incorrect (do not pass the full role_start response object):
+
+```json
+{"role_run_id":{"role_run_id":"RUN-scout-1","status":"running"}}
+```
+
+If your previous ``role_wait`` call had malformed arguments, retry ``role_wait`` with the same ``role_run_id``.
+Do **not** start the role again.
 
 ### Input
 
@@ -162,10 +226,33 @@ Wait for a long-running role to finish using server-side polling. Use this after
 }
 ```
 
-- `role_run_id` — required. The role run ID returned by `role_start`.
+- `role_run_id` — required. The role run ID returned by `role_start`. Accepts both plain strings and dict-wrapped values (e.g. `{"text": "..."}`).
 - `timeout_seconds` — optional. Maximum seconds to wait (default 1800, clamped to [1, 7200]). Override with env var `OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS`.
 - `poll_interval_seconds` — optional. Seconds between status checks (default 15, clamped to [5, 120]). Override with env var `OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS`.
 - `return_result` — optional. If `true` (default) and the role completed, inline the full result. If `false`, return a compact response with `result_available: true`.
+
+### Error (single-active-role violation)
+
+If another role is already running, `role_start` returns:
+
+```json
+{
+  "error": "another_role_running",
+  "message": "Another role is already running. This MCP server is configured for single-threaded model execution. Wait for the current role using role_wait before starting the next role.",
+  "active_role_run_id": "20260606-215637-1c1074-scout-1",
+  "active_role": "scout",
+  "active_status": "running",
+  "next_action": {
+    "tool": "role_wait",
+    "arguments": {
+      "role_run_id": "20260606-215637-1c1074-scout-1",
+      "timeout_seconds": 1800,
+      "poll_interval_seconds": 15,
+      "return_result": true
+    }
+  }
+}
+```
 
 ### Response (completed with inline result)
 
@@ -212,6 +299,40 @@ Wait for a long-running role to finish using server-side polling. Use this after
     "retryable": true
   },
   "duration_seconds": 1234
+}
+```
+
+### Response (all terminal statuses)
+
+`role_wait` always returns a terminal status when the underlying role has
+reached a terminal state. It must **not** report `running` for terminal
+statuses such as `error`, `timed_out`, `canceled`, or `completed_empty_result`.
+
+| Status | Error type | Notes |
+|---|---|---|
+| `completed` | — | Returns result (or compact response if `return_result=false`) |
+| `completed_empty_result` | `EmptyRoleResult` | Has `diagnostics` with `answer_empty: true` |
+| `failed` | `RoleFailed` | — |
+| `stuck` | `OpenHandsStuckError` | — |
+| `error` | `RoleError` | — |
+| `cancelled` | `RoleCancelled` | — |
+| `canceled` | `RoleCancelled` | Normalized error type; status preserves spelling |
+| `timeout` | `RoleTimeout` | — |
+| `timed_out` | `RoleTimeout` | Normalized error type; status preserves spelling |
+
+Any terminal status not listed above will return:
+
+```json
+{
+  "role_run_id": "...",
+  "status": "<actual_status>",
+  "has_result": false,
+  "error": {
+    "type": "RoleTerminalStatus",
+    "message": "Role ended with terminal status '<actual_status>'.",
+    "retryable": true
+  },
+  "duration_seconds": <N>
 }
 ```
 
@@ -296,13 +417,25 @@ Wait for a long-running role to finish using server-side polling. Use this after
 
 List artifacts for a given run.
 
-### Input
+**Pass ``role_run_id`` as a plain string.** Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
+
+### Input (by run_id)
 
 ```json
 {
   "run_id": "20260605-abc123"
 }
 ```
+
+### Input (by role_run_id)
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1"
+}
+```
+
+When ``role_run_id`` is provided, the ``run_id`` is resolved from the role run record.
 
 ### Response
 
@@ -323,7 +456,9 @@ List artifacts for a given run.
 
 ## artifact_get
 
-Get an artifact by name or role_run_id.
+Read artifact content produced by a role run. Prefer this tool over reading artifact_path from the sandbox filesystem.
+
+**Pass ``role_run_id`` as a plain string.** Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
 
 ### Input (by artifact name)
 
@@ -338,7 +473,6 @@ Get an artifact by name or role_run_id.
 
 ```json
 {
-  "run_id": "20260605-abc123",
   "role_run_id": "20260605-abc123-scout-1"
 }
 ```

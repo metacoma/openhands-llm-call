@@ -600,8 +600,17 @@ def role_status_impl(role_run_id: str) -> dict:
         task_id=role_run["openhands_task_id"]
     )
 
-    st = task_status.get("status", "unknown")
+    st = task_status.get("status") or "unknown"
     has_result = st == "completed"
+
+    # Persist the actual OpenHands status back to the role run record
+    try:
+        store.update_role_run(role_run_id, status=st)
+    except Exception:
+        logger.warning(
+            "Failed to persist status '%s' for role_run_id=%s",
+            st, role_run_id,
+        )
 
     summary: Optional[str] = None
     if has_result:
@@ -660,9 +669,18 @@ def role_result_impl(
     task_status = openhands_get_task_status(
         task_id=role_run["openhands_task_id"]
     )
-    st = task_status.get("status", "unknown")
+    st = task_status.get("status") or "unknown"
 
     if st != "completed":
+        # Persist non-completed terminal statuses observed from OpenHands
+        if st in TERMINAL_STATUSES:
+            try:
+                store.update_role_run(role_run_id, status=st)
+            except Exception:
+                logger.warning(
+                    "Failed to persist terminal status '%s' for role_run_id=%s",
+                    st, role_run_id,
+                )
         return {
             "role_run_id": role_run_id,
             "run_id": role_run["run_id"],
@@ -692,6 +710,14 @@ def role_result_impl(
 
     # --- Validate non-empty final answer ---
     if not full_result.strip():
+        # Persist completed_empty_result to prevent stale lock
+        try:
+            store.update_role_run(role_run_id, status="completed_empty_result")
+        except Exception:
+            logger.warning(
+                "Failed to persist 'completed_empty_result' for role_run_id=%s",
+                role_run_id,
+            )
         return _build_empty_result_response(
             role_run_id, role_run, st
         )
@@ -763,8 +789,124 @@ def role_result_impl(
 # ---------------------------------------------------------------------------
 
 TERMINAL_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "timeout", "stuck", "completed_empty_result"}
+    {
+        "completed",
+        "completed_empty_result",
+        "failed",
+        "cancelled",
+        "canceled",
+        "timeout",
+        "timed_out",
+        "stuck",
+        "error",
+    }
 )
+
+
+def _refresh_role_status_from_openhands(
+    role_store: "RoleRunStore",
+    role_run_id: str,
+    task_id: str,
+) -> Optional[dict]:
+    """Refresh actual OpenHands task status for a role run.
+
+    Returns the refreshed status dict, or None if refresh failed.
+    """
+    try:
+        from .server import openhands_get_task_status
+
+        return openhands_get_task_status(task_id=task_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to refresh OpenHands status for role_run_id=%s, "
+            "task_id=%s: %s",
+            role_run_id,
+            task_id,
+            exc,
+        )
+        return None
+
+
+def _find_active_role_run(role_store: "RoleRunStore") -> Optional[dict]:
+    """Find any non-terminal role run in the store.
+
+    Terminal statuses: see ``TERMINAL_STATUSES``.
+
+    IMPORTANT: Before returning a candidate as active, this function
+    refreshes its actual OpenHands task status. If the actual status
+    is terminal, the persisted record is updated and the candidate is
+    skipped. This prevents stale "running" locks from blocking future
+    ``role_start`` calls.
+
+    If the actual status cannot be refreshed (missing metadata or
+    OpenHands unavailable), the candidate is returned as active with
+    a clear error message including the ``role_run_id``.
+    """
+    state_dir = role_store.state_dir
+    if not state_dir.exists():
+        return None
+
+    for filepath in state_dir.glob("*.json"):
+        try:
+            data = json.loads(filepath.read_text(encoding="utf-8"))
+            # Only consider role-specific records (not generic tasks)
+            if "role" not in data:
+                continue
+            status = data.get("status", "")
+            if status in TERMINAL_STATUSES:
+                continue
+
+            # Candidate has a non-terminal persisted status.
+            # Refresh actual OpenHands task status before trusting it.
+            task_id = data.get("openhands_task_id")
+            if task_id:
+                refreshed = _refresh_role_status_from_openhands(
+                    role_store, data["role_run_id"], task_id
+                )
+                if refreshed is not None:
+                    # Refresh succeeded — check if actual status is terminal
+                    actual_status = refreshed.get("status")
+
+                    # Guard: missing, empty, or unknown status is NOT terminal.
+                    # Treating it as terminal would risk clearing the active
+                    # lock and violating single-threaded safety.
+                    if not actual_status or actual_status == "unknown":
+                        data["_refresh_failed"] = True
+                        data["_refresh_warning"] = (
+                            "OpenHands returned missing or unknown task status; "
+                            "treating role as active to preserve single-threaded safety."
+                        )
+                        return data
+
+                    if actual_status in TERMINAL_STATUSES:
+                        # Persist the terminal status to clear the stale lock
+                        role_store.update_role_run(
+                            data["role_run_id"], status=actual_status
+                        )
+                        logger.info(
+                            "Stale active lock cleared for role_run_id=%s "
+                            "(persisted=%s, actual=%s)",
+                            data["role_run_id"],
+                            status,
+                            actual_status,
+                        )
+                        continue  # Skip this candidate, continue scanning
+                    else:
+                        # Actual status is still non-terminal — return as active
+                        return data
+
+            # Cannot refresh (missing task_id or refresh failed) —
+            # treat as active with a warning flag.
+            # The caller (_build_another_role_running_error) will include
+            # this information in the LLM-friendly error.
+            data["_refresh_failed"] = True
+            return data
+
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return None
+
 
 _DEFAULT_ROLE_WAIT_TIMEOUT = int(
     os.getenv("OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS", "1800")
@@ -868,6 +1010,16 @@ def role_wait_impl(
         if sleep_secs > 0:
             time.sleep(sleep_secs)
 
+    # --- Persist terminal status after polling loop exits ---
+    if st in TERMINAL_STATUSES:
+        try:
+            store.update_role_run(role_run_id, status=st)
+        except Exception:
+            logger.warning(
+                "Failed to persist terminal status '%s' for role_run_id=%s",
+                st, role_run_id,
+            )
+
     # --- Build response ---
     duration_seconds = int(time.monotonic() - start_mono)
     st = status.get("status")
@@ -964,6 +1116,68 @@ def role_wait_impl(
             "error": {
                 "type": error_type,
                 "message": f"Role was {st}.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st == "completed_empty_result":
+        # Use existing helper for canonical empty-result shape
+        return {
+            **_build_empty_result_response(
+                role_run_id, role_run, st
+            ),
+            "duration_seconds": duration_seconds,
+        }
+
+    if st in ("canceled",):
+        return {
+            "role_run_id": role_run_id,
+            "status": "canceled",
+            "has_result": False,
+            "error": {
+                "type": "RoleCancelled",
+                "message": "Role ended with terminal status 'canceled'.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st in ("timed_out",):
+        return {
+            "role_run_id": role_run_id,
+            "status": "timed_out",
+            "has_result": False,
+            "error": {
+                "type": "RoleTimeout",
+                "message": "Role ended with terminal status 'timed_out'.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st == "error":
+        return {
+            "role_run_id": role_run_id,
+            "status": "error",
+            "has_result": False,
+            "error": {
+                "type": "RoleError",
+                "message": "Role ended with terminal status 'error'.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    # Generic safety branch: any other terminal status must not return "running"
+    if st in TERMINAL_STATUSES:
+        return {
+            "role_run_id": role_run_id,
+            "status": st,
+            "has_result": False,
+            "error": {
+                "type": "RoleTerminalStatus",
+                "message": f"Role ended with terminal status '{st}'.",
                 "retryable": True,
             },
             "duration_seconds": duration_seconds,
