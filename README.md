@@ -238,9 +238,9 @@ Head of IT via MCP tool discovery.
 | ``role_status`` | Single-shot diagnostic status check (internal) |
 | ``role_result`` | Get result of a completed role (internal) |
 | ``artifact_get`` | Read artifact content (debug only) |
-| ``shttp_role_start_v2`` | Legacy v2 role start (deprecated, hidden) |
-| ``shttp_role_wait_v2`` | Legacy v2 wait (deprecated, hidden) |
-| ``shttp_role_result_v2`` | Legacy v2 result (deprecated, hidden) |
+| ``_internal_role_start`` | Legacy role start (deprecated, hidden) |
+| ``_internal_role_wait`` | Legacy wait (deprecated, hidden) |
+| ``_internal_role_result`` | Legacy result (deprecated, hidden) |
 
 
 ### Example full role chain

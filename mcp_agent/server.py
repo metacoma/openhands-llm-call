@@ -1111,30 +1111,11 @@ def check_job(uid: str, url: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@MCP.tool()
-def role_list() -> dict:
+def _role_list_internal() -> dict:
     """List all available worker roles.
 
-    Returns a dict with a ``roles`` key containing a list of role
-    summaries (name, description, model, readonly,
-    requires_artifacts, output_artifact, timeout_minutes).
-
-    Example::
-
-        {
-            "roles": [
-                {
-                    "name": "scout",
-                    "description": "Read-only repository investigator...",
-                    "model": "openai/qwen36-35b-a3b-coder",
-                    "readonly": true,
-                    "requires_artifacts": [],
-                    "output_artifact": "scout_report",
-                    "timeout_minutes": 60
-                },
-                ...
-            ]
-        }
+    **Internal helper only** — not exposed as an MCP tool.
+    Used internally by other legacy helpers.
     """
     return _role_tools.role_list_impl()
 
@@ -1820,9 +1801,11 @@ def role_wait(
 # ---------------------------------------------------------------------------
 
 
-@MCP.tool()
-def artifact_list(run_id: Any = None, role_run_id: Any = None) -> dict:
+def _artifact_list_internal(run_id: Any = None, role_run_id: Any = None) -> dict:
     """List artifacts for a given run.
+
+    **Internal helper only** — not exposed as an MCP tool.
+    Used by legacy v2 result path for artifact scanning.
 
     **Pass ``role_run_id`` as a plain string.**
     Do **not** pass the entire ``role_start`` or ``role_wait`` response object.
@@ -1926,7 +1909,7 @@ def artifact_get(
 # ---------------------------------------------------------------------------
 
 
-def shttp_role_start_v2(
+def _internal_role_start(
     role: Any,
     user_task: Any,
     input_artifacts: Any = None,
@@ -1936,15 +1919,13 @@ def shttp_role_start_v2(
     url: Any = None,
     idempotency_key: Any = None,
 ) -> dict:
-    """Start a role using the legacy v2 artifact-reference API.
+    """Start a role using the artifact-reference API.
 
+    **Internal helper only** — not exposed as an MCP tool.
     **Deprecated.** Use ``shttp_role_call`` instead.
 
     Accepts artifact IDs/paths (not content). MCP server resolves them.
     Returns control summary inline after two-step same-conversation lifecycle.
-
-    **Deprecation notice:** ``role_start`` is legacy.
-    Head of Engineering should use ``shttp_role_start_v2``.
 
     Args:
         role: The role name (e.g. 'scout', 'architect', 'coder').
@@ -1959,7 +1940,7 @@ def shttp_role_start_v2(
 
     Returns:
         A dict with ``role_run_id``, ``status``, ``control_summary``,
-        and ``artifacts`` (primary and summary paths).
+        and ``artifacts`` (primary and summary artifact references).
 
     Example::
 
@@ -2020,10 +2001,10 @@ def shttp_role_start_v2(
     else:
         normalized_metadata = {}
 
-    # Import and call the v2 lifecycle implementation
+    # Import and call the lifecycle implementation
     from . import role_lifecycle
 
-    return role_lifecycle.start_role_v2_impl(
+    return role_lifecycle.role_call_impl(
         role=normalized_role,
         user_task=str(normalized_user_task) if normalized_user_task else "",
         input_artifacts=normalized_input_artifacts,
@@ -2035,24 +2016,27 @@ def shttp_role_start_v2(
     )
 
 
-def shttp_role_wait_v2(
+def _internal_role_wait(
     role_run_id: Any,
     timeout_seconds: Any = None,
     poll_interval_seconds: Any = None,
     return_result: Any = None,
 ) -> dict:
-    """Wait for a v2 role run and return its status.
+    """Wait for a role run and return its status.
 
-    **Note**: ``shttp_role_start_v2`` executes the full lifecycle
+    **Internal helper only** — not exposed as an MCP tool.
+    **Deprecated.** Use ``shttp_role_call`` instead.
+
+    **Note**: ``_internal_role_start`` executes the full lifecycle
     synchronously (main prompt + summary prompt) and returns the
-    completed result. In most cases, ``shttp_role_wait_v2`` is not
-    needed because the result is already available from ``start_v2``.
+    completed result. In most cases, ``_internal_role_wait`` is not
+    needed because the result is already available from ``_internal_role_start``.
 
     This function is provided for compatibility with the established
     start → wait → result orchestration model.
 
     Args:
-        role_run_id: The role run ID returned by ``shttp_role_start_v2``.
+        role_run_id: The role run ID returned by ``_internal_role_start``.
         timeout_seconds: Maximum seconds to wait (default 1800).
         poll_interval_seconds: Seconds between status checks (default 15).
         return_result: If true, inline the control summary (default true).
@@ -2104,8 +2088,8 @@ def shttp_role_wait_v2(
 
     # If already completed, return the result directly
     if current_status == "completed" and normalized_return_result:
-        # Delegate to result_v2 for the full v2 response shape
-        return shttp_role_result_v2(
+        # Delegate to _internal_role_result for the full response shape
+        return _internal_role_result(
             role_run_id=normalized_role_run_id,
             include_full_artifacts=False,
             return_control_summary=True,
@@ -2124,25 +2108,26 @@ def shttp_role_wait_v2(
     )
 
 
-def shttp_role_result_v2(
+def _internal_role_result(
     role_run_id: Any,
     include_full_artifacts: Any = None,
     return_control_summary: Any = None,
 ) -> dict:
-    """Get result for a v2 role run.
+    """Get result for a role run.
 
-    Returns control summary inline and artifact paths (not content).
-
+    **Internal helper only** — not exposed as an MCP tool.
     **Deprecated.** Use ``shttp_role_call`` instead.
 
+    Returns control summary inline and artifact references (not content).
+
     Args:
-        role_run_id: The role run ID returned by ``shttp_role_start_v2``.
+        role_run_id: The role run ID returned by ``_internal_role_start``.
         include_full_artifacts: If true, include full artifact content.
         return_control_summary: If true, include the control summary.
 
     Returns:
         A dict with ``role_run_id``, ``status``, ``control_summary``,
-        and ``artifacts`` (paths, optionally with content).
+        and ``artifacts`` (artifact references, optionally with content).
     """
     # Normalize inputs
     try:

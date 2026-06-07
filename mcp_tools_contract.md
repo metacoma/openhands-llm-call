@@ -1,6 +1,6 @@
 # MCP Role Tools Contract
 
-## role_list
+## shttp_role_list
 
 Returns available roles and their high-level capabilities.
 
@@ -11,22 +11,25 @@ Expected response:
   "roles": [
     {
       "name": "scout",
-      "description": "Read-only repository investigator",
       "readonly": true,
       "requires_artifacts": [],
-      "output_artifact": "scout_report",
-      "summary_artifact": "scout_summary",
-      "timeout_minutes": 60
+      "output_artifact_type": "scout_report"
+    },
+    {
+      "name": "architect",
+      "readonly": true,
+      "requires_artifacts": ["scout_report"],
+      "output_artifact_type": "architect_plan"
     }
   ]
 }
 ```
 
-## shttp_role_start_v2 (Recommended — v2 API)
+## shttp_role_call (Recommended — Primary API)
 
-Starts a role using the v2 artifact-reference API. The MCP server resolves artifact IDs/paths server-side and returns a compact **control summary** inline after a two-step same-conversation lifecycle (main prompt → response → summary prompt → response → validation).
+Calls a specialist role. The MCP server resolves artifact IDs server-side and returns a compact **control summary** inline after a two-step same-conversation lifecycle (main prompt → response → summary prompt → response → validation).
 
-**Deprecation notice:** `role_start` is legacy. Head of Engineering should use `shttp_role_start_v2`.
+**This is the only public tool Head of IT uses to invoke a worker role.**
 
 ### Required input fields
 
@@ -53,68 +56,68 @@ Optional:
 }
 ```
 
-### Example architect start
+### Example architect start (with artifact_id)
 
 ```json
 {
-  "role": {"text": "architect"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "20260607-010712-647d95/20260607-010712-647d95-scout-1_scout_report.artifact"}
-  },
+  "role": "architect",
+  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
+  "input_artifacts": [
+    {"artifact_id": "art_20260607_xxx_scout_report", "artifact_type": "scout_report"}
+  ],
   "metadata": {
-    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
-    "base_branch": {"text": "main"}
+    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+    "base_branch": "main"
   }
 }
 ```
 
-### Example coder start
+### Example coder start (with artifact_id)
 
 ```json
 {
-  "role": {"text": "coder"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "<SCOUT_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"}
-  },
+  "role": "coder",
+  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
+  "input_artifacts": [
+    {"artifact_id": "art_scout_xxx", "artifact_type": "scout_report"},
+    {"artifact_id": "art_architect_xxx", "artifact_type": "architect_plan"}
+  ],
   "metadata": {
-    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
-    "base_branch": {"text": "main"},
-    "branch": {"text": "feature/ruby-grpc-client"}
+    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+    "base_branch": "main",
+    "branch": "feature/ruby-grpc-client"
   }
 }
 ```
 
-### Example reviewer start
+### Example reviewer start (with artifact_id)
 
 ```json
 {
-  "role": {"text": "reviewer"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "<SCOUT_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"},
-    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"}
-  }
+  "role": "reviewer",
+  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
+  "input_artifacts": [
+    {"artifact_id": "art_scout_xxx", "artifact_type": "scout_report"},
+    {"artifact_id": "art_architect_xxx", "artifact_type": "architect_plan"},
+    {"artifact_id": "art_coder_xxx", "artifact_type": "coder_report"}
+  ]
 }
 ```
 
-### Example publisher start
+### Example publisher start (with artifact_id)
 
 ```json
 {
-  "role": {"text": "publisher"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "reviewer_report": {"text": "<REVIEWER_REPORT_ARTIFACT_PATH_OR_ID>"}
-  }
+  "role": "publisher",
+  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
+  "input_artifacts": [
+    {"artifact_id": "art_coder_xxx", "artifact_type": "coder_report"},
+    {"artifact_id": "art_reviewer_xxx", "artifact_type": "reviewer_report"}
+  ]
 }
 ```
 
-### Example coder_fix start
+### Example coder_fix start (with artifact_id)
 
 ```json
 {
@@ -136,13 +139,14 @@ Optional:
 ```json
 {
   "role_run_id": "20260607-abc123-scout-1",
+  "run_id": "20260607-abc123",
+  "role": "scout",
   "status": "completed",
   "control_summary": {
     "valid": true,
     "status": "completed",
     "role": "scout",
     "summary": "Scout completed. Found 42 relevant files.",
-    "primary_artifact_name": "scout_report",
     "blocking": false,
     "risk_level": "LOW",
     "action": null,
@@ -150,12 +154,14 @@ Optional:
   },
   "artifacts": {
     "primary": {
-      "artifact_name": "scout_report",
-      "artifact_path": "runs/20260607-abc123/01-scout.answer.md"
+      "artifact_id": "art_20260607-abc123_scout_1_scout_report",
+      "artifact_type": "scout_report",
+      "created_by": "scout"
     },
     "summary": {
-      "artifact_name": "scout_summary",
-      "artifact_path": "runs/20260607-abc123/20260607-abc123-scout-1_scout_summary.artifact"
+      "artifact_id": "art_20260607-abc123_scout_1_control_summary",
+      "artifact_type": "control_summary",
+      "created_by": "scout"
     }
   }
 }
@@ -181,9 +187,9 @@ Other validation errors:
 - `"artifact not found: scout_report"` — artifact reference does not resolve
 - `"rendered prompt is empty"` — template rendering produced empty output
 
-## role_start (Legacy)
+## role_start (Legacy — hidden)
 
-Starts a role-specific OpenHands task. **Deprecated.** Use `shttp_role_start_v2` instead.
+Starts a role-specific OpenHands task. **Deprecated and hidden from public MCP discovery.** Use `shttp_role_call` instead.
 
 ### Input (recommended — prompt-only)
 
@@ -663,9 +669,9 @@ Read artifact content produced by a role run. Prefer this tool over reading arti
 }
 ```
 
-## shttp_role_wait_v2
+## _internal_role_wait (Legacy — hidden)
 
-Wait for a v2 role run. Same shape as `role_wait` but operates on v2 role runs.
+Wait for a role run. **Deprecated and hidden from public MCP discovery.** Same shape as `role_wait` but operates on internal role runs.
 
 ### Input
 
@@ -682,9 +688,9 @@ Wait for a v2 role run. Same shape as `role_wait` but operates on v2 role runs.
 
 Same shape as `role_wait` response.
 
-## shttp_role_result_v2
+## _internal_role_result (Legacy — hidden)
 
-Get result for a v2 role run. Returns control summary inline and artifact paths (not content).
+Get result for a role run. Returns control summary inline and artifact references (not content). **Deprecated and hidden from public MCP discovery.**
 
 ### Input
 
@@ -790,25 +796,27 @@ The control summary follows this schema:
 | coder_fix | architect_plan, coder_report, reviewer_report | coder_fix_result | coder_fix_summary |
 | publisher | coder_report, reviewer_report | publisher_instructions | publisher_summary |
 
-## Migration from Legacy to v2
+## Migration from Legacy to shttp_role_call
 
 ### Key differences
 
-| Aspect | Legacy (`role_start`) | v2 (`shttp_role_start_v2`) |
+| Aspect | Legacy (`role_start`) | shttp_role_call (canonical) |
 |---|---|---|
-| Artifact passing | Full artifact content inline | Artifact ID/path only |
-| Prompt rendering | Orchestrator assembles prompt | MCP server renders server-side |
+| Artifact passing | Full artifact content inline | Artifact ID only |
+| Prompt rendering | Orchestrator assembles prompt | MCP server renders server-side via Jinja |
 | Summary | None (manual `make_summary`) | In-conversation summary JSON |
 | Control summary | Not returned | Returned inline |
 | Validation | Minimal | Required artifacts, user_task, role |
+| Public API | Multiple tools | Only `shttp_role_list` + `shttp_role_call` |
 
 ### Migration steps
 
-1. Replace `role_start` calls with `shttp_role_start_v2`.
-2. Change `artifacts` parameter to `input_artifacts` with artifact references (not content).
+1. Replace `role_start` calls with `shttp_role_call`.
+2. Change `artifacts` parameter to `input_artifacts` as a list of `{artifact_id, artifact_type}` objects.
 3. Remove `repo`, `base_branch`, `branch` — use `metadata` instead.
 4. Read `control_summary` from the response instead of parsing full artifacts.
 5. Route based on control summary fields (`status`, `blocking`, `action`) not on `next_role`.
+6. Pass only `artifact_id` (not content) between roles.
 
 ### Example migration
 
@@ -826,20 +834,20 @@ The control summary follows this schema:
 }
 ```
 
-**After (v2):**
+**After (canonical shttp_role_call):**
 
 ```json
 {
-  "role": {"text": "architect"},
-  "user_task": {"text": "Plan implementation"},
-  "input_artifacts": {
-    "scout_report": {"text": "artifact_path_or_id"}
-  },
+  "role": "architect",
+  "user_task": "Plan implementation",
+  "input_artifacts": [
+    {"artifact_id": "art_20260607_xxx_scout_report", "artifact_type": "scout_report"}
+  ],
   "metadata": {
-    "repository": {"text": "https://github.com/example/repo"},
-    "base_branch": {"text": "main"}
+    "repository": "https://github.com/example/repo",
+    "base_branch": "main"
   }
 }
 ```
 
-**Note:** `shttp_role_start` is legacy. Head of Engineering should use `shttp_role_start_v2`. Legacy `role_start` prompt.text mode should not be used for artifact-based orchestration.
+**Note:** `shttp_role_call` is the canonical public API. Legacy `role_start` is hidden from MCP discovery. Head of IT should never read artifact content — only pass artifact_id and let MCP resolve it server-side.
