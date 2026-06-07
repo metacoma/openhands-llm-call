@@ -608,8 +608,12 @@ def role_call_impl(
         )
 
         if DEBUG_ROLE_CALL:
+            # Use only idempotency_key here because role_run_id/run_id are
+            # generated later in the function (line ~701-703).  The
+            # correlation ID may differ from later log lines but is still
+            # sufficient to correlate this invocation.
             corr_id = correlate_id_from_args(
-                role_run_id=role_run_id, run_id=run_id, idempotency_key=idempotency_key
+                idempotency_key=idempotency_key,
             )
 
             prompt_type = type(main_prompt).__name__
