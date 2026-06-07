@@ -2466,11 +2466,12 @@ def shttp_role_call(
         # New format: list of {"artifact_id": "...", "artifact_type": "..."}
         resolved_artifacts: dict[str, str] = {}
         for entry in normalized_input_artifacts:
-            if isinstance(entry, dict):
-                aid = entry.get("artifact_id", "")
-                atype = entry.get("artifact_type", "")
-                if aid and atype:
-                    resolved_artifacts[atype] = str(aid)
+            if not isinstance(entry, dict):
+                continue
+            aid = unwrap_text(entry.get("artifact_id", ""))
+            atype = unwrap_text(entry.get("artifact_type", ""))
+            if aid and atype:
+                resolved_artifacts[str(atype)] = str(aid)
         normalized_input_artifacts = resolved_artifacts
     elif isinstance(normalized_input_artifacts, str):
         try:

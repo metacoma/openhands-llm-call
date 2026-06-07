@@ -831,5 +831,155 @@ class TestBackwardCompat(TestCase):
         self.assertEqual(role_lifecycle._role_call_impl_alias, role_lifecycle.role_call_impl)
 
 
+# ---------------------------------------------------------------------------
+# Tests — wrapped MCP-style values (BLOCKER fix)
+# ---------------------------------------------------------------------------
+
+class TestResolveInputArtifactsWrapped(TestCase):
+    """Test that wrapped MCP-style values are correctly unwrapped."""
+
+    def test_wrapped_list_of_objects(self):
+        """Wrapped artifact_id and artifact_type are unwrapped."""
+        result = role_lifecycle.resolve_input_artifacts([
+            {
+                "artifact_id": {"text": "art_scout"},
+                "artifact_type": {"text": "scout_report"},
+            }
+        ])
+        self.assertEqual(result, {"scout_report": "art_scout"})
+
+    def test_plain_list_of_objects_still_works(self):
+        """Plain (non-wrapped) list-of-objects continues to work."""
+        result = role_lifecycle.resolve_input_artifacts([
+            {
+                "artifact_id": "art_scout",
+                "artifact_type": "scout_report",
+            }
+        ])
+        self.assertEqual(result, {"scout_report": "art_scout"})
+
+    def test_mapping_format_still_works(self):
+        """Plain dict mapping continues to work."""
+        result = role_lifecycle.resolve_input_artifacts({
+            "scout_report": "art_scout",
+        })
+        self.assertEqual(result, {"scout_report": "art_scout"})
+
+    def test_wrapped_mapping_format(self):
+        """Wrapped dict values are unwrapped."""
+        result = role_lifecycle.resolve_input_artifacts({
+            "scout_report": {"text": "art_scout"},
+        })
+        self.assertEqual(result, {"scout_report": "art_scout"})
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    def test_role_call_impl_accepts_list_of_objects_directly(self, mock_poll, mock_start):
+        """role_call_impl correctly normalizes list-of-objects input_artifacts."""
+        # Save a scout artifact so architect can resolve it
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-wrapped",
+            role_run_id="test-run-wrapped-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="Scout content",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        mock_start.return_value = {"task_id": "task-1", "conversation_id": "conv-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "architect",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+
+        # Pass wrapped list-of-objects — role_call_impl must normalize it
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Test task",
+            input_artifacts=[
+                {
+                    "artifact_id": {"text": scout_artifact_id},
+                    "artifact_type": {"text": "scout_report"},
+                }
+            ],
+            metadata={"run_id": "test-run-wrapped"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+
+class TestArtifactContentInjection(TestCase):
+    """Test that artifact content is injected into prompts via Jinja."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    def test_artifact_content_injected_via_jinja(self, mock_poll, mock_start):
+        """Wrapped list-of-objects resolves artifact_id and content is injected."""
+        mock_start.return_value = {"task_id": "task-inject-1", "conversation_id": "conv-inject-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "architect",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+
+        # Save a scout artifact
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-inject",
+            role_run_id="test-run-inject-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FULL SCOUT REPORT",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        # Call architect with wrapped list-of-objects
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts=[
+                {
+                    "artifact_id": {"text": scout_artifact_id},
+                    "artifact_type": {"text": "scout_report"},
+                }
+            ],
+            metadata={"run_id": "test-run-inject"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+        # Verify the main prompt contains the artifact content
+        calls = mock_start.call_args_list
+        self.assertGreaterEqual(len(calls), 1)
+        main_prompt = calls[0][1]["prompt"] if len(calls[0][1]) > 0 else calls[0][0][0]
+        self.assertIn("FULL SCOUT REPORT", main_prompt)
+
+
 if __name__ == "__main__":
     unittest_main()

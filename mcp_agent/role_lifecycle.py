@@ -49,6 +49,17 @@ from .summary_validator import (
 logger = logging.getLogger("openhands-mcp")
 
 
+def _unwrap_text(value: Any) -> Any:
+    """Unwrap MCP-style ``{"text": "..."}`` values.
+
+    Mirror of ``unwrap_text()`` from server.py, kept local to avoid
+    circular imports.
+    """
+    if isinstance(value, dict) and "text" in value and len(value) == 1:
+        return value["text"]
+    return value
+
+
 def resolve_input_artifacts(
     input_artifacts: Any,
 ) -> dict[str, str]:
@@ -70,17 +81,18 @@ def resolve_input_artifacts(
     if isinstance(input_artifacts, list):
         result: dict[str, str] = {}
         for entry in input_artifacts:
-            if isinstance(entry, dict):
-                aid = entry.get("artifact_id", "")
-                atype = entry.get("artifact_type", "")
-                if aid and atype:
-                    result[atype] = str(aid)
+            if not isinstance(entry, dict):
+                continue
+            aid = _unwrap_text(entry.get("artifact_id", ""))
+            atype = _unwrap_text(entry.get("artifact_type", ""))
+            if aid and atype:
+                result[str(atype)] = str(aid)
         return result
 
     if isinstance(input_artifacts, dict):
         result: dict[str, str] = {}
         for k, v in input_artifacts.items():
-            result[k] = str(v) if v is not None else ""
+            result[k] = str(_unwrap_text(v)) if v is not None else ""
         return result
 
     # String — try JSON parse
@@ -267,6 +279,11 @@ def role_call_impl(
         input_artifacts = {}
     if metadata is None:
         metadata = {}
+
+    # Normalize input_artifacts if it arrives as list-of-objects or other
+    # non-dict format — makes the lifecycle self-contained.
+    if not isinstance(input_artifacts, dict):
+        input_artifacts = resolve_input_artifacts(input_artifacts)
 
     # ------------------------------------------------------------------
     # Step 1: Validate role
