@@ -18,7 +18,7 @@ User / Head-of-IT
               │   openhands_get_task_result, openhands_get_task_events,
               │   openhands_cancel_task, call_llm, check_health, check_job
               ├── Public role tools
-              │   shttp_role_list, shttp_role_call
+              │   role_list, role_call
               ├── Artifact store (mcp_agent/artifact_store.py)
               ├── Role registry (config/roles.yaml)
               ├── Prompt renderer (mcp_agent/prompt_renderer.py)
@@ -114,10 +114,10 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 
 | Tool | Purpose |
 |---|---|
-| `shttp_role_list` | List available roles and their contracts |
-| `shttp_role_call` | Call a specialist (single tool for all role orchestration) |
+| `role_list` | List available roles and their contracts |
+| `role_call` | Call a specialist (single tool for all role orchestration) |
 
-#### `shttp_role_list`
+#### `role_list`
 
 Returns a list of available roles with their contracts.
 
@@ -142,7 +142,7 @@ Returns a list of available roles with their contracts.
 }
 ```
 
-#### `shttp_role_call`
+#### `role_call`
 
 The only public tool Head of IT uses to invoke a worker role. Executes the
 full two-step lifecycle (main prompt → summary prompt) synchronously and
@@ -246,11 +246,11 @@ Head of IT via MCP tool discovery.
 ### Example full role chain
 
 ```text
-1. shttp_role_call(role="scout", user_task="...")
+1. role_call(role="scout", user_task="...")
    → control_summary.status = "completed"
    → artifacts.primary.artifact_id = "art_..._scout_report"
 
-2. shttp_role_call(
+2. role_call(
      role="architect",
      user_task="...",
      input_artifacts=[{artifact_id: "art_..._scout_report", artifact_type: "scout_report"}]
@@ -258,7 +258,7 @@ Head of IT via MCP tool discovery.
    → control_summary.status = "completed"
    → artifacts.primary.artifact_id = "art_..._architect_plan"
 
-3. shttp_role_call(
+3. role_call(
      role="coder",
      user_task="...",
      input_artifacts=[
@@ -268,7 +268,7 @@ Head of IT via MCP tool discovery.
    )
    → control_summary.status = "completed"
 
-4. shttp_role_call(
+4. role_call(
      role="reviewer",
      user_task="...",
      input_artifacts=[
@@ -280,16 +280,16 @@ Head of IT via MCP tool discovery.
    → control_summary.action = "PASS" or "BLOCKER"
 
 5. If action = PASS:
-     shttp_role_call(role="publisher", ...)
+     role_call(role="publisher", ...)
    If action = BLOCKER:
-     shttp_role_call(role="coder_fix", ...)
+     role_call(role="coder_fix", ...)
 ```
 
 ## How it works
 
 ### Single-role synchronous call
 
-``shttp_role_call`` is the only public tool Head of IT uses to invoke a
+``role_call`` is the only public tool Head of IT uses to invoke a
 worker role.  It executes the **full two-step lifecycle** synchronously:
 
 1. Render the main prompt (with artifact content injected via Jinja).
@@ -308,25 +308,25 @@ The MCP server handles all waiting and artifact resolution internally.
 
 This server assumes the underlying model may only run one role at a time.
 
-**Do not start multiple roles in parallel.**  Call ``shttp_role_call``
+**Do not start multiple roles in parallel.**  Call ``role_call``
 sequentially — each call blocks until the role completes.
 
 **Correct:**
 
 ```text
-shttp_role_call scout
-shttp_role_call architect
-shttp_role_call coder
-shttp_role_call reviewer
-shttp_role_call publisher
+role_call scout
+role_call architect
+role_call coder
+role_call reviewer
+role_call publisher
 ```
 
 **Incorrect:**
 
 ```text
-shttp_role_call scout
-shttp_role_call architect   ← do not start until scout completes
-shttp_role_call coder       ← do not start until architect completes
+role_call scout
+role_call architect   ← do not start until scout completes
+role_call coder       ← do not start until architect completes
 ```
 
 ### Stale active lock prevention
@@ -364,7 +364,7 @@ role as still active.
 
 **What to do:**
 
-1. Follow the `next_action` field and call ``shttp_role_call`` for the
+1. Follow the `next_action` field and call ``role_call`` for the
    existing role (it will return the existing result if already completed).
 2. Do NOT start another role until the previous role is confirmed terminal.
 3. If the OpenHands backend is temporarily unavailable, wait and retry.

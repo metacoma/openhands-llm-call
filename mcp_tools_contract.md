@@ -1,6 +1,6 @@
 # MCP Role Tools Contract
 
-## shttp_role_list
+## role_list
 
 Returns available roles and their high-level capabilities.
 
@@ -25,7 +25,7 @@ Expected response:
 }
 ```
 
-## shttp_role_call (Recommended — Primary API)
+## role_call (Recommended — Primary API)
 
 Calls a specialist role. The MCP server resolves artifact IDs server-side and returns a compact **control summary** inline after a two-step same-conversation lifecycle (main prompt → response → summary prompt → response → validation).
 
@@ -189,7 +189,7 @@ Other validation errors:
 
 ## role_start (Legacy — hidden)
 
-Starts a role-specific OpenHands task. **Deprecated and hidden from public MCP discovery.** Use `shttp_role_call` instead.
+Starts a role-specific OpenHands task. **Deprecated and hidden from public MCP discovery.** Use `role_call` instead.
 
 ### Input (recommended — prompt-only)
 
@@ -796,22 +796,22 @@ The control summary follows this schema:
 | coder_fix | architect_plan, coder_report, reviewer_report | coder_fix_result | coder_fix_summary |
 | publisher | coder_report, reviewer_report | publisher_instructions | publisher_summary |
 
-## Migration from Legacy to shttp_role_call
+## Migration from Legacy to role_call
 
 ### Key differences
 
-| Aspect | Legacy (`role_start`) | shttp_role_call (canonical) |
+| Aspect | Legacy (`role_start`) | role_call (canonical) |
 |---|---|---|
 | Artifact passing | Full artifact content inline | Artifact ID only |
 | Prompt rendering | Orchestrator assembles prompt | MCP server renders server-side via Jinja |
 | Summary | None (manual `make_summary`) | In-conversation summary JSON |
 | Control summary | Not returned | Returned inline |
 | Validation | Minimal | Required artifacts, user_task, role |
-| Public API | Multiple tools | Only `shttp_role_list` + `shttp_role_call` |
+| Public API | Multiple tools | Only `role_list` + `role_call` |
 
 ### Migration steps
 
-1. Replace `role_start` calls with `shttp_role_call`.
+1. Replace `role_start` calls with `role_call`.
 2. Change `artifacts` parameter to `input_artifacts` as a list of `{artifact_id, artifact_type}` objects.
 3. Remove `repo`, `base_branch`, `branch` — use `metadata` instead.
 4. Read `control_summary` from the response instead of parsing full artifacts.
@@ -834,7 +834,7 @@ The control summary follows this schema:
 }
 ```
 
-**After (canonical shttp_role_call):**
+**After (canonical role_call):**
 
 ```json
 {
@@ -850,4 +850,4 @@ The control summary follows this schema:
 }
 ```
 
-**Note:** `shttp_role_call` is the canonical public API. Legacy `role_start` is hidden from MCP discovery. Head of IT should never read artifact content — only pass artifact_id and let MCP resolve it server-side.
+**Note:** `role_call` is the canonical public API. Legacy `role_start` is hidden from MCP discovery. Head of IT should never read artifact content — only pass artifact_id and let MCP resolve it server-side.

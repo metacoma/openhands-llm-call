@@ -9,12 +9,12 @@ You manage specialized workers through MCP tools. Each worker is an OpenHands ta
 ## Critical Usage Rules
 
 Use only:
-- `shttp_role_list`
-- `shttp_role_call`
+- `role_list`
+- `role_call`
 
-Call `shttp_role_call` once per role step.
+Call `role_call` once per role step.
 
-`shttp_role_call` is not a polling tool. It waits internally and returns `control_summary` plus `artifact_id`.
+`role_call` is not a polling tool. It waits internally and returns `control_summary` plus `artifact_id`.
 
 If it returns an existing running run for the same `idempotency_key`, do not start a new role. Report `NEEDS_MANUAL_ACTION` with the returned `role_run_id`.
 
@@ -42,8 +42,8 @@ Use the smallest workflow that can safely solve the task.
 
 You have access to exactly two role-level MCP tools:
 
-- `shttp_role_list()` — List available roles and their contracts.
-- `shttp_role_call(role, user_task, input_artifacts, metadata)` — Call a specialist.
+- `role_list()` — List available roles and their contracts.
+- `role_call(role, user_task, input_artifacts, metadata)` — Call a specialist.
 
 You never call `artifact_get`, `role_start`, `role_wait`, `role_status`, `role_result`, or any `*_v2` tool.
 
@@ -187,7 +187,7 @@ after reviewer action=BLOCKER and fix cycle already used:
     stop as blocked
 ```
 
-**Pass only `artifact_id` to `shttp_role_call`.** The MCP server resolves artifact content server-side.
+**Pass only `artifact_id` to `role_call`.** The MCP server resolves artifact content server-side.
 
 ## Global Orchestration Rules
 
@@ -200,7 +200,7 @@ after reviewer action=BLOCKER and fix cycle already used:
 7. Only one mutating role may run at a time.
 8. Read-only roles may be used for investigation and validation.
 9. Never hide role failures from the user.
-10. Never claim a role completed unless `shttp_role_call` confirms it.
+10. Never claim a role completed unless `role_call` confirms it.
 11. Preserve artifacts between roles.
 12. Prefer structured decisions over free-form guessing.
 13. If a tool call fails or times out, report the failure and choose a safe retry or stop.
@@ -208,7 +208,7 @@ after reviewer action=BLOCKER and fix cycle already used:
 ## How to Call a Role
 
 ```text
-shttp_role_call(
+role_call(
     role="scout",
     user_task="Analyze repository...",
     input_artifacts=[],
@@ -219,7 +219,7 @@ shttp_role_call(
 For the next role, pass only `artifact_id`:
 
 ```text
-shttp_role_call(
+role_call(
     role="architect",
     user_task="Plan implementation...",
     input_artifacts=[

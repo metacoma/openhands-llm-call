@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the new public MCP API: shttp_role_list + shttp_role_call.
+"""Tests for the new public MCP API: role_list + role_call.
 
 These tests verify the migration from legacy+v2 tools to the minimal
 public surface consisting of exactly two tools.
@@ -173,7 +173,7 @@ class TestRoleCallImplResponse(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._poll_task_status")
     def test_returns_control_summary(self, mock_poll, mock_start):
-        """shttp_role_call returns control_summary."""
+        """role_call returns control_summary."""
         mock_start.return_value = {"task_id": "task-1", "conversation_id": "conv-1"}
         mock_poll.return_value = {
             "status": "completed",
@@ -201,7 +201,7 @@ class TestRoleCallImplResponse(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._poll_task_status")
     def test_returns_artifact_id(self, mock_poll, mock_start):
-        """shttp_role_call returns artifacts.primary.artifact_id."""
+        """role_call returns artifacts.primary.artifact_id."""
         mock_start.return_value = {"task_id": "task-2", "conversation_id": "conv-2"}
         mock_poll.return_value = {
             "status": "completed",
@@ -319,11 +319,11 @@ class TestRoleCallImplResponse(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests — shttp_role_call MCP tool (mocked)
+# Tests — role_call MCP tool (mocked)
 # ---------------------------------------------------------------------------
 
-class TestShttpRoleCallTool(TestCase):
-    """Test the shttp_role_call MCP tool wrapper."""
+class TestRoleCallTool(TestCase):
+    """Test the role_call MCP tool wrapper."""
 
     def setUp(self):
         self.state_dir = _make_tmp_state_dir()
@@ -337,7 +337,7 @@ class TestShttpRoleCallTool(TestCase):
 
     @patch("mcp_agent.role_lifecycle.role_call_impl")
     def test_call_delegates_to_role_call_impl(self, mock_impl):
-        """shttp_role_call delegates to role_call_impl."""
+        """role_call delegates to role_call_impl."""
         mock_impl.return_value = {
             "role_run_id": "test-run-008-scout-1",
             "run_id": "test-run-008",
@@ -359,9 +359,9 @@ class TestShttpRoleCallTool(TestCase):
         }
 
         # Import the tool function
-        from mcp_agent.server import shttp_role_call
+        from mcp_agent.server import role_call
 
-        result = shttp_role_call(
+        result = role_call(
             role="scout",
             user_task="Test task",
             input_artifacts=[],
@@ -373,7 +373,7 @@ class TestShttpRoleCallTool(TestCase):
 
     @patch("mcp_agent.role_lifecycle.role_call_impl")
     def test_call_with_list_input_artifacts(self, mock_impl):
-        """shttp_role_call accepts input_artifacts as list of objects."""
+        """role_call accepts input_artifacts as list of objects."""
         mock_impl.return_value = {
             "role_run_id": "test-run-009-architect-1",
             "run_id": "test-run-009",
@@ -394,9 +394,9 @@ class TestShttpRoleCallTool(TestCase):
             },
         }
 
-        from mcp_agent.server import shttp_role_call
+        from mcp_agent.server import role_call
 
-        result = shttp_role_call(
+        result = role_call(
             role="architect",
             user_task="Plan implementation",
             input_artifacts=[
@@ -413,11 +413,11 @@ class TestShttpRoleCallTool(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests — shttp_role_list MCP tool
+# Tests — role_list MCP tool
 # ---------------------------------------------------------------------------
 
-class TestShttpRoleListTool(TestCase):
-    """Test the shttp_role_list MCP tool."""
+class TestRoleListTool(TestCase):
+    """Test the role_list MCP tool."""
 
     def setUp(self):
         self.state_dir = _make_tmp_state_dir()
@@ -430,19 +430,19 @@ class TestShttpRoleListTool(TestCase):
         shutil.rmtree(self.state_dir, ignore_errors=True)
 
     def test_returns_roles_list(self):
-        """shttp_role_list returns a roles list."""
-        from mcp_agent.server import shttp_role_list
+        """role_list returns a roles list."""
+        from mcp_agent.server import role_list
 
-        result = shttp_role_list()
+        result = role_list()
         self.assertIn("roles", result)
         self.assertIsInstance(result["roles"], list)
         self.assertGreater(len(result["roles"]), 0)
 
     def test_role_has_required_fields(self):
         """Each role has name, readonly, requires_artifacts, output_artifact_type."""
-        from mcp_agent.server import shttp_role_list
+        from mcp_agent.server import role_list
 
-        result = shttp_role_list()
+        result = role_list()
         for role in result["roles"]:
             self.assertIn("name", role)
             self.assertIn("readonly", role)
@@ -451,18 +451,18 @@ class TestShttpRoleListTool(TestCase):
 
     def test_scout_has_no_required_artifacts(self):
         """Scout role has no required artifacts."""
-        from mcp_agent.server import shttp_role_list
+        from mcp_agent.server import role_list
 
-        result = shttp_role_list()
+        result = role_list()
         scout = next((r for r in result["roles"] if r["name"] == "scout"), None)
         self.assertIsNotNone(scout)
         self.assertEqual(scout["requires_artifacts"], [])
 
     def test_architect_requires_scout_report(self):
         """Architect role requires scout_report."""
-        from mcp_agent.server import shttp_role_list
+        from mcp_agent.server import role_list
 
-        result = shttp_role_list()
+        result = role_list()
         architect = next((r for r in result["roles"] if r["name"] == "architect"), None)
         self.assertIsNotNone(architect)
         self.assertIn("scout_report", architect["requires_artifacts"])
@@ -531,10 +531,10 @@ class TestLegacyToolsHidden(TestCase):
                          "shttp_role_result_v2 should NOT be a public MCP tool")
 
     def test_role_list_not_decorated(self):
-        """role_list is NOT decorated with @MCP.tool()."""
+        """shttp_role_list (old name) is NOT decorated with @MCP.tool()."""
         tool_names = _get_public_tool_names()
-        self.assertNotIn("role_list", tool_names,
-                         "role_list should NOT be a public MCP tool")
+        self.assertNotIn("shttp_role_list", tool_names,
+                         "shttp_role_list should NOT be a public MCP tool")
 
     def test_artifact_list_not_decorated(self):
         """artifact_list is NOT decorated with @MCP.tool()."""
@@ -550,17 +550,17 @@ class TestLegacyToolsHidden(TestCase):
 class TestPublicToolsExposed(TestCase):
     """Test that new public tools ARE decorated with @MCP.tool()."""
 
-    def test_shttp_role_call_is_exposed(self):
-        """shttp_role_call IS a public MCP tool."""
+    def test_role_call_is_exposed(self):
+        """role_call IS a public MCP tool."""
         tool_names = _get_public_tool_names()
-        self.assertIn("shttp_role_call", tool_names,
-                      "shttp_role_call SHOULD be a public MCP tool")
+        self.assertIn("role_call", tool_names,
+                      "role_call SHOULD be a public MCP tool")
 
-    def test_shttp_role_list_is_exposed(self):
-        """shttp_role_list IS a public MCP tool."""
+    def test_role_list_is_exposed(self):
+        """role_list IS a public MCP tool."""
         tool_names = _get_public_tool_names()
-        self.assertIn("shttp_role_list", tool_names,
-                      "shttp_role_list SHOULD be a public MCP tool")
+        self.assertIn("role_list", tool_names,
+                      "role_list SHOULD be a public MCP tool")
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +568,7 @@ class TestPublicToolsExposed(TestCase):
 # ---------------------------------------------------------------------------
 
 class TestIdempotency(TestCase):
-    """Test that idempotency_key deduplicates shttp_role_call."""
+    """Test that idempotency_key deduplicates role_call."""
 
     def setUp(self):
         self.state_dir = _make_tmp_state_dir()
@@ -583,7 +583,7 @@ class TestIdempotency(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._poll_task_status")
     def test_same_idempotency_key_no_second_run(self, mock_poll, mock_start):
-        """Repeated shttp_role_call with same idempotency_key does not create a second role_run."""
+        """Repeated role_call with same idempotency_key does not create a second role_run."""
         mock_start.return_value = {"task_id": "task-idem-1", "conversation_id": "conv-idem-1"}
         mock_poll.return_value = {
             "status": "completed",
@@ -1041,13 +1041,13 @@ class TestArtifactContentInjection(TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestSmokeShttpRoleList(TestCase):
-    """Test 1: shttp_role_list does not crash on import or call."""
+class TestSmokeRoleList(TestCase):
+    """Test 1: role_list does not crash on import or call."""
 
     def test_import_and_call(self):
-        from mcp_agent.server import shttp_role_list
+        from mcp_agent.server import role_list
 
-        result = shttp_role_list()
+        result = role_list()
         self.assertIn("roles", result)
         self.assertIsInstance(result["roles"], list)
         self.assertGreater(len(result["roles"]), 0)
@@ -1057,7 +1057,7 @@ class TestSmokeShttpRoleList(TestCase):
 
 
 class TestSmokeRoleCallJobIdFallback(TestCase):
-    """Test 2: shttp_role_call works without task_id (uses conversation_id fallback)."""
+    """Test 2: role_call works without task_id (uses conversation_id fallback)."""
 
     @patch.object(role_lifecycle, "_poll_task_status")
     @patch.object(role_lifecycle, "_start_conversation_on_fastapi")
@@ -1185,7 +1185,7 @@ class TestSmokeResolveInputArtifacts(TestCase):
 
 
 class TestNormalizeRoleIntegration(TestCase):
-    """Tests 6-7: shttp_role_call accepts real observed payload and wrapped metadata."""
+    """Tests 6-7: role_call accepts real observed payload and wrapped metadata."""
 
     def setUp(self):
         self.state_dir = _make_tmp_state_dir()
@@ -1203,7 +1203,7 @@ class TestNormalizeRoleIntegration(TestCase):
     def test_real_observed_payload_normalizes_correctly(
         self, mock_render, mock_poll, mock_start
     ):
-        """Test 6: shttp_role_call accepts the real observed payload shape.
+        """Test 6: role_call accepts the real observed payload shape.
 
         Real payload from Head of IT logs:
         {
@@ -1238,9 +1238,9 @@ class TestNormalizeRoleIntegration(TestCase):
             return original_role_call_impl(**kwargs)
 
         with patch.object(role_lifecycle, "role_call_impl", side_effect=capture_impl):
-            from mcp_agent.server import shttp_role_call
+            from mcp_agent.server import role_call
 
-            result = shttp_role_call(
+            result = role_call(
                 role={"name": "scout"},
                 user_task={"text": "Исследуй репозиторий ..."},
                 metadata={
@@ -1294,9 +1294,9 @@ class TestNormalizeRoleIntegration(TestCase):
             return original_role_call_impl(**kwargs)
 
         with patch.object(role_lifecycle, "role_call_impl", side_effect=capture_impl):
-            from mcp_agent.server import shttp_role_call
+            from mcp_agent.server import role_call
 
-            result = shttp_role_call(
+            result = role_call(
                 role="scout",
                 user_task="Test task",
                 metadata={
@@ -1350,14 +1350,14 @@ class TestIdempotencyDuplicateRuns(TestCase):
         }
         mock_render.return_value = "Scout prompt"
 
-        from mcp_agent.server import shttp_role_call
+        from mcp_agent.server import role_call
 
         idempotency_key = "scout-freeplane-plugin-grpc-ruby-client"
 
         # First call — creates a new run
         with patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi") as mock_start:
             mock_start.return_value = {"task_id": "task-idem-1", "conversation_id": "conv-idem-1"}
-            result1 = shttp_role_call(
+            result1 = role_call(
                 role="scout",
                 user_task="Test task 1",
                 idempotency_key=idempotency_key,
@@ -1368,7 +1368,7 @@ class TestIdempotencyDuplicateRuns(TestCase):
         # because the store's find_by_idempotency_scope will return the existing run
         with patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi") as mock_start:
             mock_start.return_value = {"task_id": "task-idem-2", "conversation_id": "conv-idem-2"}
-            result2 = shttp_role_call(
+            result2 = role_call(
                 role="scout",
                 user_task="Test task 2",
                 idempotency_key=idempotency_key,
@@ -1405,14 +1405,14 @@ class TestIdempotencyDuplicateRuns(TestCase):
         }
         mock_render.return_value = "Scout prompt"
 
-        from mcp_agent.server import shttp_role_call
+        from mcp_agent.server import role_call
 
-        result1 = shttp_role_call(
+        result1 = role_call(
             role="scout",
             user_task="Test task 1",
             idempotency_key="key-1",
         )
-        result2 = shttp_role_call(
+        result2 = role_call(
             role="scout",
             user_task="Test task 2",
             idempotency_key="key-2",
@@ -1457,9 +1457,9 @@ class TestRoleCallResponseSchema(TestCase):
         }
         mock_render.return_value = "Scout prompt"
 
-        from mcp_agent.server import shttp_role_call
+        from mcp_agent.server import role_call
 
-        result = shttp_role_call(
+        result = role_call(
             role="scout",
             user_task="Test task",
             idempotency_key="schema-test-key",
@@ -1530,9 +1530,9 @@ class TestWrappedInputArtifacts(TestCase):
         }
         mock_render.return_value = "Architect prompt"
 
-        from mcp_agent.server import shttp_role_call
+        from mcp_agent.server import role_call
 
-        result = shttp_role_call(
+        result = role_call(
             role="architect",
             user_task="Plan implementation",
             input_artifacts=[
@@ -1558,10 +1558,10 @@ class TestPublicToolNames(TestCase):
         tools = list(server_mcp._tool_manager.list_tools())
         tool_names = [t.name for t in tools]
 
-        self.assertIn("shttp_role_list", tool_names)
-        self.assertIn("shttp_role_call", tool_names)
-        self.assertNotIn("shttp_shttp_role_list", tool_names)
-        self.assertNotIn("shttp_shttp_role_call", tool_names)
+        self.assertIn("role_list", tool_names)
+        self.assertIn("role_call", tool_names)
+        self.assertNotIn("shttp_role_list", tool_names)
+        self.assertNotIn("shttp_role_call", tool_names)
 
 
 if __name__ == "__main__":

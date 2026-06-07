@@ -1957,7 +1957,7 @@ def artifact_get(
 
 # ---------------------------------------------------------------------------
 # Legacy v2 Role tools — kept as internal helpers but NOT exposed to
-# Head of IT.  The new canonical tool is ``shttp_role_call``.
+# Head of IT.  The new canonical tool is ``role_call``.
 # ---------------------------------------------------------------------------
 
 
@@ -1974,7 +1974,7 @@ def _internal_role_start(
     """Start a role using the artifact-reference API.
 
     **Internal helper only** — not exposed as an MCP tool.
-    **Deprecated.** Use ``shttp_role_call`` instead.
+    **Deprecated.** Use ``role_call`` instead.
 
     Accepts artifact IDs/paths (not content). MCP server resolves them.
     Returns control summary inline after two-step same-conversation lifecycle.
@@ -2077,7 +2077,7 @@ def _internal_role_wait(
     """Wait for a role run and return its status.
 
     **Internal helper only** — not exposed as an MCP tool.
-    **Deprecated.** Use ``shttp_role_call`` instead.
+    **Deprecated.** Use ``role_call`` instead.
 
     **Note**: ``_internal_role_start`` executes the full lifecycle
     synchronously (main prompt + summary prompt) and returns the
@@ -2168,7 +2168,7 @@ def _internal_role_result(
     """Get result for a role run.
 
     **Internal helper only** — not exposed as an MCP tool.
-    **Deprecated.** Use ``shttp_role_call`` instead.
+    **Deprecated.** Use ``role_call`` instead.
 
     Returns control summary inline and artifact references (not content).
 
@@ -2375,8 +2375,8 @@ def _internal_role_result(
 
 
 @MCP.tool()
-def shttp_role_list() -> dict:
-    """List available roles and their contracts for ``shttp_role_call``.
+def role_list() -> dict:
+    """List available roles and their contracts for ``role_call``.
 
     Returns a minimal ``roles`` list with the fields Head of IT needs:
     name, readonly, requires_artifacts, output_artifact_type.
@@ -2415,7 +2415,7 @@ def shttp_role_list() -> dict:
 
 
 @MCP.tool()
-def shttp_role_call(
+def role_call(
     role: Any,
     user_task: Any,
     input_artifacts: Any = None,
