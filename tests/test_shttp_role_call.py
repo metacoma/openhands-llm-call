@@ -1036,5 +1036,148 @@ class TestArtifactContentInjection(TestCase):
         self.assertIn("FULL SCOUT REPORT", main_prompt)
 
 
+# ---------------------------------------------------------------------------
+# Smoke tests for the minimal fix (Steps 1-6 of architect plan)
+# ---------------------------------------------------------------------------
+
+
+class TestSmokeShttpRoleList(TestCase):
+    """Test 1: shttp_role_list does not crash on import or call."""
+
+    def test_import_and_call(self):
+        from mcp_agent.server import shttp_role_list
+
+        result = shttp_role_list()
+        self.assertIn("roles", result)
+        self.assertIsInstance(result["roles"], list)
+        self.assertGreater(len(result["roles"]), 0)
+        for role in result["roles"]:
+            self.assertIn("name", role)
+            self.assertIn("readonly", role)
+
+
+class TestSmokeRoleCallJobIdFallback(TestCase):
+    """Test 2: shttp_role_call works without task_id (uses conversation_id fallback)."""
+
+    @patch.object(role_lifecycle, "_poll_task_status")
+    @patch.object(role_lifecycle, "_start_conversation_on_fastapi")
+    @patch.object(role_lifecycle, "render_prompt")
+    def test_job_id_fallback_from_conversation_id(
+        self, mock_render, mock_start, mock_poll
+    ):
+        mock_start.return_value = {"conversation_id": "conv-123"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({"status": "completed", "role": "scout", "summary": "test"}),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        result = role_lifecycle.role_call_impl(
+            role="scout",
+            user_task="Test task",
+            input_artifacts=None,
+            metadata={"run_id": "test-run-jid"},
+            api_key="test-key",
+        )
+
+        # Verify the job_id (conv-123) was used for polling
+        call_args = mock_poll.call_args
+        self.assertIsNotNone(call_args)
+        self.assertEqual(call_args[0][0], "conv-123")
+
+    @patch.object(role_lifecycle, "_poll_task_status")
+    @patch.object(role_lifecycle, "_start_conversation_on_fastapi")
+    @patch.object(role_lifecycle, "render_prompt")
+    def test_job_id_fallback_from_id_field(self, mock_render, mock_start, mock_poll):
+        mock_start.return_value = {"id": "id-456"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({"status": "completed", "role": "scout", "summary": "test"}),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        result = role_lifecycle.role_call_impl(
+            role="scout",
+            user_task="Test task",
+            input_artifacts=None,
+            metadata={"run_id": "test-run-jid2"},
+            api_key="test-key",
+        )
+
+        call_args = mock_poll.call_args
+        self.assertIsNotNone(call_args)
+        self.assertEqual(call_args[0][0], "id-456")
+
+    @patch.object(role_lifecycle, "_poll_task_status")
+    @patch.object(role_lifecycle, "_start_conversation_on_fastapi")
+    @patch.object(role_lifecycle, "render_prompt")
+    def test_missing_job_id_returns_error(self, mock_render, mock_start, mock_poll):
+        mock_start.return_value = {"some_other_field": "xyz"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({"status": "completed", "role": "scout", "summary": "test"}),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        result = role_lifecycle.role_call_impl(
+            role="scout",
+            user_task="Test task",
+            input_artifacts=None,
+            metadata={"run_id": "test-run-jid3"},
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingJobId")
+
+
+class TestSmokeResolveInputArtifacts(TestCase):
+    """Test 3: input artifacts resolve by artifact_id."""
+
+    @patch.object(role_lifecycle, "ArtifactStore")
+    @patch.object(role_lifecycle, "_poll_task_status")
+    @patch.object(role_lifecycle, "_start_conversation_on_fastapi")
+    @patch.object(role_lifecycle, "render_prompt")
+    def test_artifact_content_resolved_by_artifact_id(
+        self, mock_render, mock_start, mock_poll, mock_astore_cls
+    ):
+        # Mock artifact store to return content for a known artifact_id
+        mock_store = MagicMock()
+        mock_store.get_content_by_id.return_value = "FULL SCOUT REPORT\n\n===\nDetailed analysis here."
+        mock_store.save.return_value = {
+            "artifact_id": "test-primary-art",
+            "artifact_type": "scout_report",
+            "artifact_name": "primary",
+            "artifact_path": "test-run-ai/test_primary.artifact",
+            "content_empty": False,
+            "content": "test content",
+        }
+        mock_astore_cls.return_value = mock_store
+
+        mock_start.return_value = {"task_id": "test-task-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({"status": "completed", "role": "architect", "summary": "test"}),
+        }
+        mock_render.return_value = "Architect prompt"
+
+        # Head of IT passes only artifact_id (not full content)
+        input_artifacts = [
+            {"artifact_id": "art_scout_report_xyz", "artifact_type": "scout_report"}
+        ]
+
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Review this code",
+            input_artifacts=input_artifacts,
+            metadata={"run_id": "test-run-ai"},
+            api_key="test-key",
+        )
+
+        # Verify artifact_store.get_content_by_id was called with the artifact_id
+        mock_store.get_content_by_id.assert_called_once_with("art_scout_report_xyz")
+        self.assertEqual(result["status"], "completed")
+
+
 if __name__ == "__main__":
     unittest_main()

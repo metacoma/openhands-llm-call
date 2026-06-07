@@ -214,10 +214,30 @@ def _poll_task_status(
         resp.raise_for_status()
         data = resp.json()
         status = data.get("status", "unknown")
+        execution_status = data.get("execution_status")
 
+        # Normalize terminal states from status field
         if status in ("completed", "failed", "cancelled", "timeout",
                        "canceled", "timed_out", "error",
                        "completed_empty_result"):
+            data["status"] = status
+            return data
+
+        # Also check execution_status as an alternative completion signal
+        if execution_status in ("finished", "success"):
+            data["status"] = "completed"
+            return data
+
+        if execution_status in ("failed", "error"):
+            data["status"] = "failed"
+            return data
+
+        if execution_status in ("cancelled", "canceled"):
+            data["status"] = "cancelled"
+            return data
+
+        if execution_status in ("timeout", "timed_out"):
+            data["status"] = "timeout"
             return data
 
         # Still running — wait
@@ -473,12 +493,10 @@ def role_call_impl(
     idempotency_scope = None
     if idempotency_key:
         idempotency_scope = f"{role}:{idempotency_key}"
-        existing_run_id = role_store.find_by_idempotency_scope(idempotency_scope)
-        if existing_run_id is not None:
+        existing_role_run_id = role_store.find_by_idempotency_scope(idempotency_scope)
+        if existing_role_run_id is not None:
             # Return the existing role run status instead of creating a new one.
-            existing_run = role_store.get_role_run(
-                f"{existing_run_id}-{role}-1"
-            )
+            existing_run = role_store.get_role_run(existing_role_run_id)
             if existing_run is not None:
                 existing_status = existing_run.get("status", "unknown")
                 if existing_status == "completed":
@@ -502,7 +520,7 @@ def role_call_impl(
                                 artifacts_result[key] = stored_artifacts[key]
                     return {
                         "role_run_id": existing_run.get("role_run_id", ""),
-                        "run_id": existing_run_id,
+                        "run_id": existing_run.get("run_id", ""),
                         "role": role,
                         "status": "completed",
                         "control_summary": control_summary or {},
@@ -512,7 +530,7 @@ def role_call_impl(
                 # Still running or failed — return current status
                 return {
                     "role_run_id": existing_run.get("role_run_id", ""),
-                    "run_id": existing_run_id,
+                    "run_id": existing_run.get("run_id", ""),
                     "role": role,
                     "status": existing_status,
                     "message": f"Idempotent key '{idempotency_key}' is already in use (status: {existing_status}).",
@@ -526,9 +544,9 @@ def role_call_impl(
     attempt = role_store.get_attempt_count(run_id, role) + 1
     role_run_id = _generate_role_run_id(run_id, role, attempt)
 
-    # Save idempotency record immediately after creating the run
+    # Save idempotency record with role_run_id (not run_id)
     if idempotency_key:
-        role_store.save_idempotency_record(idempotency_scope, run_id)
+        role_store.save_idempotency_record(idempotency_scope, role_run_id)
 
     role_run = role_store.create_role_run(
         role=role,
@@ -565,12 +583,38 @@ def role_call_impl(
             },
         }
 
-    openhands_task_id = conv_response.get("task_id", "")
-    conversation_id = conv_response.get("conversation_id", "")
+    # Unified job_id: try multiple possible field names from OpenHands response
+    job_id = (
+        conv_response.get("task_id")
+        or conv_response.get("conversation_id")
+        or conv_response.get("id")
+        or conv_response.get("app_conversation_id")
+        or ""
+    )
+
+    if not job_id:
+        role_store.update_role_run(
+            role_run_id, lifecycle_state="error"
+        )
+        return {
+            "status": "failed",
+            "error": {
+                "type": "MissingJobId",
+                "message": "OpenHands response did not include task_id/conversation_id/id/app_conversation_id",
+                "retryable": False,
+            },
+        }
+
+    conversation_id = (
+        conv_response.get("conversation_id")
+        or conv_response.get("id")
+        or conv_response.get("app_conversation_id")
+        or job_id
+    )
 
     role_store.update_role_run(
         role_run_id,
-        openhands_task_id=openhands_task_id,
+        openhands_task_id=job_id,
         lifecycle_state="main_prompt_sent",
     )
 
@@ -578,7 +622,7 @@ def role_call_impl(
     # Step 8: Wait for main response
     # ------------------------------------------------------------------
     main_response_data = _poll_task_status(
-        openhands_task_id, url=url
+        job_id, url=url
     )
     main_status = main_response_data.get("status", "unknown")
 
@@ -707,13 +751,21 @@ def role_call_impl(
             },
         }
 
-    summary_task_id = summary_conv_response.get("task_id", "")
+    summary_job_id = (
+        summary_conv_response.get("task_id")
+        or summary_conv_response.get("conversation_id")
+        or summary_conv_response.get("id")
+        or summary_conv_response.get("app_conversation_id")
+        or ""
+    )
+    if not summary_job_id:
+        summary_job_id = conversation_id or "unknown"
 
     # ------------------------------------------------------------------
     # Step 11: Wait for summary response
     # ------------------------------------------------------------------
     summary_response_data = _poll_task_status(
-        summary_task_id, url=url
+        summary_job_id, url=url
     )
     summary_text = summary_response_data.get("answer", "") or ""
 
@@ -762,9 +814,17 @@ def role_call_impl(
             repair_conv_response = None
 
         if repair_conv_response:
-            repair_task_id = repair_conv_response.get("task_id", "")
+            repair_job_id = (
+                repair_conv_response.get("task_id")
+                or repair_conv_response.get("conversation_id")
+                or repair_conv_response.get("id")
+                or repair_conv_response.get("app_conversation_id")
+                or ""
+            )
+            if not repair_job_id:
+                repair_job_id = conversation_id or "unknown"
             repair_response_data = _poll_task_status(
-                repair_task_id, url=url
+                repair_job_id, url=url
             )
             repair_text = repair_response_data.get("answer", "") or ""
             role_store.update_role_run(
