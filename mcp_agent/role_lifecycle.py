@@ -457,7 +457,7 @@ def wait_job_until_terminal(
         status = response.get("_normalized_status", "unknown")
 
         if status in ("completed", "completed_empty_result",
-                       "failed", "error", "cancelled", "timeout"):
+                       "failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
             return (status, response)
 
         # Still running — wait
@@ -1098,7 +1098,7 @@ def role_lifecycle_wait_impl(
         if main_status in ("completed", "completed_empty_result"):
             main_completed = True
             break
-        elif main_status in ("failed", "error", "cancelled"):
+        elif main_status in ("failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
             role_store.update_role_run(
                 role_run_id,
                 status=main_status,
@@ -1129,6 +1129,19 @@ def role_lifecycle_wait_impl(
             "role": role_run.get("role", ""),
             "timeout": True,
             "message": "Role is still running. Call role_wait again with the same role_run_id.",
+        }
+
+    # ------------------------------------------------------------------
+    # Explicit guard: do not proceed if main job never completed (Blocker 1)
+    # ------------------------------------------------------------------
+    if not main_completed:
+        return {
+            "status": "running",
+            "timeout": True,
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "message": "Main job did not complete. Role is still running.",
         }
 
     main_response = main_response_data.get("answer", "") or ""
@@ -1333,8 +1346,8 @@ def role_lifecycle_wait_impl(
         poll_interval_seconds=poll_interval_seconds,
     )
 
-    if summary_status == "timeout":
-        # Deadline expired while waiting for summary — use fallback
+    if summary_status in ("timeout", "timed_out", "canceled"):
+        # Deadline expired or job terminated abnormally — use fallback
         summary_text = ""
     else:
         summary_text = summary_response_data.get("answer", "") or ""
@@ -1398,7 +1411,7 @@ def role_lifecycle_wait_impl(
                 poll_interval_seconds=poll_interval_seconds,
             )
 
-            if repair_status == "timeout":
+            if repair_status in ("timeout", "timed_out", "canceled"):
                 repair_text = ""
             else:
                 repair_text = repair_response_data.get("answer", "") or ""

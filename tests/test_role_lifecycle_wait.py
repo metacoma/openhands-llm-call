@@ -626,6 +626,133 @@ class TestRepairJobPolling(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Test 4: main job terminal failure statuses return failed (Test 4)
+# ---------------------------------------------------------------------------
+
+class TestMainJobTerminalFailure(unittest.TestCase):
+    """Test that main job terminal failure statuses return status='failed' (Test 4)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_rw_terminal_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_main_job_timeout_returns_failed(self, mock_get_status):
+        """Main job status=timeout -> role_wait returns failed."""
+        mock_get_status.return_value = {"_normalized_status": "timeout", "status": "timeout"}
+        role_run_id = _setup_store(self.tmpdir)
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id, timeout_seconds=300, poll_interval_seconds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertNotIn("timeout", result)
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_main_job_timed_out_returns_failed(self, mock_get_status):
+        """Main job status=timed_out -> role_wait returns failed."""
+        mock_get_status.return_value = {"_normalized_status": "timed_out", "status": "timed_out"}
+        role_run_id = _setup_store(self.tmpdir)
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id, timeout_seconds=300, poll_interval_seconds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_main_job_canceled_returns_failed(self, mock_get_status):
+        """Main job status=canceled -> role_wait returns failed."""
+        mock_get_status.return_value = {"_normalized_status": "canceled", "status": "canceled"}
+        role_run_id = _setup_store(self.tmpdir)
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id, timeout_seconds=300, poll_interval_seconds=5,
+        )
+        self.assertEqual(result["status"], "failed")
+
+
+# ---------------------------------------------------------------------------
+# Test 5: summary/repair job terminal statuses handled as terminal (Test 5)
+# ---------------------------------------------------------------------------
+
+class TestSummaryJobTerminalStatus(unittest.TestCase):
+    """Test that summary/repair job terminal statuses are handled correctly (Test 5)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_rw_summary_term_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_summary_job_timed_out_is_terminal(self, mock_start, mock_get_status):
+        """Summary job status=timed_out -> treated as terminal, not infinite polling."""
+        call_count = 0
+        def get_status_side_effect(task_id, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Main job -> completed
+                return {"_normalized_status": "completed", "status": "completed",
+                         "answer": json.dumps({"status": "completed", "role": "scout",
+                                               "summary": "Scout done.", "primary_artifact_name": "scout_report",
+                                               "blocking": False, "risk_level": "LOW", "action": None,
+                                               "blocking_summary": []})}
+            # Summary job -> timed_out (terminal)
+            return {"_normalized_status": "timed_out", "status": "timed_out"}
+        mock_get_status.side_effect = get_status_side_effect
+        mock_start.side_effect = [
+            {"task_id": "task-main", "conversation_id": "conv-1"},
+            {"task_id": "task-summary", "conversation_id": "conv-1"},
+        ]
+        role_run_id = _setup_store(self.tmpdir)
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id, timeout_seconds=300, poll_interval_seconds=5,
+        )
+        # Should return with some status (not hang), and polling should have stopped
+        self.assertIn(result["status"], ("completed", "failed", "timeout"))
+        # Should NOT have polled summary more than once (timed_out is terminal)
+        self.assertLessEqual(call_count, 3)
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_summary_job_canceled_is_terminal(self, mock_start, mock_get_status):
+        """Summary job status=canceled -> treated as terminal."""
+        call_count = 0
+        def get_status_side_effect(task_id, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"_normalized_status": "completed", "status": "completed",
+                         "answer": json.dumps({"status": "completed", "role": "scout",
+                                               "summary": "Scout done.", "primary_artifact_name": "scout_report",
+                                               "blocking": False, "risk_level": "LOW", "action": None,
+                                               "blocking_summary": []})}
+            return {"_normalized_status": "canceled", "status": "canceled"}
+        mock_get_status.side_effect = get_status_side_effect
+        mock_start.side_effect = [
+            {"task_id": "task-main", "conversation_id": "conv-1"},
+            {"task_id": "task-summary", "conversation_id": "conv-1"},
+        ]
+        role_run_id = _setup_store(self.tmpdir)
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id, timeout_seconds=300, poll_interval_seconds=5,
+        )
+        self.assertIn(result["status"], ("completed", "failed", "timeout"))
+        self.assertLessEqual(call_count, 3)
+
+
+# ---------------------------------------------------------------------------
 # Test 7: role_wait wrapped args (already in test_malformed_role_wait.py)
 # ---------------------------------------------------------------------------
 
