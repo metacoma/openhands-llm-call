@@ -2212,56 +2212,113 @@ def shttp_role_result_v2(
         pass
 
     artifacts_result: dict[str, Any] = {}
-    primary_artifacts: list[dict[str, str]] = []
-    for art in artifacts_list:
-        art_name = art.get("artifact_name", "")
-        is_summary = (
-            summary_artifact_name is not None
-            and art_name == summary_artifact_name
-        ) or (
-            summary_artifact_name is None and art_name.endswith("_summary")
-        )
-        if is_summary:
-            artifacts_result["summary"] = {
-                "artifact_name": art_name,
-                "artifact_path": art.get("artifact_path"),
-            }
-        else:
-            primary_artifacts.append({
-                "artifact_name": art_name,
-                "artifact_path": art.get("artifact_path"),
-            })
-    # Store first primary for backward compatibility; keep all in a list
-    if primary_artifacts:
-        artifacts_result["primary"] = primary_artifacts[0]
-        if len(primary_artifacts) > 1:
-            artifacts_result["primaries"] = primary_artifacts
+
+    # Prefer artifact refs stored in the role run record (exact paths).
+    # Fall back to scanning artifacts_list when the role run has no
+    # stored artifact refs.
+    stored_artifacts = None
+    if role_run.get("artifacts"):
+        try:
+            stored_artifacts = json.loads(role_run["artifacts"])
+        except (json.JSONDecodeError, TypeError):
+            stored_artifacts = None
+
+    if stored_artifacts and isinstance(stored_artifacts, dict):
+        # Use stored artifact refs directly (exact paths from role result)
+        for key in ("primary", "summary", "primaries"):
+            if key in stored_artifacts:
+                artifacts_result[key] = stored_artifacts[key]
+    else:
+        # Fallback: scan all artifacts in the run and classify them
+        primary_artifacts: list[dict[str, str]] = []
+        for art in artifacts_list:
+            art_name = art.get("artifact_name", "")
+            is_summary = (
+                summary_artifact_name is not None
+                and art_name == summary_artifact_name
+            ) or (
+                summary_artifact_name is None and art_name.endswith("_summary")
+            )
+            if is_summary:
+                artifacts_result["summary"] = {
+                    "artifact_name": art_name,
+                    "artifact_path": art.get("artifact_path"),
+                }
+            else:
+                primary_artifacts.append({
+                    "artifact_name": art_name,
+                    "artifact_path": art.get("artifact_path"),
+                })
+        # Store first primary for backward compatibility; keep all in a list
+        if primary_artifacts:
+            artifacts_result["primary"] = primary_artifacts[0]
+            if len(primary_artifacts) > 1:
+                artifacts_result["primaries"] = primary_artifacts
 
     result["artifacts"] = artifacts_result
 
-    # Optionally include full artifact content
+    # Optionally include full artifact content (exact path resolution)
     if normalized_include_full:
-        for art in artifacts_list:
-            art_name = art.get("artifact_name", "")
-            art_path = art.get("artifact_path", "")
-            if art_path:
-                try:
-                    # Use artifact_store.get() to read actual file content.
-                    # artifact_store.list() returns metadata-only dicts that
-                    # do NOT include a "content" key — only get() reads the
-                    # file and augments the metadata with "content".
-                    full_meta = artifact_store.get(
-                        run_id, artifact_name=art_name
+        warnings_list: list[str] = []
+
+        # Determine which artifact entries to load content for
+        artifacts_to_load: list[tuple[str, dict]] = []
+
+        # Summary artifact
+        if "summary" in artifacts_result:
+            artifacts_to_load.append(("summary", artifacts_result["summary"]))
+
+        # Primary artifact (first primary)
+        if "primary" in artifacts_result:
+            artifacts_to_load.append(("primary", artifacts_result["primary"]))
+
+        # Additional primaries (if >1)
+        if "primaries" in artifacts_result:
+            for i, prim_entry in enumerate(artifacts_result["primaries"]):
+                artifacts_to_load.append((f"primaries[{i}]", prim_entry))
+
+        # Load content by exact path for each artifact entry
+        for label, art_entry in artifacts_to_load:
+            art_name = art_entry.get("artifact_name", "")
+            art_path = art_entry.get("artifact_path", "")
+
+            if not art_path:
+                warnings_list.append(
+                    f"missing artifact_path for {label} {art_name}"
+                )
+                continue
+
+            try:
+                full_meta = artifact_store.get_by_path(art_path)
+                full_content = full_meta.get("content", "")
+
+                # Validate artifact_name matches
+                loaded_name = full_meta.get("artifact_name", "")
+                if loaded_name and art_name and loaded_name != art_name:
+                    warnings_list.append(
+                        f"artifact name mismatch while loading full artifact "
+                        f"{label}: expected {art_name}, got {loaded_name}"
                     )
-                    full_content = (
-                        full_meta["content"] if full_meta else ""
-                    )
-                    if art_name.endswith("_summary"):
-                        result.setdefault("summary_artifact", full_content)
-                    else:
-                        result.setdefault("primary_artifact", full_content)
-                except Exception:
-                    pass
+                    # Still attach content but warn
+
+                # Attach content to the artifact metadata object
+                art_entry["content"] = full_content
+
+                # Also set top-level key for backward compatibility
+                if label == "summary":
+                    result.setdefault("summary_artifact", full_content)
+                elif label == "primary":
+                    result.setdefault("primary_artifact", full_content)
+                # primaries entries don't get top-level keys (no compat precedent)
+
+            except (ValueError, FileNotFoundError) as exc:
+                warnings_list.append(
+                    f"failed to load full artifact {label} {art_name} at "
+                    f"{art_path}: {exc}"
+                )
+
+        if warnings_list:
+            result["warnings"] = warnings_list
 
     return result
 

@@ -782,14 +782,51 @@ paths (not content by default).
 
 **Response (with `include_full_artifacts=true`):**
 
-Same as above, plus:
+Same as above, with `content` attached to each artifact entry and full content also
+available as top-level keys for backward compatibility:
 
 ```json
 {
-  "primary_artifact": "<full content>",
-  "summary_artifact": "<full content>"
+  "role_run_id": "...",
+  "run_id": "...",
+  "role": "architect",
+  "status": "completed",
+  "control_summary": { ... },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "architect_plan",
+      "artifact_path": "...",
+      "content": "<full primary content>"
+    },
+    "summary": {
+      "artifact_name": "architect_summary",
+      "artifact_path": "...",
+      "content": "<full summary content>"
+    }
+  },
+  "primary_artifact": "<full primary content>",
+  "summary_artifact": "<full summary content>"
 }
 ```
+
+When an artifact fails to load, a `warnings` array is included:
+
+```json
+{
+  "warnings": [
+    "failed to load full artifact summary scout_summary at <path>: artifact not found: <path>"
+  ]
+}
+```
+
+**Notes:**
+
+- `shttp_role_result_v2(include_full_artifacts=true)` loads full artifact content by exact
+  `artifact_path` using `ArtifactStore.get_by_path()`.
+- Default v2 result (`include_full_artifacts=false`) returns only artifact references and
+  control summary — no full content.
+- Full artifact content loading is intended for debugging/inspection and may return warnings
+  if artifacts are missing or have name mismatches.
 
 **Error response:**
 

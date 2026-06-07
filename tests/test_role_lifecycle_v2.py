@@ -1531,6 +1531,406 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
         self.assertIn("Scout completed", result_v2["primary_artifact"])
 
 
+class TestV2ResultExactArtifactPath(unittest.TestCase):
+    """Test shttp_role_result_v2 exact artifact path resolution for include_full_artifacts."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_v2_exact_path_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+        # Reset the role_tools singleton so it picks up the new state_dir
+        import mcp_agent.role_tools as rt_mod
+        rt_mod._role_store = None
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        import mcp_agent.role_tools as rt_mod
+        rt_mod._role_store = None
+
+    def test_include_full_artifacts_uses_exact_primary_path(self):
+        """Test 1: same artifact_name, different role_run_id — returns exact content by path."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_store import RoleRunStore
+        from mcp_agent.server import shttp_role_result_v2
+
+        store = ArtifactStore()
+        role_store = RoleRunStore()
+
+        # Create two artifacts with same artifact_name in same run_id
+        meta1 = store.save(
+            run_id="run-exact-1",
+            role_run_id="run-exact-1-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="first scout report content",
+        )
+        meta2 = store.save(
+            run_id="run-exact-1",
+            role_run_id="run-exact-1-scout-2",
+            role="scout",
+            artifact_name="scout_report",
+            content="second scout report content",
+        )
+        # Also create a summary artifact
+        meta_sum = store.save(
+            run_id="run-exact-1",
+            role_run_id="run-exact-1-scout-2",
+            role="scout",
+            artifact_name="scout_summary",
+            content="summary content",
+        )
+
+        # Create a role run record that points to the SECOND artifact
+        role_store.create_role_run(
+            role="scout",
+            run_id="run-exact-1",
+            role_run_id="run-exact-1-scout-2",
+            openhands_task_id="task-exact-1",
+        )
+        role_store.update_role_run(
+            "run-exact-1-scout-2",
+            status="completed",
+            lifecycle_state="completed",
+            result_summary=json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_name": "scout_report",
+                    "artifact_path": meta2["artifact_path"],
+                },
+                "summary": {
+                    "artifact_name": "scout_summary",
+                    "artifact_path": meta_sum["artifact_path"],
+                },
+            }),
+        )
+
+        # Call result_v2 with include_full_artifacts=true
+        result_v2 = shttp_role_result_v2(
+            role_run_id="run-exact-1-scout-2",
+            include_full_artifacts=True,
+            return_control_summary=True,
+        )
+
+        self.assertEqual(result_v2["status"], "completed")
+
+        # Assert primary content is from the SECOND artifact (exact path match)
+        self.assertIn("primary_artifact", result_v2)
+        self.assertEqual(result_v2["primary_artifact"], "second scout report content")
+
+        # Assert it does NOT contain the first artifact's content
+        self.assertNotIn("first scout report", result_v2["primary_artifact"])
+
+        # Assert content is also attached to artifacts.primary
+        self.assertIn("artifacts", result_v2)
+        self.assertIn("primary", result_v2["artifacts"])
+        self.assertIn("content", result_v2["artifacts"]["primary"])
+        self.assertEqual(
+            result_v2["artifacts"]["primary"]["content"],
+            "second scout report content",
+        )
+
+    def test_include_full_artifacts_uses_exact_summary_path(self):
+        """Test 2: same artifact_name, different role_run_id — summary uses exact path."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_store import RoleRunStore
+        from mcp_agent.server import shttp_role_result_v2
+
+        store = ArtifactStore()
+        role_store = RoleRunStore()
+
+        # Create two summary artifacts with same name in same run_id
+        meta_sum1 = store.save(
+            run_id="run-exact-2",
+            role_run_id="run-exact-2-scout-1",
+            role="scout",
+            artifact_name="scout_summary",
+            content="first summary content",
+        )
+        meta_sum2 = store.save(
+            run_id="run-exact-2",
+            role_run_id="run-exact-2-scout-2",
+            role="scout",
+            artifact_name="scout_summary",
+            content="second summary content",
+        )
+        # Create a primary artifact
+        meta_pri = store.save(
+            run_id="run-exact-2",
+            role_run_id="run-exact-2-scout-2",
+            role="scout",
+            artifact_name="scout_report",
+            content="primary content",
+        )
+
+        # Role run points to SECOND summary
+        role_store.create_role_run(
+            role="scout",
+            run_id="run-exact-2",
+            role_run_id="run-exact-2-scout-2",
+            openhands_task_id="task-exact-2",
+        )
+        role_store.update_role_run(
+            "run-exact-2-scout-2",
+            status="completed",
+            lifecycle_state="completed",
+            result_summary=json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_name": "scout_report",
+                    "artifact_path": meta_pri["artifact_path"],
+                },
+                "summary": {
+                    "artifact_name": "scout_summary",
+                    "artifact_path": meta_sum2["artifact_path"],
+                },
+            }),
+        )
+
+        result_v2 = shttp_role_result_v2(
+            role_run_id="run-exact-2-scout-2",
+            include_full_artifacts=True,
+            return_control_summary=True,
+        )
+
+        self.assertEqual(result_v2["status"], "completed")
+        self.assertIn("summary_artifact", result_v2)
+        self.assertEqual(result_v2["summary_artifact"], "second summary content")
+        self.assertNotIn("first summary", result_v2["summary_artifact"])
+
+    def test_missing_exact_path_returns_warning(self):
+        """Test 3: missing artifact path returns warning, not silent failure."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_store import RoleRunStore
+        from mcp_agent.server import shttp_role_result_v2
+
+        store = ArtifactStore()
+        role_store = RoleRunStore()
+
+        # Create a primary artifact
+        meta_pri = store.save(
+            run_id="run-exact-3",
+            role_run_id="run-exact-3-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="primary content",
+        )
+
+        # Role run points to a non-existent summary path
+        role_store.create_role_run(
+            role="scout",
+            run_id="run-exact-3",
+            role_run_id="run-exact-3-scout-1",
+            openhands_task_id="task-exact-3",
+        )
+        role_store.update_role_run(
+            "run-exact-3-scout-1",
+            status="completed",
+            lifecycle_state="completed",
+            result_summary=json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_name": "scout_report",
+                    "artifact_path": meta_pri["artifact_path"],
+                },
+                "summary": {
+                    "artifact_name": "scout_summary",
+                    "artifact_path": "run-exact-3/nonexistent_scout_summary.artifact",
+                },
+            }),
+        )
+
+        result_v2 = shttp_role_result_v2(
+            role_run_id="run-exact-3-scout-1",
+            include_full_artifacts=True,
+            return_control_summary=True,
+        )
+
+        self.assertEqual(result_v2["status"], "completed")
+        # Primary should still load successfully
+        self.assertIn("primary_artifact", result_v2)
+        self.assertEqual(result_v2["primary_artifact"], "primary content")
+        # Warning should be present for the missing summary
+        self.assertIn("warnings", result_v2)
+        self.assertTrue(len(result_v2["warnings"]) > 0)
+        # Warning should mention the failure
+        warning_text = " ".join(result_v2["warnings"])
+        self.assertIn("scout_summary", warning_text.lower())
+
+    def test_artifact_name_mismatch_returns_warning(self):
+        """Test 4: artifact name mismatch returns warning."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_store import RoleRunStore
+        from mcp_agent.server import shttp_role_result_v2
+
+        store = ArtifactStore()
+        role_store = RoleRunStore()
+
+        # Create an artifact with artifact_name="architect_plan"
+        meta_arch = store.save(
+            run_id="run-exact-4",
+            role_run_id="run-exact-4-architect-1",
+            role="architect",
+            artifact_name="architect_plan",
+            content="architect plan content",
+        )
+
+        # Create a summary
+        meta_sum = store.save(
+            run_id="run-exact-4",
+            role_run_id="run-exact-4-architect-1",
+            role="architect",
+            artifact_name="architect_summary",
+            content="architect summary",
+        )
+
+        # Role run says primary artifact_name is "scout_report" but path points to architect_plan
+        role_store.create_role_run(
+            role="architect",
+            run_id="run-exact-4",
+            role_run_id="run-exact-4-architect-1",
+            openhands_task_id="task-exact-4",
+        )
+        role_store.update_role_run(
+            "run-exact-4-architect-1",
+            status="completed",
+            lifecycle_state="completed",
+            result_summary=json.dumps({
+                "status": "completed",
+                "role": "architect",
+                "summary": "Architect completed.",
+                "primary_artifact_name": "architect_plan",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_name": "scout_report",  # Mismatch!
+                    "artifact_path": meta_arch["artifact_path"],
+                },
+                "summary": {
+                    "artifact_name": "architect_summary",
+                    "artifact_path": meta_sum["artifact_path"],
+                },
+            }),
+        )
+
+        result_v2 = shttp_role_result_v2(
+            role_run_id="run-exact-4-architect-1",
+            include_full_artifacts=True,
+            return_control_summary=True,
+        )
+
+        self.assertEqual(result_v2["status"], "completed")
+        self.assertIn("warnings", result_v2)
+        warning_text = " ".join(result_v2["warnings"])
+        self.assertIn("mismatch", warning_text.lower())
+
+    def test_default_result_no_content(self):
+        """Test 5: default result (include_full_artifacts=false) does not include content."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_store import RoleRunStore
+        from mcp_agent.server import shttp_role_result_v2
+
+        store = ArtifactStore()
+        role_store = RoleRunStore()
+
+        meta_pri = store.save(
+            run_id="run-exact-5",
+            role_run_id="run-exact-5-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="should not appear",
+        )
+        meta_sum = store.save(
+            run_id="run-exact-5",
+            role_run_id="run-exact-5-scout-1",
+            role="scout",
+            artifact_name="scout_summary",
+            content="also should not appear",
+        )
+
+        role_store.create_role_run(
+            role="scout",
+            run_id="run-exact-5",
+            role_run_id="run-exact-5-scout-1",
+            openhands_task_id="task-exact-5",
+        )
+        role_store.update_role_run(
+            "run-exact-5-scout-1",
+            status="completed",
+            lifecycle_state="completed",
+            result_summary=json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_name": "scout_report",
+                    "artifact_path": meta_pri["artifact_path"],
+                },
+                "summary": {
+                    "artifact_name": "scout_summary",
+                    "artifact_path": meta_sum["artifact_path"],
+                },
+            }),
+        )
+
+        result_v2 = shttp_role_result_v2(
+            role_run_id="run-exact-5-scout-1",
+            include_full_artifacts=False,
+            return_control_summary=True,
+        )
+
+        self.assertEqual(result_v2["status"], "completed")
+        # Artifact refs should be present
+        self.assertIn("artifacts", result_v2)
+        self.assertIn("primary", result_v2["artifacts"])
+        self.assertIn("artifact_path", result_v2["artifacts"]["primary"])
+        # Full content should NOT be present
+        self.assertNotIn("content", result_v2["artifacts"]["primary"])
+        self.assertNotIn("primary_artifact", result_v2)
+        self.assertNotIn("summary_artifact", result_v2)
+
+
 class TestV2SummarySchema(unittest.TestCase):
     """Test v2 summary schema enforcement."""
 
