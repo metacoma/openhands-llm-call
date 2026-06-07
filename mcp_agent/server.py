@@ -1410,8 +1410,8 @@ def _build_another_role_running_error(
 
 
 # Legacy role tools — kept as internal helpers but NOT exposed to
-# Head of IT.  They remain available for debugging / backward compat
-# when ``EXPOSE_LEGACY_ROLE_TOOLS=true`` is set.
+# Head of IT.  Decorated with @MCP.tool() removed so they are invisible
+# to MCP tool discovery.  Available for debugging as plain Python functions.
 def role_start(
     role: str,
     prompt: Any = None,

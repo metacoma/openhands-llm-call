@@ -34,7 +34,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from .artifact_store import ArtifactStore
+from .artifact_store import ArtifactStore, _generate_artifact_id
 from .lock_manager import RoleLockManager
 from .prompt_renderer import render_prompt
 from .role_store import RoleRunStore, _generate_run_id, _generate_role_run_id
@@ -719,7 +719,11 @@ def role_call_impl(
     )
 
     if summary_meta is None:
-        summary_artifact_id = ""
+        # Defensive: generate a synthetic artifact_id when save() fails.
+        # This should not happen in practice since save() always returns meta.
+        summary_artifact_id = _generate_artifact_id(
+            run_id, role, 1, role_spec.summary_artifact
+        )
     else:
         summary_artifact_id = summary_meta.get("artifact_id", "")
 
