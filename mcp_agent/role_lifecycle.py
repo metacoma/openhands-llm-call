@@ -281,46 +281,54 @@ def start_role_v2_impl(
         #   3. A role_run_id — look up via role_store
         content = None
 
-        # Strategy 1: Parse run_id + artifact_name from a path-like reference
-        if "/" in ref_str or "\\" in ref_str:
-            parts = ref_str.replace("\\", "/").split("/")
-            if len(parts) >= 2:
-                candidate_run_id = parts[0]
-                filename = parts[-1]
-                # Extract artifact_name from filename like "run-scout-1_scout_report.artifact"
-                base = filename.replace(".artifact", "").replace(".meta.json", "")
-                # artifact_name is the last underscore-separated segment
-                candidate_artifact_name = base.rsplit("_", 1)[-1] if "_" in base else base
-                try:
-                    meta = artifact_store.get(candidate_run_id, artifact_name=artifact_name)
-                    if meta and not meta.get("content_empty", True):
-                        # Verify the resolved artifact's name matches the expected key
-                        if meta.get("artifact_name") != artifact_name:
-                            return {
-                                "status": "failed",
-                                "error": {
-                                    "type": "ArtifactNameMismatch",
-                                    "message": f"artifact name mismatch: expected {artifact_name}, got {meta.get('artifact_name')}",
-                                    "retryable": False,
-                                },
-                            }
-                        content = meta["content"]
-                except ValueError:
-                    pass  # Invalid run_id format — try next strategy
-
-            # Strategy 2 removed: artifact_store.list("") always raises ValueError
-            # because _safe_component rejects empty strings. If Strategy 1
-            # fails, the artifact is genuinely not found.
-
-            if content is None:
+        # --- Strategy 1: Exact path resolution (path-like references) ---
+        # A reference is path-like if it contains '/' and ends with '.artifact'.
+        # This avoids false positives for logical artifact IDs.
+        if "/" in ref_str and ref_str.endswith(".artifact"):
+            try:
+                meta = artifact_store.get_by_path(ref_str)
+                # Validate artifact_name matches the input_artifacts key
+                if meta.get("artifact_name") != artifact_name:
+                    return {
+                        "status": "failed",
+                        "error": {
+                            "type": "ArtifactNameMismatch",
+                            "message": f"artifact name mismatch: expected {artifact_name}, got {meta.get('artifact_name')}",
+                            "retryable": False,
+                        },
+                    }
+                content = meta["content"]
+            except (ValueError, FileNotFoundError) as exc:
                 return {
                     "status": "failed",
                     "error": {
-                        "type": "ArtifactNotFound",
-                        "message": f"artifact not found: {artifact_name}",
+                        "type": "ArtifactNotFound" if isinstance(exc, FileNotFoundError) else "ArtifactReadError",
+                        "message": str(exc),
                         "retryable": False,
                     },
                 }
+
+        # --- Strategy 2: Fallback to logical name resolution ---
+        # If ref_str is not path-like, try to resolve by artifact_name.
+        elif content is None:
+            try:
+                meta = artifact_store.get(
+                    metadata.get("run_id", ""), artifact_name=artifact_name
+                )
+                if meta and not meta.get("content_empty", True):
+                    content = meta["content"]
+            except ValueError:
+                pass  # Invalid run_id — skip fallback
+
+        if content is None:
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "ArtifactNotFound",
+                    "message": f"artifact not found: {artifact_name}",
+                    "retryable": False,
+                },
+            }
 
         if not content.strip():
             return {

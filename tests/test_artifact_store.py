@@ -805,5 +805,134 @@ class TestEmptyArtifactDiagnostics(unittest.TestCase):
         self.assertTrue(result.get("valid_role_report"))
 
 
+class TestArtifactStoreGetByPath(unittest.TestCase):
+    """Tests for ArtifactStore.get_by_path() exact path resolution."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_get_by_path_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+
+    def test_get_by_path_reads_exact_artifact(self):
+        """Test 1: get_by_path reads the exact artifact saved."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        meta = store.save(
+            run_id="run-1",
+            role_run_id="run-1-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="artifact one",
+        )
+        result = store.get_by_path(meta["artifact_path"])
+        self.assertEqual(result["content"], "artifact one")
+        self.assertEqual(result["artifact_name"], "scout_report")
+        self.assertEqual(result["role_run_id"], "run-1-scout-1")
+
+    def test_get_by_path_same_name_different_role_run_id(self):
+        """Test 2: same artifact_name, different role_run_id — reads exact path."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        meta1 = store.save(
+            run_id="run-1",
+            role_run_id="run-1-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="first",
+        )
+        meta2 = store.save(
+            run_id="run-1",
+            role_run_id="run-1-scout-2",
+            role="scout",
+            artifact_name="scout_report",
+            content="second",
+        )
+        # Call get_by_path with the SECOND artifact's path
+        result = store.get_by_path(meta2["artifact_path"])
+        self.assertEqual(result["content"], "second")
+        self.assertEqual(result["role_run_id"], "run-1-scout-2")
+        # Verify it does NOT return the first artifact
+        self.assertNotEqual(result["content"], "first")
+
+    def test_get_by_path_missing_artifact_file(self):
+        """Test 5: missing artifact path fails clearly."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(FileNotFoundError) as ctx:
+            store.get_by_path("run-1/missing_scout_report.artifact")
+        self.assertIn("artifact not found", str(ctx.exception).lower())
+
+    def test_get_by_path_missing_metadata(self):
+        """Test 6: .artifact without .meta.json fails clearly."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        # Create artifact file manually without metadata
+        run_dir = os.path.join(self.tmpdir, "run-1")
+        os.makedirs(run_dir, exist_ok=True)
+        artifact_file = os.path.join(run_dir, "run-1-scout-1_scout_report.artifact")
+        with open(artifact_file, "w") as f:
+            f.write("orphan content")
+        with self.assertRaises(ValueError) as ctx:
+            store.get_by_path("run-1/run-1-scout-1_scout_report.artifact")
+        self.assertIn("metadata not found", str(ctx.exception).lower())
+
+    def test_get_by_path_path_traversal_rejected(self):
+        """Test 7: path traversal rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError) as ctx:
+            store.get_by_path("../outside.artifact")
+        self.assertIn("invalid artifact path", str(ctx.exception).lower())
+
+    def test_get_by_path_metadata_path_mismatch(self):
+        """Test: metadata artifact_path does not match requested path."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        meta = store.save(
+            run_id="run-1",
+            role_run_id="run-1-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="test content",
+        )
+        # Tamper with metadata to have different artifact_path
+        # artifact_path is like "run-1/run-1-scout-1_scout_report.artifact"
+        meta_rel = meta["artifact_path"] + ".meta.json"
+        meta_file = os.path.join(self.tmpdir, meta_rel)
+        with open(meta_file, "r") as f:
+            meta_data = json.load(f)
+        meta_data["artifact_path"] = "run-1/tampered_scout_report.artifact"
+        with open(meta_file, "w") as f:
+            json.dump(meta_data, f)
+        with self.assertRaises(ValueError) as ctx:
+            store.get_by_path(meta["artifact_path"])
+        self.assertIn("path mismatch", str(ctx.exception).lower())
+
+    def test_get_by_path_invalid_suffix_rejected(self):
+        """Test: non-.artifact suffix rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.get_by_path("run-1/some_file.txt")
+
+    def test_get_by_path_empty_path_rejected(self):
+        """Test: empty path rejected."""
+        from mcp_agent.artifact_store import ArtifactStore
+
+        store = ArtifactStore()
+        with self.assertRaises(ValueError):
+            store.get_by_path("")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1708,5 +1708,170 @@ class TestV2SummarySchema(unittest.TestCase):
         self.assertIsNone(control_summary["action"])
 
 
+class TestV2ExactPathResolution(unittest.TestCase):
+    """Tests for v2 input artifact exact path resolution."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_v2_exact_path_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_v2_resolver_reads_exact_path(self, mock_start, mock_poll):
+        """Test 3: v2 input resolver reads exact path for path-like refs."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        store = ArtifactStore()
+        meta1 = store.save(
+            run_id="run-exact-1",
+            role_run_id="run-exact-1-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FIRST scout report content",
+        )
+        meta2 = store.save(
+            run_id="run-exact-1",
+            role_run_id="run-exact-1-scout-2",
+            role="scout",
+            artifact_name="scout_report",
+            content="SECOND scout report content",
+        )
+
+        mock_start.return_value = {
+            "task_id": "task-1",
+            "conversation_id": "conv-1",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "architect",
+                "summary": "done",
+                "primary_artifact_name": "architect_plan",
+                "blocking": False,
+                "risk_level": None,
+                "action": None,
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="architect",
+            user_task="Test task",
+            input_artifacts={
+                "scout_report": meta2["artifact_path"],
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # Verify the main prompt (first call) contained SECOND content, not FIRST
+        main_prompt = mock_start.call_args_list[0][1]["prompt"]
+        self.assertIn("SECOND scout report content", main_prompt)
+        self.assertNotIn("FIRST scout report content", main_prompt)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_v2_resolver_artifact_name_mismatch(self, mock_start):
+        """Test 4: artifact name mismatch fails before role execution."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        store = ArtifactStore()
+        plan_meta = store.save(
+            run_id="run-mismatch-1",
+            role_run_id="run-mismatch-1-architect-1",
+            role="architect",
+            artifact_name="architect_plan",
+            content="architect plan content",
+        )
+
+        result = start_role_v2_impl(
+            role="architect",
+            user_task="Test task",
+            input_artifacts={
+                "scout_report": plan_meta["artifact_path"],
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "ArtifactNameMismatch")
+        self.assertIn("scout_report", result["error"]["message"])
+        self.assertIn("architect_plan", result["error"]["message"])
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_v2_resolver_missing_path_fails(self, mock_start):
+        """Test 5: missing artifact path fails clearly."""
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        result = start_role_v2_impl(
+            role="architect",
+            user_task="Test task",
+            input_artifacts={
+                "scout_report": "run-1/missing_scout_report.artifact",
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("artifact not found", result["error"]["message"].lower())
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_v2_path_like_detection_narrow(self, mock_start):
+        """Test: path-like detection only triggers on .artifact suffix."""
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        result = start_role_v2_impl(
+            role="architect",
+            user_task="Test task",
+            input_artifacts={
+                "scout_report": "some/path/without/artifact",
+            },
+            api_key="test-key",
+        )
+        # Should fail with ArtifactNotFound (no run_id context for fallback)
+        self.assertEqual(result["status"], "failed")
+
+
+class TestReviewerFallbackRegression(unittest.TestCase):
+    """Ensure PR #22 reviewer fallback remains correct."""
+
+    def test_reviewer_fallback_is_blocker(self):
+        """Reviewer fallback without derivable action returns BLOCKER."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        fb = safe_fallback_summary(
+            role="reviewer",
+            summary_artifact_name="reviewer_summary",
+            is_reviewer=True,
+            main_artifact_content="",
+        )
+        self.assertTrue(fb["valid"])
+        self.assertEqual(fb["action"], "BLOCKER")
+        self.assertTrue(fb["blocking"])
+        self.assertEqual(fb["risk_level"], "HIGH")
+
+    def test_non_reviewer_fallback_has_null_action(self):
+        """Non-reviewer fallback has action=null."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        fb = safe_fallback_summary(
+            role="architect",
+            summary_artifact_name="architect_summary",
+            is_reviewer=False,
+        )
+        self.assertTrue(fb["valid"])
+        self.assertIsNone(fb["action"])
+
+
 if __name__ == "__main__":
     unittest.main()
