@@ -344,7 +344,8 @@ worker role.  It executes the **full two-step lifecycle** synchronously:
 7. Return ``control_summary`` + ``artifact_id`` references only — never
    artifact content.
 
-Head of IT never calls ``role_wait``, ``role_start``, or ``artifact_get``.
+Head of IT calls ``role_call`` to start a role and ``role_wait`` to poll for completion.
+Head of IT never calls ``role_start``, ``role_status``, ``role_result``, or ``artifact_get``.
 The MCP server handles all waiting and artifact resolution internally.
 
 ### Single-threaded execution
