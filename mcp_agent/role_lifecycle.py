@@ -371,6 +371,7 @@ def _get_task_status_once(
     task_id: str,
     *,
     base_url: str | None = None,
+    correlation_id: str | None = None,
 ) -> dict[str, Any]:
     """Make a single HTTP GET to /v1/jobs/{task_id} and return the response.
 
@@ -383,6 +384,8 @@ def _get_task_status_once(
         The OpenHands task ID.
     base_url :
         OpenHands LLM base URL override.
+    correlation_id :
+        Optional correlation header for tracing.
 
     Returns
     -------

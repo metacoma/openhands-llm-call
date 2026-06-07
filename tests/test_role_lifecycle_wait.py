@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Ensure role store dir is set before any imports
 TEST_STATE_DIR = tempfile.mkdtemp(prefix="test_role_wait_")
-os.environ["OPENHANDS_ROLE_STATE_DIR"] = TEST_STATE_DIR
 
 from mcp_agent import role_lifecycle
 from mcp_agent.artifact_store import ArtifactStore
@@ -62,6 +61,8 @@ class TestRoleWaitTimeout(unittest.TestCase):
         os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
         import mcp_agent.role_lifecycle as rl
         rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
 
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     def test_timeout_respected_with_running_job(self, mock_get_status):
@@ -126,6 +127,10 @@ class TestRoleWaitSanitizedArtifacts(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
 
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
@@ -197,6 +202,10 @@ class TestRepeatedRoleWaitIdempotent(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
 
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
@@ -279,6 +288,10 @@ class TestFallbackSummaryPersisted(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
 
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
@@ -361,6 +374,8 @@ class TestRoleCallStartFailure(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
@@ -416,6 +431,8 @@ class TestRoleCallDedupe(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
         os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
