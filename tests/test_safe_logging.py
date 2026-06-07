@@ -219,9 +219,9 @@ roles:
             idempotency_key={"text": "test-wrapped-key"},
         )
 
-        self.assertEqual(result["status"], "completed")
+        # role_call is now non-blocking — returns running status
+        self.assertEqual(result["status"], "running")
         self.assertIn("role_run_id", result)
-        self.assertIn("control_summary", result)
 
 
 # ---------------------------------------------------------------------------

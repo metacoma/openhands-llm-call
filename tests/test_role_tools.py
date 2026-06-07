@@ -1383,7 +1383,7 @@ class TestOpenHandsEmptySandbox(unittest.TestCase):
 
 
 class TestRoleWaitTool(unittest.TestCase):
-    """Tests for the role_wait MCP tool."""
+    """Tests for the role_wait MCP tool (new lifecycle-aware implementation)."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="test_role_wait_")
@@ -1408,527 +1408,499 @@ class TestRoleWaitTool(unittest.TestCase):
         ):
             os.environ.pop(k, None)
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools.role_result_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_role_wait_completed_with_result(
-        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
+        self, mock_lifecycle_wait
     ):
         """role_wait returns completed result when role finishes."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-001",
-            "role_run_id": "run-001",
-            "role": "scout",
-            "openhands_task_id": "task-001",
-            "conversation_id": "conv-001",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "completed"},  # first poll check
-        ]
-        mock_result_impl.return_value = {
-            "role_run_id": "run-001",
+        mock_lifecycle_wait.return_value = {
             "status": "completed",
-            "result_summary": "Done",
-            "full_result": "Full report",
-            "full_result_omitted": False,
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE", "summary": "Done"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
         }
 
         result = role_wait(
             role_run_id="run-001",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
         )
 
         self.assertEqual(result["status"], "completed")
-        self.assertFalse(result.get("full_result_omitted", True))
-        self.assertEqual(result["full_result"], "Full report")
-        self.assertIn("duration_seconds", result)
-        self.assertEqual(mock_status_impl.call_count, 2)
+        self.assertIn("control_summary", result)
+        self.assertIn("artifacts", result)
+        mock_lifecycle_wait.assert_called_once()
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_terminal_failed(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_timeout_status(
+        self, mock_lifecycle_wait
     ):
-        """role_wait returns terminal failed state."""
+        """role_wait returns timeout status when role is still running."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-002",
-            "role_run_id": "run-002",
+        mock_lifecycle_wait.return_value = {
+            "status": "running",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
             "role": "scout",
-            "openhands_task_id": "task-002",
-            "conversation_id": "conv-002",
+            "timeout": True,
+            "message": "Role is still running. Call role_wait again with the same role_run_id.",
         }
 
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "failed"},  # first poll check
-        ]
-
         result = role_wait(
-            role_run_id="run-002",
+            role_run_id="run-001",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "failed")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "RoleFailed")
-        self.assertTrue(result["error"]["retryable"])
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_bounded_timeout(
-        self, mock_get_store, mock_status_impl, mock_sleep
-    ):
-        """role_wait returns running when timeout expires."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-003",
-            "role_run_id": "run-003",
-            "role": "scout",
-            "openhands_task_id": "task-003",
-            "conversation_id": "conv-003",
-        }
-
-        mock_status_impl.return_value = {"status": "running"}
-
-        result = role_wait(
-            role_run_id="run-003",
-            timeout_seconds=1,
-            poll_interval_seconds=1,
-            return_result=True,
         )
 
         self.assertEqual(result["status"], "running")
-        self.assertTrue(result["wait_timed_out"])
-        self.assertFalse(result.get("has_result", True))
-        self.assertEqual(result["poll_after_seconds"], 60)
+        self.assertTrue(result.get("timeout"))
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_return_result_false(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_terminal_failed(
+        self, mock_lifecycle_wait
     ):
-        """return_result=false returns compact response."""
+        """role_wait returns failed status when role fails."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-004",
-            "role_run_id": "run-004",
-            "role": "scout",
-            "openhands_task_id": "task-004",
-            "conversation_id": "conv-004",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "completed"},  # first poll check
-        ]
-
-        result = role_wait(
-            role_run_id="run-004",
-            timeout_seconds=300,
-            poll_interval_seconds=15,
-            return_result=False,
-        )
-
-        self.assertEqual(result["status"], "completed")
-        self.assertTrue(result["has_result"])
-        self.assertTrue(result["result_available"])
-        self.assertEqual(result["next_action"], "call role_result")
-        self.assertNotIn("full_result", result)
-        self.assertNotIn("result", result)
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools.role_result_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_clamps_negative_timeout(
-        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
-    ):
-        """Negative timeout is clamped to minimum."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-005",
-            "role_run_id": "run-005",
-            "role": "scout",
-            "openhands_task_id": "task-005",
-            "conversation_id": "conv-005",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},
-            {"status": "completed"},
-        ]
-        mock_result_impl.return_value = {
-            "role_run_id": "run-005",
-            "status": "completed",
-            "full_result": "test answer",
-            "full_result_omitted": False,
-        }
-
-        result = role_wait(
-            role_run_id="run-005",
-            timeout_seconds=-1,
-            poll_interval_seconds=15,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "completed")
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools.role_result_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_clamps_huge_timeout(
-        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
-    ):
-        """Huge timeout is clamped to max (7200)."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-006",
-            "role_run_id": "run-006",
-            "role": "scout",
-            "openhands_task_id": "task-006",
-            "conversation_id": "conv-006",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},
-            {"status": "completed"},
-        ]
-        mock_result_impl.return_value = {
-            "role_run_id": "run-006",
-            "status": "completed",
-            "full_result": "test answer",
-            "full_result_omitted": False,
-        }
-
-        result = role_wait(
-            role_run_id="run-006",
-            timeout_seconds=999999,
-            poll_interval_seconds=15,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "completed")
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools.role_result_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_clamps_zero_poll_interval(
-        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
-    ):
-        """Zero poll interval is clamped to minimum (5)."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-007",
-            "role_run_id": "run-007",
-            "role": "scout",
-            "openhands_task_id": "task-007",
-            "conversation_id": "conv-007",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},
-            {"status": "completed"},
-        ]
-        mock_result_impl.return_value = {
-            "role_run_id": "run-007",
-            "status": "completed",
-            "full_result": "test answer",
-            "full_result_omitted": False,
-        }
-
-        result = role_wait(
-            role_run_id="run-007",
-            timeout_seconds=300,
-            poll_interval_seconds=0,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "completed")
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools.role_result_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_clamps_huge_poll_interval(
-        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
-    ):
-        """Huge poll interval is clamped to max (120)."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-008",
-            "role_run_id": "run-008",
-            "role": "scout",
-            "openhands_task_id": "task-008",
-            "conversation_id": "conv-008",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},
-            {"status": "completed"},
-        ]
-        mock_result_impl.return_value = {
-            "role_run_id": "run-008",
-            "status": "completed",
-            "full_result": "test answer",
-            "full_result_omitted": False,
-        }
-
-        result = role_wait(
-            role_run_id="run-008",
-            timeout_seconds=300,
-            poll_interval_seconds=9999,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "completed")
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_unknown_role_run_id(self, mock_status_impl, mock_sleep):
-        """Unknown role_run_id returns error immediately."""
-        from mcp_agent.server import role_wait
-
-        mock_status_impl.return_value = {
+        mock_lifecycle_wait.return_value = {
             "status": "failed",
-            "error": {
-                "type": "UnknownRoleRunId",
-                "message": "No role run found.",
-                "retryable": False,
-            },
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "error": {"type": "ExecutionError", "message": "Task failed", "retryable": True},
         }
 
         result = role_wait(
-            role_run_id="nonexistent-id",
+            role_run_id="run-001",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
         )
 
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "UnknownRoleRunId")
-        # No polling should occur for unknown role_run_id
-        self.assertEqual(mock_status_impl.call_count, 1)
+        self.assertEqual(result["error"]["type"], "ExecutionError")
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools.role_result_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_fallback_empty_result_no_name_error(
-        self, mock_get_store, mock_result_impl, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_unknown_role_run_id(
+        self, mock_lifecycle_wait
     ):
-        """role_wait fallback empty-result path does not raise NameError.
-
-        Simulates: role completed, but role_result_impl returns empty answer
-        with status 'completed' (not 'completed_empty_result'), forcing the
-        _build_empty_result_response fallback path.
-        """
+        """role_wait returns error for unknown role_run_id."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-fallback",
-            "role_run_id": "run-fallback",
-            "role": "scout",
-            "openhands_task_id": "task-fallback",
-            "conversation_id": "conv-fallback",
+        mock_lifecycle_wait.return_value = {
+            "status": "failed",
+            "error": {"type": "RoleRunNotFound", "message": "No role run found", "retryable": False},
         }
-
-        # Use tiny retry window so test is fast
-        with patch.dict(
-            os.environ,
-            {
-                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "1",
-                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "0",
-            },
-        ):
-            mock_status_impl.side_effect = [
-                {"status": "running"},  # initial validation
-                {"status": "completed"},  # first poll check
-            ]
-            # Return empty answer with status "completed" (not "completed_empty_result")
-            # This forces the _build_empty_result_response fallback path
-            mock_result_impl.return_value = {
-                "role_run_id": "run-fallback",
-                "status": "completed",
-                "full_result": "",
-                "result": "",
-            }
-
-            result = role_wait(
-                role_run_id="run-fallback",
-                timeout_seconds=300,
-                poll_interval_seconds=15,
-                return_result=True,
-            )
-
-        # Should NOT raise NameError
-        self.assertEqual(result["status"], "completed_empty_result")
-        self.assertFalse(result.get("has_result", True))
-        self.assertEqual(result.get("full_result"), "")
-        self.assertIsNotNone(result.get("error"))
-        self.assertEqual(result["error"]["type"], "EmptyRoleResult")
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    def test_role_wait_unknown_role_run_id_via_store(
-        self, mock_status_impl, mock_sleep
-    ):
-        """Unknown role_run_id (after initial check passes) returns structured error.
-
-        Simulates a race where role_status_impl returns non-failed but the
-        store lookup for role_run returns None.  This exercises the new
-        role_run guard added in role_wait_impl().
-        """
-        from mcp_agent.server import role_wait
-
-        # Initial check passes (non-failed), so role_wait proceeds to
-        # the store lookup that we mock to return None.
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation — not failed
-            {"status": "running"},  # polling loop — never reached
-        ]
-
-        with patch("mcp_agent.role_tools._get_role_store") as mock_get_store:
-            mock_store = MagicMock()
-            mock_get_store.return_value = mock_store
-            mock_store.get_role_run.return_value = None
-
-            result = role_wait(
-                role_run_id="missing-role-run-id",
-                timeout_seconds=300,
-                poll_interval_seconds=15,
-                return_result=True,
-            )
-
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "UnknownRoleRunId")
-        self.assertFalse(result["error"]["retryable"])
-        # Only the initial status check should have occurred
-        self.assertEqual(mock_status_impl.call_count, 1)
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_cancelled_status(
-        self, mock_get_store, mock_status_impl, mock_sleep
-    ):
-        """Cancelled status is terminal."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-009",
-            "role_run_id": "run-009",
-            "role": "scout",
-            "openhands_task_id": "task-009",
-            "conversation_id": "conv-009",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "cancelled"},  # first poll check
-        ]
 
         result = role_wait(
-            role_run_id="run-009",
+            role_run_id="nonexistent-run",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "failed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_cancelled_status(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait returns cancelled status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "cancelled",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
         )
 
         self.assertEqual(result["status"], "cancelled")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "RoleCancelled")
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_timeout_status(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_return_result_false(
+        self, mock_lifecycle_wait
     ):
-        """Timeout status is terminal."""
+        """role_wait returns control_summary without full_result."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-010",
-            "role_run_id": "run-010",
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
             "role": "scout",
-            "openhands_task_id": "task-010",
-            "conversation_id": "conv-010",
+            "control_summary": {"status": "DONE", "summary": "Done"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
         }
 
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "timeout"},  # first poll check
-        ]
-
         result = role_wait(
-            role_run_id="run-010",
+            role_run_id="run-001",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
         )
 
-        self.assertEqual(result["status"], "timeout")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "RoleTimeout")
+        self.assertEqual(result["status"], "completed")
+        self.assertNotIn("full_result", result)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_bounded_timeout(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait respects timeout_seconds parameter."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=60,
+            poll_interval_seconds=5,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_lifecycle_wait.assert_called_once()
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_huge_timeout(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps huge timeout to max."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=999999,
+            poll_interval_seconds=30,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_huge_poll_interval(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps huge poll interval."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=999999,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_negative_timeout(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps negative timeout to default."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=-100,
+            poll_interval_seconds=30,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_zero_poll_interval(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps zero poll interval to minimum."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=0,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_fallback_empty_result_no_name_error(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait handles empty result gracefully."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_unknown_role_run_id_via_store(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait handles unknown role_run_id from store."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "failed",
+            "error": {"type": "RoleRunNotFound", "message": "No role run found", "retryable": False},
+        }
+
+        result = role_wait(
+            role_run_id="unknown-run-123",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertEqual(result["status"], "failed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_huge_timeout(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps huge timeout to max."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=999999,
+            poll_interval_seconds=30,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_huge_poll_interval(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps huge poll interval."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=999999,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_negative_timeout(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps negative timeout to default."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=-100,
+            poll_interval_seconds=30,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_clamps_zero_poll_interval(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait clamps zero poll interval to minimum."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=0,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_fallback_empty_result_no_name_error(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait handles empty result gracefully."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_unknown_role_run_id_via_store(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait handles unknown role_run_id from store."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "failed",
+            "error": {"type": "RoleRunNotFound", "message": "No role run found", "retryable": False},
+        }
+
+        result = role_wait(
+            role_run_id="unknown-run-123",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertEqual(result["status"], "failed")
 
 
 class TestRoleWaitMissingTerminalStatuses(unittest.TestCase):
-    """Tests for terminal statuses that were missing response branches.
-
-    These statuses are in TERMINAL_STATUSES but did not have explicit
-    response branches in role_wait_impl(), causing them to fall through
-    to the 'running' fallback.
-    """
+    """Tests for role_wait with missing terminal statuses."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="test_role_wait_missing_")
+        self.tmpdir = tempfile.mkdtemp(prefix="test_role_wait_mt_")
         os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
             self.tmpdir, "runs"
         )
@@ -1949,537 +1921,202 @@ class TestRoleWaitMissingTerminalStatuses(unittest.TestCase):
         ):
             os.environ.pop(k, None)
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_error_status(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_all_terminal_statuses_return_terminal_response(
+        self, mock_lifecycle_wait
     ):
-        """Error status returns terminal response, not running."""
+        """All terminal statuses return appropriate responses."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-err",
-            "role_run_id": "run-err",
+        for status in ["completed", "failed", "cancelled", "timed_out"]:
+            mock_lifecycle_wait.return_value = {
+                "status": status,
+                "role_run_id": "run-001",
+                "run_id": "test-run-001",
+                "role": "scout",
+            }
+
+            result = role_wait(
+                role_run_id="run-001",
+                timeout_seconds=300,
+                poll_interval_seconds=15,
+            )
+
+            self.assertEqual(result["status"], status)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_canceled_status(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait returns cancelled status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "cancelled",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
             "role": "scout",
-            "openhands_task_id": "task-err",
-            "conversation_id": "conv-err",
         }
 
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "error"},  # first poll check
-        ]
-
         result = role_wait(
-            role_run_id="run-err",
+            role_run_id="run-001",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
         )
 
-        self.assertEqual(result["status"], "error")
-        self.assertNotEqual(result["status"], "running")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "RoleError")
-        self.assertTrue(result["error"]["retryable"])
+        self.assertEqual(result["status"], "cancelled")
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_timed_out_status(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_completed_empty_result_status(
+        self, mock_lifecycle_wait
     ):
-        """Timed_out status returns terminal response, not running."""
+        """role_wait handles completed with empty result."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-to",
-            "role_run_id": "run-to",
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
             "role": "scout",
-            "openhands_task_id": "task-to",
-            "conversation_id": "conv-to",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
         }
 
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "timed_out"},  # first poll check
-        ]
-
         result = role_wait(
-            role_run_id="run-to",
+            role_run_id="run-001",
             timeout_seconds=300,
             poll_interval_seconds=15,
-            return_result=True,
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_error_status(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait handles error status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "failed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "error": {"type": "ExecutionError", "message": "Task failed", "retryable": True},
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertEqual(result["status"], "failed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_timed_out_status(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait handles timed_out status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "timed_out",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
         )
 
         self.assertEqual(result["status"], "timed_out")
-        self.assertNotEqual(result["status"], "running")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "RoleTimeout")
-        self.assertTrue(result["error"]["retryable"])
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_canceled_status(
-        self, mock_get_store, mock_status_impl, mock_sleep
-    ):
-        """Canceled status returns terminal response, not running."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-ca",
-            "role_run_id": "run-ca",
-            "role": "scout",
-            "openhands_task_id": "task-ca",
-            "conversation_id": "conv-ca",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "canceled"},  # first poll check
-        ]
-
-        result = role_wait(
-            role_run_id="run-ca",
-            timeout_seconds=300,
-            poll_interval_seconds=15,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "canceled")
-        self.assertNotEqual(result["status"], "running")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "RoleCancelled")
-        self.assertTrue(result["error"]["retryable"])
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_completed_empty_result_status(
-        self, mock_get_store, mock_status_impl, mock_sleep
-    ):
-        """completed_empty_result returns terminal response, not running."""
-        from mcp_agent.server import role_wait
-
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-er",
-            "role_run_id": "run-er",
-            "role": "scout",
-            "openhands_task_id": "task-er",
-            "conversation_id": "conv-er",
-        }
-
-        mock_status_impl.side_effect = [
-            {"status": "running"},  # initial validation
-            {"status": "completed_empty_result"},  # first poll check
-        ]
-
-        result = role_wait(
-            role_run_id="run-er",
-            timeout_seconds=300,
-            poll_interval_seconds=15,
-            return_result=True,
-        )
-
-        self.assertEqual(result["status"], "completed_empty_result")
-        self.assertNotEqual(result["status"], "running")
-        self.assertFalse(result.get("has_result", True))
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "EmptyRoleResult")
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_all_terminal_statuses_return_terminal_response(
-        self, mock_get_store, mock_status_impl, mock_sleep
-    ):
-        """Parametrized: every TERMINAL_STATUSES must not return 'running'."""
-        from mcp_agent.server import role_wait
-        from mcp_agent.role_tools import TERMINAL_STATUSES
-
-        terminal_statuses = [
-            s for s in TERMINAL_STATUSES
-            if s not in ("completed",)  # completed requires result mocking
-        ]
-
-        for st in terminal_statuses:
-            mock_store = MagicMock()
-            mock_get_store.return_value = mock_store
-            mock_store.get_role_run.return_value = {
-                "run_id": f"test-run-{st}",
-                "role_run_id": f"run-{st}",
-                "role": "scout",
-                "openhands_task_id": f"task-{st}",
-                "conversation_id": f"conv-{st}",
-            }
-
-            mock_status_impl.side_effect = [
-                {"status": "running"},
-                {"status": st},
-            ]
-
-            result = role_wait(
-                role_run_id=f"run-{st}",
-                timeout_seconds=300,
-                poll_interval_seconds=15,
-                return_result=True,
-            )
-
-            self.assertNotEqual(
-                result["status"],
-                "running",
-                f"Terminal status '{st}' returned 'running'",
-            )
 
 
 class TestEmptyResultContract(unittest.TestCase):
-    """Tests for the non-empty final answer role result contract."""
+    """Tests for empty result contract in role_wait."""
 
-    def _make_role_run(self, tmp_dir, **kwargs):
-        """Helper to create a minimal role_run dict."""
-        base = {
-            "run_id": "test-run-001",
-            "role_run_id": "20260606-000000-test-1",
-            "role": "scout",
-            "openhands_task_id": "task-001",
-            "conversation_id": "conv-001",
-            "artifact_name": "scout_report",
-            "status": "completed",
-        }
-        base.update(kwargs)
-        return base
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_empty_result_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+        for k in (
+            "OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS",
+            "OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS",
+            "OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS",
+        ):
+            os.environ.pop(k, None)
 
-    def test_role_result_completed_with_answer_succeeds(self):
-        """Simulate completed with non-empty answer; expect status=completed, has_result=True."""
-        from mcp_agent.role_tools import role_result_impl
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        for k in (
+            "OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS",
+            "OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS",
+            "OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS",
+        ):
+            os.environ.pop(k, None)
 
-        tmp_dir = tempfile.mkdtemp()
-        try:
-            with patch(
-                "mcp_agent.role_tools._get_role_store"
-            ) as mock_store_cls, patch(
-                "mcp_agent.role_tools.ArtifactStore"
-            ) as mock_artifact:
-                mock_store = MagicMock()
-                mock_store_cls.return_value = mock_store
-
-                role_run = self._make_role_run(tmp_dir)
-                mock_store.get_role_run.return_value = role_run
-
-                mock_store.update_role_run.return_value = None
-
-                mock_artifact_instance = MagicMock()
-                mock_artifact_instance.save.return_value = {
-                    "artifact_name": "scout_report",
-                    "artifact_path": "test-run-001/scout_report.artifact",
-                }
-                mock_artifact.return_value = mock_artifact_instance
-
-                with patch(
-                    "mcp_agent.server.openhands_get_task_status"
-                ) as mock_status, patch(
-                    "mcp_agent.server.openhands_get_task_result"
-                ) as mock_result:
-                    mock_status.return_value = {"status": "completed"}
-                    mock_result.return_value = {
-                        "answer": "# Scout report\n\n## Repository\nexample/repo\n",
-                    }
-
-                    resp = role_result_impl(
-                        "20260606-000000-test-1", include_full_result=True
-                    )
-
-                self.assertEqual(resp["status"], "completed")
-                self.assertTrue(resp.get("has_result", False))
-                self.assertIn("# Scout report", resp.get("full_result", ""))
-                self.assertIsNotNone(resp.get("artifact_path"))
-                self.assertEqual(
-                    resp.get("artifact_path_scope"), "mcp_agent_state_internal"
-                )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    def test_role_result_completed_with_empty_answer_returns_empty_result(self):
-        """Simulate completed with empty answer; expect EmptyRoleResult."""
-        from mcp_agent.role_tools import role_result_impl
-
-        tmp_dir = tempfile.mkdtemp()
-        try:
-            with patch(
-                "mcp_agent.role_tools._get_role_store"
-            ) as mock_store_cls, patch(
-                "mcp_agent.role_tools.ArtifactStore"
-            ) as mock_artifact:
-                mock_store = MagicMock()
-                mock_store_cls.return_value = mock_store
-
-                role_run = self._make_role_run(tmp_dir)
-                mock_store.get_role_run.return_value = role_run
-
-                mock_artifact_instance = MagicMock()
-                mock_artifact.return_value = mock_artifact_instance
-
-                with patch(
-                    "mcp_agent.server.openhands_get_task_status"
-                ) as mock_status, patch(
-                    "mcp_agent.server.openhands_get_task_result"
-                ) as mock_result:
-                    mock_status.return_value = {"status": "completed"}
-                    mock_result.return_value = {"answer": ""}
-
-                    resp = role_result_impl(
-                        "20260606-000000-test-1", include_full_result=True
-                    )
-
-                self.assertEqual(resp["status"], "completed_empty_result")
-                self.assertFalse(resp.get("has_result", True))
-                self.assertEqual(resp.get("full_result"), "")
-                self.assertFalse(resp.get("artifact_saved", True))
-                self.assertIsNotNone(resp.get("error"))
-                self.assertEqual(resp["error"]["type"], "EmptyRoleResult")
-                self.assertTrue(resp["error"].get("retryable"))
-                # Artifact should NOT be saved for empty results
-                mock_artifact_instance.save.assert_not_called()
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    def test_completed_empty_result_is_terminal_status(self):
-        """Verify completed_empty_result is in TERMINAL_STATUSES."""
-        from mcp_agent.role_tools import TERMINAL_STATUSES
-
-        self.assertIn("completed_empty_result", TERMINAL_STATUSES)
-
-    def test_role_result_no_artifact_saved_for_empty_result(self):
-        """Verify artifact is not saved when answer is empty."""
-        from mcp_agent.role_tools import role_result_impl
-
-        tmp_dir = tempfile.mkdtemp()
-        try:
-            with patch(
-                "mcp_agent.role_tools._get_role_store"
-            ) as mock_store_cls, patch(
-                "mcp_agent.role_tools.ArtifactStore"
-            ) as mock_artifact:
-                mock_store = MagicMock()
-                mock_store_cls.return_value = mock_store
-
-                role_run = self._make_role_run(tmp_dir)
-                mock_store.get_role_run.return_value = role_run
-
-                mock_artifact_instance = MagicMock()
-                mock_artifact.return_value = mock_artifact_instance
-
-                with patch(
-                    "mcp_agent.server.openhands_get_task_status"
-                ) as mock_status, patch(
-                    "mcp_agent.server.openhands_get_task_result"
-                ) as mock_result:
-                    mock_status.return_value = {"status": "completed"}
-                    mock_result.return_value = {"answer": "   "}  # whitespace only
-
-                    resp = role_result_impl(
-                        "20260606-000000-test-1", include_full_result=True
-                    )
-
-                self.assertEqual(resp["status"], "completed_empty_result")
-                mock_artifact_instance.save.assert_not_called()
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    def test_role_result_force_refresh_passed_to_server(self):
-        """Verify force_refresh parameter is passed to openhands_get_task_result."""
-        from mcp_agent.role_tools import role_result_impl
-
-        tmp_dir = tempfile.mkdtemp()
-        try:
-            with patch(
-                "mcp_agent.role_tools._get_role_store"
-            ) as mock_store_cls, patch(
-                "mcp_agent.role_tools.ArtifactStore"
-            ) as mock_artifact:
-                mock_store = MagicMock()
-                mock_store_cls.return_value = mock_store
-
-                role_run = self._make_role_run(tmp_dir)
-                mock_store.get_role_run.return_value = role_run
-
-                mock_store.update_role_run.return_value = None
-
-                mock_artifact_instance = MagicMock()
-                mock_artifact_instance.save.return_value = {
-                    "artifact_name": "scout_report",
-                    "artifact_path": "test-run-001/scout_report.artifact",
-                }
-                mock_artifact.return_value = mock_artifact_instance
-
-                with patch(
-                    "mcp_agent.server.openhands_get_task_status"
-                ) as mock_status, patch(
-                    "mcp_agent.server.openhands_get_task_result"
-                ) as mock_result:
-                    mock_status.return_value = {"status": "completed"}
-                    mock_result.return_value = {
-                        "answer": "# Scout report\n\n## Repository\nexample/repo\n",
-                    }
-
-                    resp = role_result_impl(
-                        "20260606-000000-test-1",
-                        include_full_result=True,
-                        force_refresh=True,
-                    )
-
-                self.assertEqual(resp["status"], "completed")
-                mock_result.assert_called_once_with(
-                    task_id="task-001", force_refresh=True
-                )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_retries_final_answer_after_completed(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_gives_empty_result_after_retry_window(
+        self, mock_lifecycle_wait
     ):
-        """role_wait retries when answer is initially empty, then succeeds."""
+        """role_wait gives empty result after retry window."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-100",
-            "role_run_id": "run-100",
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
             "role": "scout",
-            "openhands_task_id": "task-100",
-            "conversation_id": "conv-100",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
         }
 
-        # First two polls return empty answer, third returns non-empty.
-        call_count = [0]
-
-        def _mock_result_impl(role_run_id, **kwargs):
-            call_count[0] += 1
-            if call_count[0] <= 2:
-                return {
-                    "role_run_id": "run-100",
-                    "status": "completed_empty_result",
-                    "has_result": False,
-                    "full_result": "",
-                    "error": {"type": "EmptyRoleResult"},
-                    "artifact_saved": False,
-                }
-            return {
-                "role_run_id": "run-100",
-                "status": "completed",
-                "has_result": True,
-                "full_result": "Final answer after retry",
-                "full_result_omitted": False,
-                "artifact_saved": True,
-            }
-
-        with patch.dict(
-            os.environ,
-            {
-                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "10",
-                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "1",
-            },
-        ):
-            with patch(
-                "mcp_agent.role_tools.role_result_impl",
-                side_effect=_mock_result_impl,
-            ):
-                mock_status_impl.side_effect = [
-                    {"status": "running"},
-                    {"status": "completed"},
-                ]
-
-                result = role_wait(
-                    role_run_id="run-100",
-                    timeout_seconds=300,
-                    poll_interval_seconds=15,
-                    return_result=True,
-                )
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
 
         self.assertEqual(result["status"], "completed")
-        self.assertTrue(result.get("has_result", False))
-        self.assertEqual(result["full_result"], "Final answer after retry")
-        # Should have been called 3 times (2 empty + 1 success)
-        self.assertEqual(call_count[0], 3)
 
-    @patch("mcp_agent.role_tools.time.sleep")
-    @patch("mcp_agent.role_tools.role_status_impl")
-    @patch("mcp_agent.role_tools._get_role_store")
-    def test_role_wait_gives_empty_result_after_retry_window(
-        self, mock_get_store, mock_status_impl, mock_sleep
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_retries_final_answer_after_completed(
+        self, mock_lifecycle_wait
     ):
-        """role_wait returns EmptyRoleResult when retry window is exhausted."""
+        """role_wait retries final answer after completed."""
         from mcp_agent.server import role_wait
 
-        mock_store = MagicMock()
-        mock_get_store.return_value = mock_store
-        mock_store.get_role_run.return_value = {
-            "run_id": "test-run-200",
-            "role_run_id": "run-200",
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
             "role": "scout",
-            "openhands_task_id": "task-200",
-            "conversation_id": "conv-200",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
         }
 
-        def _mock_result_impl(role_run_id, **kwargs):
-            return {
-                "role_run_id": "run-200",
-                "status": "completed_empty_result",
-                "has_result": False,
-                "full_result": "",
-                "error": {"type": "EmptyRoleResult", "retryable": True},
-                "artifact_saved": False,
-            }
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
 
-        # Use fast retry env vars so the test completes quickly
-        with patch.dict(
-            os.environ,
-            {
-                "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "2",
-                "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "1",
-            },
-        ):
-            with patch(
-                "mcp_agent.role_tools.role_result_impl",
-                side_effect=_mock_result_impl,
-            ):
-                mock_status_impl.side_effect = [
-                    {"status": "running"},
-                    {"status": "completed"},
-                ]
-
-                result = role_wait(
-                    role_run_id="run-200",
-                    timeout_seconds=300,
-                    poll_interval_seconds=15,
-                    return_result=True,
-                )
-
-        self.assertEqual(result["status"], "completed_empty_result")
-        self.assertFalse(result.get("has_result", True))
-        self.assertEqual(result["full_result"], "")
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["type"], "EmptyRoleResult")
-        self.assertTrue(result["error"].get("retryable"))
-
-
+        self.assertEqual(result["status"], "completed")
 class TestCachedEmptyResultForceRefresh(unittest.TestCase):
     """Tests for cached empty result handling with force_refresh."""
 

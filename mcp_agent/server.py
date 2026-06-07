@@ -1715,111 +1715,106 @@ def role_result(
 
 
 # ---------------------------------------------------------------------------
-# role_wait — server-side polling
+# role_wait — server-side polling (public MCP tool)
 # ---------------------------------------------------------------------------
 
 
+@MCP.tool()
 def role_wait(
     role_run_id: Any,
     timeout_seconds: Any = None,
     poll_interval_seconds: Any = None,
-    return_result: Any = True,
 ) -> dict:
-    """Wait for an existing role run.
+    """Wait for a role run to complete (polling + summary).
 
-    **Pass ONLY the ``role_run_id`` string returned by ``role_start``.**
+    This is the **blocking** half of the two-step pattern:
+    ``role_call`` → ``role_wait``.
+
+    **Pass ONLY the ``role_run_id`` string returned by ``role_call``.**
 
     Correct::
 
-        {"role_run_id":"RUN-scout-1","timeout_seconds":1800,"poll_interval_seconds":15,"return_result":true}
+        {"role_run_id":"20260607-xxx-scout-1","timeout_seconds":1800,"poll_interval_seconds":30}
 
     Incorrect::
 
-        {"role_run_id":{"role_run_id":"RUN-scout-1","status":"running"}}
+        {"role_run_id":{"role_run_id":"20260607-xxx-scout-1","status":"running"}}
 
-    If your previous ``role_wait`` call had malformed arguments, retry
+    If your previous ``role_wait`` call timed out, retry
     ``role_wait`` with the same ``role_run_id``.
     Do **not** start the role again.
 
     Args:
-        role_run_id: The role run ID returned by ``role_start``.
+        role_run_id: The role run ID returned by ``role_call``.
             Accepts both plain strings and dict-wrapped values.
-        timeout_seconds: Maximum seconds to wait (default 1800, clamped to [1, 7200]).
+        timeout_seconds: Maximum seconds to wait (default 1800).
             Override with env var ``OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS``.
-        poll_interval_seconds: Seconds between status checks (default 15, clamped to [5, 120]).
+        poll_interval_seconds: Seconds between status checks (default 30).
             Override with env var ``OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS``.
-        return_result: If True (default) and the role completed, inline the
-            full result.  If False, return a compact response with
-            ``result_available: true`` and ``next_action: "call role_result"``.
 
     Returns
     -------
     dict
         One of:
 
-        **Completed with result** (return_result=True)::
+        **Completed**::
 
             {
-                "role_run_id": "...",
                 "status": "completed",
-                "has_result": true,
-                "result": "...",
-                "duration_seconds": 742
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "control_summary": {...},
+                "artifacts": {
+                    "primary": {"artifact_id": "...", "artifact_type": "...", "created_by": "..."},
+                    "summary": {"artifact_id": "...", "artifact_type": "...", "created_by": "..."}
+                }
             }
 
-        **Terminal failure**::
+        **Timeout** (role still running)::
 
             {
-                "role_run_id": "...",
-                "status": "failed",
-                "has_result": false,
-                "error": {
-                    "type": "RoleFailed",
-                    "message": "...",
-                    "retryable": true
-                },
-                "duration_seconds": 1234
-            }
-
-        **Bounded timeout** (role still running)::
-
-            {
-                "role_run_id": "...",
                 "status": "running",
-                "has_result": false,
-                "wait_timed_out": true,
-                "message": "Role is still running after bounded wait. Call role_wait again later.",
-                "poll_after_seconds": 60,
-                "duration_seconds": 1800
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "timeout": true,
+                "message": "Role is still running. Call role_wait again with the same role_run_id."
+            }
+
+        **Failed**::
+
+            {
+                "status": "failed",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "error": {"type": "...", "message": "...", "retryable": true}
             }
 
     Example::
 
         {
-            "role_run_id": "20260605-abc123-scout-1",
+            "role_run_id": "20260607-xxx-scout-1",
             "timeout_seconds": 1800,
-            "poll_interval_seconds": 15,
-            "return_result": true
+            "poll_interval_seconds": 30
         }
     """
-    # Defensive parsing for nested LLM mistakes (Section 3 of task).
-    # When the model passes the full role_start response as role_run_id,
-    # extract the nested role_run_id and any nested timeout/poll/return args.
+    # Defensive parsing for nested LLM mistakes.
+    # When the model passes the full role_call response as role_run_id,
+    # extract the nested role_run_id and any nested timeout/poll args.
     raw_role_arg = role_run_id
     _timeout = timeout_seconds
     _poll = poll_interval_seconds
-    _return = return_result
 
     if isinstance(raw_role_arg, dict):
         has_nested_timeout = "timeout_seconds" in raw_role_arg
         has_nested_poll = "poll_interval_seconds" in raw_role_arg
-        has_nested_return = "return_result" in raw_role_arg
 
-        if has_nested_timeout or has_nested_poll or has_nested_return:
-            # LLM passed the full role_start response as role_run_id
+        if has_nested_timeout or has_nested_poll:
+            # LLM passed the full role_call response as role_run_id
             _timeout = _timeout if _timeout is not None else raw_role_arg.get("timeout_seconds")
             _poll = _poll if _poll is not None else raw_role_arg.get("poll_interval_seconds")
-            _return = _return if _return is not None else raw_role_arg.get("return_result")
 
     try:
         normalized_role_run_id = normalize_role_run_id(raw_role_arg)
@@ -1838,13 +1833,14 @@ def role_wait(
 
     normalized_timeout = normalize_int(_timeout, default=None)
     normalized_poll_interval = normalize_int(_poll, default=None)
-    normalized_return_result = normalize_bool(_return, default=True)
 
-    return _role_tools.role_wait_impl(
+    # Call the new lifecycle-aware role_wait implementation
+    from . import role_lifecycle
+
+    return role_lifecycle.role_lifecycle_wait_impl(
         role_run_id=normalized_role_run_id,
         timeout_seconds=normalized_timeout,
         poll_interval_seconds=normalized_poll_interval,
-        return_result=normalized_return_result,
     )
 
 
@@ -2425,12 +2421,16 @@ def role_call(
     url: Any = None,
     idempotency_key: Any = None,
 ) -> dict:
-    """Call a specialist role.
+    """Start a specialist role and return quickly with ``role_run_id``.
 
     This is the **only** public tool Head of IT uses to invoke a worker
-    role.  It executes the full two-step lifecycle (main prompt →
-    summary prompt) synchronously and returns ``control_summary`` plus
-    ``artifact_id`` references — never artifact content.
+    role.  It starts the role and returns immediately with
+    ``status: "running"`` and ``role_run_id`` — it does **NOT** wait
+    for completion.
+
+    Use ``role_wait`` with the returned ``role_run_id`` to poll and
+    wait for the final ``control_summary`` plus ``artifact_id``
+    references.
 
     Parameters
     ----------
@@ -2457,37 +2457,43 @@ def role_call(
     Returns
     -------
     dict
-        ``role_run_id``, ``run_id``, ``role``, ``status``,
-        ``control_summary``, and ``artifacts`` (primary + summary with
-        ``artifact_id`` — never ``artifact_path`` or content).
+        **Running** (new role started)::
+
+            {
+                "status": "running",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "conversation_id": "...",
+                "message": "Role started. Use role_wait with role_run_id."
+            }
+
+        **Dedup hit** (existing run)::
+
+            {
+                "status": "running" | "completed" | "failed",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "_idempotent": True,
+                ...
+            }
+
+        **Error** (validation failure)::
+
+            {
+                "status": "failed",
+                "error": {"type": "...", "message": "...", "retryable": bool}
+            }
 
     Example::
 
         {
-            "role_run_id": "20260607-xxx-architect-1",
+            "status": "running",
+            "role_run_id": "20260607-xxx-scout-1",
             "run_id": "20260607-xxx",
-            "role": "architect",
-            "status": "completed",
-            "control_summary": {
-                "status": "DONE",
-                "role": "architect",
-                "summary": "Plan implemented.",
-                "blocking": false,
-                "risk_level": "LOW",
-                "action": null
-            },
-            "artifacts": {
-                "primary": {
-                    "artifact_id": "art_20260607-xxx_architect_1_architect_plan",
-                    "artifact_type": "architect_plan",
-                    "created_by": "architect"
-                },
-                "summary": {
-                    "artifact_id": "art_20260607-xxx_architect_1_control_summary",
-                    "artifact_type": "control_summary",
-                    "created_by": "architect"
-                }
-            }
+            "role": "scout",
+            "message": "Role started. Use role_wait with role_run_id to wait for completion."
         }
     """
     # ------------------------------------------------------------------
@@ -2593,10 +2599,10 @@ def role_call(
     else:
         normalized_metadata = {}
 
-    # Import and call the lifecycle implementation
+    # Import and call the lifecycle implementation (start-only, non-blocking)
     from . import role_lifecycle
 
-    return role_lifecycle.role_call_impl(
+    return role_lifecycle.role_call_start_impl(
         role=normalized_role,
         user_task=str(normalized_user_task) if normalized_user_task else "",
         input_artifacts=normalized_input_artifacts,
