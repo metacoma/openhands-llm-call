@@ -549,6 +549,432 @@ After `role_start`, call `role_wait`. Do not repeatedly call `role_status`.
 7. Continue the pipeline: role_status → role_result → artifact_get → role_start
 ```
 
+## v2 API — Artifact-based Role Orchestration
+
+> **Deprecation notice:** `role_start` is legacy. Head-of-Engineering should use
+> `shttp_role_start_v2`. Legacy `prompt.text` mode should not be used for
+> artifact-based orchestration.
+
+### Control plane vs data plane
+
+The v2 API separates role execution into two planes:
+
+```
+control plane = short summaries for Head-of-Engineering
+data plane    = full role artifacts for specialist roles
+```
+
+**Data plane:** Full role outputs are stored as artifacts:
+
+| Role | Output artifact | Summary artifact |
+|---|---|---|
+| scout | scout_report | scout_summary |
+| architect | architect_plan | architect_summary |
+| coder | coder_report | coder_summary |
+| reviewer | reviewer_report | reviewer_summary |
+| coder_fix | coder_fix_result | coder_fix_summary |
+| publisher | publisher_instructions | publisher_summary |
+
+These artifacts may be long and detailed. They are passed to later roles by
+ID/path/name only — **never** pasted into JSON payloads.
+
+**Control plane:** Every role execution produces a compact control summary.
+Head-of-Engineering reads this to decide routing. The summary is short,
+structured, and safe to return inline.
+
+### Required artifact matrix
+
+| Role | Required artifacts | Output artifact |
+|---|---|---|
+| scout | *(none)* | scout_report |
+| architect | scout_report | architect_plan |
+| coder | scout_report, architect_plan | coder_report |
+| reviewer | scout_report, architect_plan, coder_report | reviewer_report |
+| coder_fix | architect_plan, coder_report, reviewer_report | coder_fix_result |
+| publisher | coder_report, reviewer_report | publisher_instructions |
+
+### Summary JSON schema
+
+Every role produces a summary with this schema:
+
+```json
+{
+  "status": "completed" | "blocked",
+  "role": "<role>",
+  "summary": "<short factual summary for Head-of-Engineering>",
+  "primary_artifact_name": "<artifact name>",
+  "blocking": true | false,
+  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
+  "action": "PASS" | "BLOCKER" | null,
+  "blocking_summary": ["..."]
+}
+```
+
+**Rules:**
+
+- Only reviewer may set `action` to `PASS` or `BLOCKER`.
+- Non-reviewer roles must set `action` to `null`.
+- The summary must **not** include `next_role` or `ready_for_next_role`.
+- Keep `summary` under 1000 characters unless blockers require more detail.
+
+### Two-step same-conversation lifecycle
+
+Each role run follows this lifecycle:
+
+```
+created
+→ main_prompt_rendered
+→ main_prompt_sent
+→ main_response_received
+→ primary_artifact_saved
+→ summary_prompt_sent
+→ summary_response_received
+→ summary_artifact_saved
+→ completed
+```
+
+If summary parsing fails, one repair attempt is made. If repair also fails,
+a safe fallback summary is returned.
+
+### `shttp_role_start_v2`
+
+Start a role using artifact ID references (not raw content). The MCP server
+resolves artifacts server-side and returns the control summary inline.
+
+**Example — scout:**
+
+```json
+{
+  "role": {"text": "scout"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "metadata": {
+    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"}
+  }
+}
+```
+
+**Example — architect (with artifact reference):**
+
+```json
+{
+  "role": {"text": "architect"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "input_artifacts": {
+    "scout_report": {"text": "20260607-010712-647d95/20260607-010712-647d95-scout-1_scout_report.artifact"}
+  }
+}
+```
+
+**Response:**
+
+```json
+{
+  "role_run_id": "20260607-010712-647d95-architect-1",
+  "status": "completed",
+  "control_summary": {
+    "status": "completed",
+    "role": "architect",
+    "summary": "Architect plan produced with 5 file changes.",
+    "primary_artifact_name": "architect_plan",
+    "blocking": false,
+    "risk_level": "LOW",
+    "action": null,
+    "blocking_summary": []
+  },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "architect_plan",
+      "artifact_path": "..."
+    },
+    "summary": {
+      "artifact_name": "architect_summary",
+      "artifact_path": "..."
+    }
+  }
+}
+```
+
+### `shttp_role_wait_v2`
+
+Wait for a v2 role run and return its status.
+
+**Important**: `shttp_role_start_v2` executes the full lifecycle
+synchronously (main prompt + summary prompt) and returns the completed
+result. In most cases, `shttp_role_wait_v2` is not needed because the
+result is already available from `start_v2`.
+
+This function is provided for compatibility with the established
+start → wait → result orchestration model.
+
+**When the role is already completed**, `wait_v2` delegates to
+`shttp_role_result_v2` to return the v2-coherent response shape
+(control summary + artifacts).
+
+**When the role is still running**, it polls using the legacy wait
+mechanism (handles OpenHands task polling).
+
+**Response (completed):**
+
+```json
+{
+  "status": "completed",
+  "role_run_id": "...",
+  "control_summary": {...},
+  "artifacts": {
+    "primary": {"artifact_name": "...", "artifact_path": "..."},
+    "summary": {"artifact_name": "...", "artifact_path": "..."}
+  }
+}
+```
+
+**Response (running):**
+
+```json
+{
+  "status": "running",
+  "role_run_id": "..."
+}
+```
+
+### `shttp_role_result_v2`
+
+Get result for a v2 role run. Returns control summary inline and artifact
+paths (not content by default).
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `role_run_id` | string | required | The role run ID returned by `shttp_role_start_v2` |
+| `include_full_artifacts` | boolean | false | If true, include full artifact content |
+| `return_control_summary` | boolean | true | If true, include the control summary |
+
+**Response (default, no full artifacts):**
+
+```json
+{
+  "role_run_id": "...",
+  "run_id": "...",
+  "role": "architect",
+  "status": "completed",
+  "control_summary": {
+    "status": "completed",
+    "role": "architect",
+    "summary": "Architect plan produced with 5 file changes.",
+    "primary_artifact_name": "architect_plan",
+    "blocking": false,
+    "risk_level": "LOW",
+    "action": null,
+    "blocking_summary": []
+  },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "architect_plan",
+      "artifact_path": "20260607-010712-647d95/...-architect-1_architect_plan.artifact"
+    },
+    "summary": {
+      "artifact_name": "architect_summary",
+      "artifact_path": "20260607-010712-647d95/...-architect-1_architect_summary.artifact"
+    }
+  }
+}
+```
+
+**Response (with `include_full_artifacts=true`):**
+
+Same as above, with `content` attached to each artifact entry and full content also
+available as top-level keys for backward compatibility:
+
+```json
+{
+  "role_run_id": "...",
+  "run_id": "...",
+  "role": "architect",
+  "status": "completed",
+  "control_summary": { ... },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "architect_plan",
+      "artifact_path": "...",
+      "content": "<full primary content>"
+    },
+    "summary": {
+      "artifact_name": "architect_summary",
+      "artifact_path": "...",
+      "content": "<full summary content>"
+    }
+  },
+  "primary_artifact": "<full primary content>",
+  "summary_artifact": "<full summary content>"
+}
+```
+
+When an artifact fails to load, a `warnings` array is included:
+
+```json
+{
+  "warnings": [
+    "failed to load full artifact summary scout_summary at <path>: artifact not found: <path>"
+  ]
+}
+```
+
+**Notes:**
+
+- `shttp_role_result_v2(include_full_artifacts=true)` loads full artifact content by exact
+  `artifact_path` using `ArtifactStore.get_by_path()`.
+- Default v2 result (`include_full_artifacts=false`) returns only artifact references and
+  control summary � no full content.
+- Full artifact content loading is intended for debugging/inspection and may return warnings
+  if artifacts are missing or have name mismatches.
+
+**Error response:**
+
+```json
+{
+  "status": "failed",
+  "error": {
+    "type": "UnknownRoleRunId",
+    "message": "No role run found for role_run_id='...'.",
+    "retryable": false
+  }
+}
+```
+
+### Required input artifacts by role
+
+| Role | Required `input_artifacts` |
+|---|---|
+| scout | *(none)* |
+| architect | `scout_report` |
+| coder | `scout_report`, `architect_plan` |
+| reviewer | `scout_report`, `architect_plan`, `coder_report` |
+| publisher | `reviewer_report` |
+| coder_fix | `architect_plan`, `coder_report`, `reviewer_report` |
+
+### Output artifacts by role
+
+| Role | Primary artifact name | Summary artifact name |
+|---|---|---|
+| scout | `scout_report` | `scout_summary` |
+| architect | `architect_plan` | `architect_summary` |
+| coder | `coder_report` | `coder_summary` |
+| reviewer | `reviewer_report` | `reviewer_summary` |
+| publisher | `publisher_instructions` | `publisher_summary` |
+| coder_fix | `coder_fix_result` | `coder_fix_summary` |
+
+### Control summary schema
+
+The control summary is returned inline by `shttp_role_start_v2` and
+`result_v2`. It follows this schema:
+
+```json
+{
+  "status": "completed" | "blocked",
+  "role": "scout" | "architect" | "coder" | "reviewer" | ...,
+  "summary": "Short factual summary of the role output.",
+  "primary_artifact_name": "scout_report",
+  "blocking": true | false,
+  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
+  "action": "PASS" | "BLOCKER" | null,
+  "blocking_summary": ["List of blocking issues"]
+}
+```
+
+**Rules:**
+
+- `action` must be `"PASS"` or `"BLOCKER"` for the **reviewer** role only.
+- `action` must be `null` for all non-reviewer roles.
+- `blocking_summary` must be a list (may be empty).
+- **No `next_role` field** — routing is the Head of Engineering's responsibility.
+- **No `ready_for_next_role` field** — routing is the Head of Engineering's responsibility.
+
+### Head-of-Engineering routing logic
+
+Route based on role order and control summary — **not** on `next_role` from
+the role:
+
+```
+after scout completed and blocking=false:
+    start architect
+
+after architect completed and blocking=false:
+    start coder
+
+after coder completed and blocking=false:
+    start reviewer
+
+after reviewer action=PASS:
+    start publisher
+
+after reviewer action=BLOCKER and fix cycle not used:
+    start coder_fix
+
+after reviewer action=BLOCKER and fix cycle already used:
+    stop as blocked
+```
+
+For non-reviewer roles:
+
+```
+if blocking=true:
+    stop or ask user
+```
+
+### Migration from legacy `role_start`
+
+| Legacy (`role_start`) | v2 (`shttp_role_start_v2`) |
+|---|---|
+| Pass artifact content inline in `artifacts` | Pass artifact IDs/paths in `input_artifacts` |
+| Returns `run_id`, `role_run_id` only | Returns `control_summary` inline |
+| Orchestrator reads artifacts to decide routing | Orchestrator reads control summary to decide routing |
+| No summary mechanism | In-conversation summary with JSON validation |
+
+**Before (legacy):**
+
+```json
+{
+  "role": "architect",
+  "user_task": "Plan implementation",
+  "artifacts": {
+    "scout_report": "<full scout report content...>"
+  }
+}
+```
+
+**After (v2):**
+
+```json
+{
+  "role": {"text": "architect"},
+  "user_task": {"text": "Plan implementation"},
+  "input_artifacts": {
+    "scout_report": {"text": "20260607-010712-647d95/...-scout-1_scout_report.artifact"}
+  }
+}
+```
+
+### Example full role chain (v2)
+
+```text
+1. shttp_role_start_v2(scout, user_task="...")
+   → control_summary.status = "completed"
+
+2. shttp_role_start_v2(architect, user_task="...", input_artifacts={scout_report: "<path>"})
+   → control_summary.status = "completed"
+
+3. shttp_role_start_v2(coder, user_task="...", input_artifacts={scout_report: "<path>", architect_plan: "<path>"})
+   → control_summary.status = "completed"
+
+4. shttp_role_start_v2(reviewer, user_task="...", input_artifacts={scout_report: "<path>", architect_plan: "<path>", coder_report: "<path>"})
+   → control_summary.action = "PASS" or "BLOCKER"
+
+5. If action = PASS:
+     shttp_role_start_v2(publisher, ...)
+   If action = BLOCKER:
+     shttp_role_start_v2(coder_fix, ...)
+```
+
 ## LLM-safe MCP usage
 
 ### Correct role flow

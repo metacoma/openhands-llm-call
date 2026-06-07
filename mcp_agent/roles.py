@@ -20,6 +20,7 @@ class RoleSpec:
     timeout_minutes: int
     requires_artifacts: list[str]
     output_artifact: str
+    summary_artifact: str
 
 
 _ROLES: dict[str, RoleSpec] | None = None
@@ -32,6 +33,15 @@ REQUIRED_FIELDS = {
     "timeout_minutes",
     "requires_artifacts",
     "output_artifact",
+}
+
+SUMMARY_ARTIFACT_DEFAULTS: dict[str, str] = {
+    "scout": "scout_summary",
+    "architect": "architect_summary",
+    "coder": "coder_summary",
+    "reviewer": "reviewer_summary",
+    "coder_fix": "coder_fix_summary",
+    "publisher": "publisher_summary",
 }
 
 
@@ -112,6 +122,9 @@ def load_roles(config_path: Optional[str] = None) -> dict[str, RoleSpec]:
             timeout_minutes=spec_dict["timeout_minutes"],
             requires_artifacts=spec_dict.get("requires_artifacts") or [],
             output_artifact=spec_dict["output_artifact"],
+            summary_artifact=spec_dict.get(
+                "summary_artifact"
+            ) or SUMMARY_ARTIFACT_DEFAULTS.get(name, f"{name}_summary"),
         )
 
     _ROLES = roles

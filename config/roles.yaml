@@ -7,6 +7,7 @@ roles:
     timeout_minutes: 60
     requires_artifacts: []
     output_artifact: "scout_report"
+    summary_artifact: "scout_summary"
 
   architect:
     description: "Read-only implementation planner. Converts user task and scout report into a safe implementation plan."
@@ -17,6 +18,7 @@ roles:
     requires_artifacts:
       - scout_report
     output_artifact: "architect_plan"
+    summary_artifact: "architect_summary"
 
   coder:
     description: "Implementation worker. Creates feature branch, modifies code, runs validation, commits result."
@@ -28,6 +30,7 @@ roles:
       - scout_report
       - architect_plan
     output_artifact: "coder_report"
+    summary_artifact: "coder_summary"
 
   reviewer:
     description: "Read-only reviewer. Reviews diff and validation. Emits ACTION: PASS or ACTION: BLOCKER and risk level."
@@ -40,6 +43,7 @@ roles:
       - architect_plan
       - coder_report
     output_artifact: "reviewer_report"
+    summary_artifact: "reviewer_summary"
 
   publisher:
     description: "Publish instruction generator. Produces exact push and PR commands. Must not push and must not create PR."
@@ -50,3 +54,17 @@ roles:
     requires_artifacts:
       - reviewer_report
     output_artifact: "publisher_instructions"
+    summary_artifact: "publisher_summary"
+
+  coder_fix:
+    description: "Repair worker. Fixes blocking issues identified by reviewer."
+    model: "openai/qwen36-35b-a3b-coder"
+    prompt_template: "prompts/coder_fix.md"
+    readonly: false
+    timeout_minutes: 120
+    requires_artifacts:
+      - architect_plan
+      - coder_report
+      - reviewer_report
+    output_artifact: "coder_fix_result"
+    summary_artifact: "coder_fix_summary"

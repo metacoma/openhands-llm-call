@@ -120,6 +120,7 @@ class RoleRunStore:
             "risk": None,
             "attempt": attempt,
             "lock_key": lock_key,
+            "lifecycle_state": "created",
         }
 
         with self._lock:

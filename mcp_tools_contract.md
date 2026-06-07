@@ -15,15 +15,175 @@ Expected response:
       "readonly": true,
       "requires_artifacts": [],
       "output_artifact": "scout_report",
+      "summary_artifact": "scout_summary",
       "timeout_minutes": 60
     }
   ]
 }
 ```
 
-## role_start
+## shttp_role_start_v2 (Recommended — v2 API)
 
-Starts a role-specific OpenHands task.
+Starts a role using the v2 artifact-reference API. The MCP server resolves artifact IDs/paths server-side and returns a compact **control summary** inline after a two-step same-conversation lifecycle (main prompt → response → summary prompt → response → validation).
+
+**Deprecation notice:** `role_start` is legacy. Head of Engineering should use `shttp_role_start_v2`.
+
+### Required input fields
+
+Every role call must include:
+
+- `role` — the role name
+- `user_task` — the user task text (required, non-empty)
+
+Optional:
+
+- `input_artifacts` — mapping of artifact names to their ID/path strings
+- `metadata` — optional metadata dict (e.g. repository, base_branch)
+- `api_key`, `llm_model`, `url`, `idempotency_key`
+
+### Example scout start
+
+```json
+{
+  "role": {"text": "scout"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "metadata": {
+    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"}
+  }
+}
+```
+
+### Example architect start
+
+```json
+{
+  "role": {"text": "architect"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "input_artifacts": {
+    "scout_report": {"text": "20260607-010712-647d95/20260607-010712-647d95-scout-1_scout_report.artifact"}
+  },
+  "metadata": {
+    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
+    "base_branch": {"text": "main"}
+  }
+}
+```
+
+### Example coder start
+
+```json
+{
+  "role": {"text": "coder"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "input_artifacts": {
+    "scout_report": {"text": "<SCOUT_REPORT_ARTIFACT_PATH_OR_ID>"},
+    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"}
+  },
+  "metadata": {
+    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
+    "base_branch": {"text": "main"},
+    "branch": {"text": "feature/ruby-grpc-client"}
+  }
+}
+```
+
+### Example reviewer start
+
+```json
+{
+  "role": {"text": "reviewer"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "input_artifacts": {
+    "scout_report": {"text": "<SCOUT_REPORT_ARTIFACT_PATH_OR_ID>"},
+    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"},
+    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"}
+  }
+}
+```
+
+### Example publisher start
+
+```json
+{
+  "role": {"text": "publisher"},
+  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "input_artifacts": {
+    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"},
+    "reviewer_report": {"text": "<REVIEWER_REPORT_ARTIFACT_PATH_OR_ID>"}
+  }
+}
+```
+
+### Example coder_fix start
+
+```json
+{
+  "role": {"text": "coder_fix"},
+  "user_task": {"text": "Fix blocking issues identified by reviewer."},
+  "input_artifacts": {
+    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"},
+    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"},
+    "reviewer_report": {"text": "<REVIEWER_REPORT_ARTIFACT_PATH_OR_ID>"}
+  },
+  "metadata": {
+    "branch": {"text": "existing-feature-branch"}
+  }
+}
+```
+
+### Response (success)
+
+```json
+{
+  "role_run_id": "20260607-abc123-scout-1",
+  "status": "completed",
+  "control_summary": {
+    "valid": true,
+    "status": "completed",
+    "role": "scout",
+    "summary": "Scout completed. Found 42 relevant files.",
+    "primary_artifact_name": "scout_report",
+    "blocking": false,
+    "risk_level": "LOW",
+    "action": null,
+    "blocking_summary": []
+  },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "scout_report",
+      "artifact_path": "runs/20260607-abc123/01-scout.answer.md"
+    },
+    "summary": {
+      "artifact_name": "scout_summary",
+      "artifact_path": "runs/20260607-abc123/20260607-abc123-scout-1_scout_summary.artifact"
+    }
+  }
+}
+```
+
+### Response (validation failure)
+
+```json
+{
+  "status": "failed",
+  "error": {
+    "type": "UnknownRole",
+    "message": "unknown role: architect2",
+    "retryable": false
+  }
+}
+```
+
+Other validation errors:
+
+- `"user_task is required"` — missing or empty user_task
+- `"missing required artifact: scout_report"` — required artifact not provided
+- `"artifact not found: scout_report"` — artifact reference does not resolve
+- `"rendered prompt is empty"` — template rendering produced empty output
+
+## role_start (Legacy)
+
+Starts a role-specific OpenHands task. **Deprecated.** Use `shttp_role_start_v2` instead.
 
 ### Input (recommended — prompt-only)
 
@@ -502,3 +662,184 @@ Read artifact content produced by a role run. Prefer this tool over reading arti
   }
 }
 ```
+
+## shttp_role_wait_v2
+
+Wait for a v2 role run. Same shape as `role_wait` but operates on v2 role runs.
+
+### Input
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1",
+  "timeout_seconds": 1800,
+  "poll_interval_seconds": 15,
+  "return_result": true
+}
+```
+
+### Response
+
+Same shape as `role_wait` response.
+
+## shttp_role_result_v2
+
+Get result for a v2 role run. Returns control summary inline and artifact paths (not content).
+
+### Input
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1",
+  "include_full_artifacts": false,
+  "return_control_summary": true
+}
+```
+
+### Response (compact — default)
+
+```json
+{
+  "role_run_id": "20260605-abc123-scout-1",
+  "run_id": "20260605-abc123",
+  "role": "scout",
+  "status": "completed",
+  "control_summary": {
+    "valid": true,
+    "status": "completed",
+    "role": "scout",
+    "summary": "Scout completed.",
+    "primary_artifact_name": "scout_report",
+    "blocking": false,
+    "risk_level": "LOW",
+    "action": null,
+    "blocking_summary": []
+  },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "scout_report",
+      "artifact_path": "runs/20260605-abc123/01-scout.answer.md"
+    },
+    "summary": {
+      "artifact_name": "scout_summary",
+      "artifact_path": "runs/20260605-abc123/..."
+    }
+  }
+}
+```
+
+## Control Plane vs Data Plane
+
+The v2 API separates role execution into two planes:
+
+**Data plane** — Full role outputs are stored as artifacts:
+
+| Role | Output artifact | Summary artifact |
+|---|---|---|
+| scout | scout_report | scout_summary |
+| architect | architect_plan | architect_summary |
+| coder | coder_report | coder_summary |
+| reviewer | reviewer_report | reviewer_summary |
+| coder_fix | coder_fix_result | coder_fix_summary |
+| publisher | publisher_instructions | publisher_summary |
+
+These artifacts may be long and detailed. They are passed to later roles by ID/path/name only.
+
+**Control plane** — Every role execution also produces a compact control summary. Head of Engineering reads this to decide routing. The summary is short, structured, and safe to return inline.
+
+## Summary JSON Schema
+
+The control summary follows this schema:
+
+```json
+{
+  "valid": true,
+  "status": "completed" | "blocked",
+  "role": "<role>",
+  "summary": "<short factual summary for Head of Engineering>",
+  "primary_artifact_name": "<artifact name>",
+  "blocking": true | false,
+  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
+  "action": "PASS" | "BLOCKER" | null,
+  "blocking_summary": ["..."]
+}
+```
+
+**Rules:**
+
+- Only reviewer may set `action` to `PASS` or `BLOCKER`.
+- Non-reviewer roles must set `action` to `null`.
+- No `next_role` field allowed.
+- No `ready_for_next_role` field allowed.
+- Keep summary under 1000 characters unless blockers require more detail.
+
+**Reviewer-specific rules:**
+
+- `action` is required and must be exactly `PASS` or `BLOCKER`.
+- If the review found blockers, `blocking` must be `true` and `blocking_summary` must list the blockers.
+- If the review passed, `blocking` must be `false` and `blocking_summary` must be `[]`.
+
+## Required Artifact Matrix by Role
+
+| Role | Required artifacts | Output artifact | Summary artifact |
+|---|---|---|---|
+| scout | (none) | scout_report | scout_summary |
+| architect | scout_report | architect_plan | architect_summary |
+| coder | scout_report, architect_plan | coder_report | coder_summary |
+| reviewer | scout_report, architect_plan, coder_report | reviewer_report | reviewer_summary |
+| coder_fix | architect_plan, coder_report, reviewer_report | coder_fix_result | coder_fix_summary |
+| publisher | coder_report, reviewer_report | publisher_instructions | publisher_summary |
+
+## Migration from Legacy to v2
+
+### Key differences
+
+| Aspect | Legacy (`role_start`) | v2 (`shttp_role_start_v2`) |
+|---|---|---|
+| Artifact passing | Full artifact content inline | Artifact ID/path only |
+| Prompt rendering | Orchestrator assembles prompt | MCP server renders server-side |
+| Summary | None (manual `make_summary`) | In-conversation summary JSON |
+| Control summary | Not returned | Returned inline |
+| Validation | Minimal | Required artifacts, user_task, role |
+
+### Migration steps
+
+1. Replace `role_start` calls with `shttp_role_start_v2`.
+2. Change `artifacts` parameter to `input_artifacts` with artifact references (not content).
+3. Remove `repo`, `base_branch`, `branch` — use `metadata` instead.
+4. Read `control_summary` from the response instead of parsing full artifacts.
+5. Route based on control summary fields (`status`, `blocking`, `action`) not on `next_role`.
+
+### Example migration
+
+**Before (legacy):**
+
+```json
+{
+  "role": "architect",
+  "user_task": "Plan implementation",
+  "repo": "https://github.com/example/repo",
+  "base_branch": "main",
+  "artifacts": {
+    "scout_report": "<full scout report content>"
+  }
+}
+```
+
+**After (v2):**
+
+```json
+{
+  "role": {"text": "architect"},
+  "user_task": {"text": "Plan implementation"},
+  "input_artifacts": {
+    "scout_report": {"text": "artifact_path_or_id"}
+  },
+  "metadata": {
+    "repository": {"text": "https://github.com/example/repo"},
+    "base_branch": {"text": "main"}
+  }
+}
+```
+
+**Note:** `shttp_role_start` is legacy. Head of Engineering should use `shttp_role_start_v2`. Legacy `role_start` prompt.text mode should not be used for artifact-based orchestration.

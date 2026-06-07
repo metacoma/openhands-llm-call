@@ -234,6 +234,83 @@ class ArtifactStore:
         # Return the first candidate (shouldn't happen if called correctly)
         return self._read_artifact(candidates[0])
 
+    def get_by_path(self, artifact_path: str) -> Dict[str, Any]:
+        """Read exactly the artifact file referenced by *artifact_path*.
+
+        Parameters
+        ----------
+        artifact_path :
+            Relative path to an artifact file, e.g.
+            ``"run-id/role_run_id_artifact_name.artifact"``.
+            Resolved relative to ``state_dir``.
+
+        Returns
+        -------
+        dict
+            Artifact metadata with ``content`` key, consistent with
+            ``get()`` return shape.
+
+        Raises
+        ------
+        ValueError
+            If path traversal is detected, metadata is missing/invalid,
+            or metadata path does not match the requested path.
+        FileNotFoundError
+            If the artifact file does not exist on disk.
+        """
+        if not isinstance(artifact_path, str) or not artifact_path:
+            raise ValueError("invalid artifact path")
+
+        # --- Path traversal protection ---
+        root = self.state_dir.resolve()
+        candidate = (root / artifact_path).resolve()
+        try:
+            candidate.is_relative_to(root)
+        except AttributeError:
+            # Fallback for Python < 3.9
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                raise ValueError("invalid artifact path") from None
+        if not candidate.is_relative_to(root):
+            raise ValueError("invalid artifact path")
+
+        # --- Require .artifact suffix ---
+        if not candidate.name.endswith(".artifact"):
+            raise ValueError("invalid artifact path")
+
+        # --- Check artifact file exists ---
+        if not candidate.exists():
+            raise FileNotFoundError(f"artifact not found: {artifact_path}")
+
+        # --- Read companion metadata ---
+        meta_path = Path(str(candidate) + ".meta.json")
+        if not meta_path.exists():
+            raise ValueError(f"artifact metadata not found: {artifact_path}")
+
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(f"invalid artifact metadata: {artifact_path}") from exc
+
+        # --- Validate metadata matches path ---
+        stored_path = meta.get("artifact_path", "")
+        if stored_path != artifact_path:
+            # Also try normalized comparison
+            try:
+                stored_resolved = (root / stored_path).resolve()
+                if stored_resolved != candidate:
+                    raise ValueError("artifact metadata path mismatch")
+            except (ValueError, OSError):
+                raise ValueError("artifact metadata path mismatch")
+
+        # --- Read content and return augmented metadata ---
+        meta_with_content = dict(meta)
+        meta_with_content["content"] = candidate.read_text(encoding="utf-8")
+        meta_with_content["content_empty"] = not meta_with_content["content"].strip()
+        meta_with_content["valid_role_report"] = bool(meta_with_content["content"].strip())
+        return meta_with_content
+
     # -- internals ---------------------------------------------------------
 
     def _ensure_under_state_dir(self, path: Path) -> Path:
