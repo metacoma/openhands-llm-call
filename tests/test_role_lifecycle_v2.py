@@ -54,7 +54,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_scout_start_with_user_task_succeeds(self, mock_start, mock_poll):
         """Starting scout with only user_task succeeds."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         mock_start.return_value = {
             "task_id": "task-001",
@@ -74,7 +74,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -90,7 +90,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_architect_start_with_scout_report_succeeds(self, mock_start, mock_poll):
         """Starting architect with valid scout_report succeeds."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
         from mcp_agent.artifact_store import ArtifactStore
 
         # Create a scout_report artifact in the store so resolution succeeds
@@ -121,7 +121,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Plan implementation",
             input_artifacts={
@@ -136,9 +136,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_architect_start_without_scout_report_fails(self, mock_start):
         """Starting architect without scout_report fails before role start."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Plan implementation",
             input_artifacts={},
@@ -152,9 +152,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_coder_start_without_architect_plan_fails(self, mock_start):
         """Starting coder without architect_plan fails before role start."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="coder",
             user_task="Implement feature",
             input_artifacts={
@@ -170,9 +170,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_reviewer_start_without_coder_report_fails(self, mock_start):
         """Starting reviewer without coder_report fails before role start."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="reviewer",
             user_task="Review implementation",
             input_artifacts={
@@ -188,9 +188,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
 
     def test_unknown_role_fails(self):
         """Starting with unknown role fails."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="unknown_role",
             user_task="Test task",
             api_key="test-key",
@@ -202,9 +202,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
 
     def test_missing_user_task_fails(self):
         """Starting any role without user_task fails."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="",
             api_key="test-key",
@@ -216,9 +216,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
 
     def test_empty_user_task_fails(self):
         """Starting with whitespace-only user_task fails."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="   ",
             api_key="test-key",
@@ -231,7 +231,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_coder_fix_role_exists(self, mock_start, mock_poll):
         """coder_fix role can be started."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
         from mcp_agent.artifact_store import ArtifactStore
 
         # Create required artifacts in the store so resolution succeeds
@@ -267,7 +267,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="coder_fix",
             user_task="Fix blockers",
             input_artifacts={
@@ -301,7 +301,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_main_response_only_does_not_complete(self, mock_start, mock_poll):
         """Role run is not completed after main response only."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
         from mcp_agent.role_store import RoleRunStore
 
         call_count = [0]
@@ -332,7 +332,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -352,7 +352,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_prompt_sent_in_same_conversation(self, mock_start, mock_poll):
         """Summary prompt is sent in the same conversation as the main role prompt."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         conversations_used = []
 
@@ -383,7 +383,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -401,7 +401,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_role_run_completes_after_summary_saved(self, mock_start, mock_poll):
         """Role run completes only after summary response is saved."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
         from mcp_agent.role_store import RoleRunStore
 
         call_count = [0]
@@ -432,7 +432,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -468,7 +468,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_json_parsed_and_returned(self, mock_start, mock_poll):
         """Summary JSON is parsed and returned as control summary."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         call_count = [0]
 
@@ -513,7 +513,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -529,7 +529,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_repair_attempted_on_parse_failure(self, mock_start, mock_poll):
         """Summary JSON repair is attempted once if parsing fails."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         call_count = [0]
         poll_count = [0]
@@ -584,7 +584,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -599,7 +599,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_output_does_not_allow_next_role(self, mock_start, mock_poll):
         """Summary output does not allow next_role."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         call_count = [0]
 
@@ -646,7 +646,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -662,7 +662,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_output_does_not_allow_ready_for_next_role(self, mock_start, mock_poll):
         """Summary output does not allow ready_for_next_role."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         call_count = [0]
 
@@ -709,7 +709,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -723,7 +723,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_reviewer_summary_must_contain_action(self, mock_start, mock_poll):
         """Reviewer summary must contain action=PASS or action=BLOCKER."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
         from mcp_agent.artifact_store import ArtifactStore
 
         # Create required artifacts in the store so resolution succeeds
@@ -785,7 +785,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="reviewer",
             user_task="Review implementation",
             input_artifacts={
@@ -807,7 +807,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_non_reviewer_summary_has_action_null(self, mock_start, mock_poll):
         """Non-reviewer summary must have action=null."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         call_count = [0]
 
@@ -853,7 +853,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -884,7 +884,7 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_artifact_contents_loaded_server_side(self, mock_start, mock_poll):
         """Artifact contents are loaded server-side into the main prompt."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
         from mcp_agent.artifact_store import ArtifactStore
 
         # Create a scout_report artifact in the store so resolution succeeds
@@ -927,7 +927,7 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
         mock_poll.side_effect = poll_side_effect
 
         # Pass artifact reference (path, not content)
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Plan implementation",
             input_artifacts={
@@ -944,7 +944,7 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
 
 
 class TestMCPStyleWrappedValues(unittest.TestCase):
-    """Test that MCP-style wrapped values are correctly unwrapped in shttp_role_start_v2."""
+    """Test that MCP-style wrapped values are correctly unwrapped in _internal_role_start."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="test_lifecycle_")
@@ -960,10 +960,10 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
 
     @patch("mcp_agent.role_lifecycle._poll_task_status")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
-    def test_shttp_role_start_v2_unwraps_artifact_refs(self, mock_start, mock_poll):
-        """shttp_role_start_v2 correctly unwraps MCP-style wrapped artifact references."""
+    def test__internal_role_start_unwraps_artifact_refs(self, mock_start, mock_poll):
+        """_internal_role_start correctly unwraps MCP-style wrapped artifact references."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.server import shttp_role_start_v2
+        from mcp_agent.server import _internal_role_start
 
         # Create a scout_report artifact in the store so resolution succeeds
         store = ArtifactStore()
@@ -1005,7 +1005,7 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
         mock_poll.side_effect = poll_side_effect
 
         # Pass artifact references as MCP-style wrapped dicts: {"text": "path"}
-        result = shttp_role_start_v2(
+        result = _internal_role_start(
             role={"text": "architect"},
             user_task={"text": "Plan implementation"},
             input_artifacts={
@@ -1021,9 +1021,9 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
 
     @patch("mcp_agent.role_lifecycle._poll_task_status")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
-    def test_shttp_role_start_v2_unwraps_metadata(self, mock_start, mock_poll):
-        """shttp_role_start_v2 correctly unwraps MCP-style wrapped metadata."""
-        from mcp_agent.server import shttp_role_start_v2
+    def test__internal_role_start_unwraps_metadata(self, mock_start, mock_poll):
+        """_internal_role_start correctly unwraps MCP-style wrapped metadata."""
+        from mcp_agent.server import _internal_role_start
 
         captured_prompts = []
 
@@ -1055,7 +1055,7 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
         mock_poll.side_effect = poll_side_effect
 
         # Pass metadata as MCP-style wrapped dicts
-        result = shttp_role_start_v2(
+        result = _internal_role_start(
             role={"text": "scout"},
             user_task={"text": "Investigate the repo"},
             metadata={
@@ -1091,7 +1091,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
     def test_primary_artifact_saved_via_artifact_store(self, mock_start, mock_poll):
         """Scout primary artifact is saved through ArtifactStore, not legacy store."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         mock_start.return_value = {
             "task_id": "task-001",
@@ -1111,7 +1111,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -1135,7 +1135,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_artifact_saved_separately(self, mock_start, mock_poll):
         """Summary artifact is a different file from primary."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         mock_start.return_value = {
             "task_id": "task-001",
@@ -1155,7 +1155,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -1173,7 +1173,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
     def test_summary_does_not_overwrite_primary(self, mock_start, mock_poll):
         """Saving summary does not overwrite primary artifact."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         mock_start.return_value = {
             "task_id": "task-001",
@@ -1193,7 +1193,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Investigate the repo",
             api_key="test-key",
@@ -1241,7 +1241,7 @@ class TestV2EndToEndChain(unittest.TestCase):
     def test_full_v2_chain_artifact_refs_flow(self, mock_start, mock_poll):
         """Artifact refs flow through the v2 chain correctly."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         produced_artifacts = {}
 
@@ -1312,7 +1312,7 @@ class TestV2EndToEndChain(unittest.TestCase):
         }
         mock_poll.side_effect = lambda *a, **k: make_scout_poll()
 
-        scout_result = start_role_v2_impl(
+        scout_result = role_call_impl(
             role="scout",
             user_task="Implement a Ruby gRPC client for freeplane_plugin_grpc.",
             metadata={"repository": "https://github.com/metacoma/freeplane_plugin_grpc"},
@@ -1362,7 +1362,7 @@ class TestV2EndToEndChain(unittest.TestCase):
         }
         mock_poll.side_effect = lambda *a, **k: make_architect_poll()
 
-        architect_result = start_role_v2_impl(
+        architect_result = role_call_impl(
             role="architect",
             user_task="Plan implementation.",
             input_artifacts={
@@ -1383,7 +1383,7 @@ class TestV2EndToEndChain(unittest.TestCase):
         }
         mock_poll.side_effect = lambda *a, **k: make_coder_poll()
 
-        coder_result = start_role_v2_impl(
+        coder_result = role_call_impl(
             role="coder",
             user_task="Implement feature.",
             input_artifacts={
@@ -1405,7 +1405,7 @@ class TestV2EndToEndChain(unittest.TestCase):
         }
         mock_poll.side_effect = lambda *a, **k: make_reviewer_poll()
 
-        reviewer_result = start_role_v2_impl(
+        reviewer_result = role_call_impl(
             role="reviewer",
             user_task="Review implementation.",
             input_artifacts={
@@ -1428,7 +1428,7 @@ class TestV2EndToEndChain(unittest.TestCase):
 
 
 class TestV2ResultArtifactLoading(unittest.TestCase):
-    """Test shttp_role_result_v2 artifact loading."""
+    """Test _internal_role_result artifact loading."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="test_v2_result_")
@@ -1452,8 +1452,8 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
     def test_result_v2_no_undefined_run_id(self, mock_start, mock_poll):
         """result_v2 does not use undefined run_id variable."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.role_lifecycle import role_call_impl
+        from mcp_agent.server import _internal_role_result
 
         # Create a role run record via start_role_v2_impl
         mock_start.return_value = {
@@ -1474,7 +1474,7 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Test task",
             api_key="test-key",
@@ -1503,13 +1503,13 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
         # Now call result_v2 — this should not raise NameError
         # (Blocker 3: undefined run_id variable)
         try:
-            result_v2 = shttp_role_result_v2(
+            result_v2 = _internal_role_result(
                 role_run_id=role_run_id,
                 include_full_artifacts=False,
                 return_control_summary=True,
             )
         except NameError as e:
-            self.fail(f"shttp_role_result_v2 raised NameError: {e}")
+            self.fail(f"_internal_role_result raised NameError: {e}")
 
         self.assertEqual(result_v2["status"], "completed")
         self.assertIn("artifacts", result_v2)
@@ -1521,8 +1521,8 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
     def test_result_v2_include_full_artifacts_works(self, mock_start, mock_poll):
         """result_v2 with include_full_artifacts=true loads content correctly."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.role_lifecycle import role_call_impl
+        from mcp_agent.server import _internal_role_result
 
         mock_start.return_value = {
             "task_id": "task-001",
@@ -1542,7 +1542,7 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Test task with content",
             api_key="test-key",
@@ -1552,7 +1552,7 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
         role_run_id = result["role_run_id"]
 
         # Call result_v2 with full artifacts
-        result_v2 = shttp_role_result_v2(
+        result_v2 = _internal_role_result(
             role_run_id=role_run_id,
             include_full_artifacts=True,
             return_control_summary=True,
@@ -1570,7 +1570,7 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
 
 
 class TestV2ResultExactArtifactPath(unittest.TestCase):
-    """Test shttp_role_result_v2 exact artifact path resolution for include_full_artifacts."""
+    """Test _internal_role_result exact artifact path resolution for include_full_artifacts."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="test_v2_exact_path_")
@@ -1593,7 +1593,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
         """Test 1: same artifact_name, different role_run_id — returns exact content by path."""
         from mcp_agent.artifact_store import ArtifactStore
         from mcp_agent.role_store import RoleRunStore
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.server import _internal_role_result
 
         store = ArtifactStore()
         role_store = RoleRunStore()
@@ -1656,7 +1656,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
         )
 
         # Call result_v2 with include_full_artifacts=true
-        result_v2 = shttp_role_result_v2(
+        result_v2 = _internal_role_result(
             role_run_id="run-exact-1-scout-2",
             include_full_artifacts=True,
             return_control_summary=True,
@@ -1684,7 +1684,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
         """Test 2: same artifact_name, different role_run_id — summary uses exact path."""
         from mcp_agent.artifact_store import ArtifactStore
         from mcp_agent.role_store import RoleRunStore
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.server import _internal_role_result
 
         store = ArtifactStore()
         role_store = RoleRunStore()
@@ -1746,7 +1746,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             }),
         )
 
-        result_v2 = shttp_role_result_v2(
+        result_v2 = _internal_role_result(
             role_run_id="run-exact-2-scout-2",
             include_full_artifacts=True,
             return_control_summary=True,
@@ -1761,7 +1761,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
         """Test 3: missing artifact path returns warning, not silent failure."""
         from mcp_agent.artifact_store import ArtifactStore
         from mcp_agent.role_store import RoleRunStore
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.server import _internal_role_result
 
         store = ArtifactStore()
         role_store = RoleRunStore()
@@ -1808,7 +1808,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             }),
         )
 
-        result_v2 = shttp_role_result_v2(
+        result_v2 = _internal_role_result(
             role_run_id="run-exact-3-scout-1",
             include_full_artifacts=True,
             return_control_summary=True,
@@ -1829,7 +1829,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
         """Test 4: artifact name mismatch returns warning."""
         from mcp_agent.artifact_store import ArtifactStore
         from mcp_agent.role_store import RoleRunStore
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.server import _internal_role_result
 
         store = ArtifactStore()
         role_store = RoleRunStore()
@@ -1885,7 +1885,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             }),
         )
 
-        result_v2 = shttp_role_result_v2(
+        result_v2 = _internal_role_result(
             role_run_id="run-exact-4-architect-1",
             include_full_artifacts=True,
             return_control_summary=True,
@@ -1900,7 +1900,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
         """Test 5: default result (include_full_artifacts=false) does not include content."""
         from mcp_agent.artifact_store import ArtifactStore
         from mcp_agent.role_store import RoleRunStore
-        from mcp_agent.server import shttp_role_result_v2
+        from mcp_agent.server import _internal_role_result
 
         store = ArtifactStore()
         role_store = RoleRunStore()
@@ -1952,7 +1952,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             }),
         )
 
-        result_v2 = shttp_role_result_v2(
+        result_v2 = _internal_role_result(
             role_run_id="run-exact-5-scout-1",
             include_full_artifacts=False,
             return_control_summary=True,
@@ -1988,7 +1988,7 @@ class TestV2SummarySchema(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_v2_summary_rejects_next_role(self, mock_start, mock_poll):
         """v2 summary schema rejects/strips next_role."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         # Return a summary with next_role field
         mock_start.return_value = {
@@ -2010,7 +2010,7 @@ class TestV2SummarySchema(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Test task",
             api_key="test-key",
@@ -2026,7 +2026,7 @@ class TestV2SummarySchema(unittest.TestCase):
     def test_reviewer_summary_requires_action_pass_or_blocker(self, mock_start, mock_poll):
         """Reviewer summary requires action=PASS or action=BLOCKER."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         # Create required artifacts so reviewer passes validation
         store = ArtifactStore()
@@ -2093,7 +2093,7 @@ class TestV2SummarySchema(unittest.TestCase):
         }
         mock_poll.side_effect = poll_side_effect
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="reviewer",
             user_task="Review implementation.",
             input_artifacts={
@@ -2113,7 +2113,7 @@ class TestV2SummarySchema(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_non_reviewer_summary_requires_action_null(self, mock_start, mock_poll):
         """Non-reviewer summary requires action=null."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         # Return a scout summary with action=PASS (invalid for non-reviewer)
         mock_start.return_value = {
@@ -2134,7 +2134,7 @@ class TestV2SummarySchema(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="scout",
             user_task="Test task",
             api_key="test-key",
@@ -2166,7 +2166,7 @@ class TestV2ExactPathResolution(unittest.TestCase):
     def test_v2_resolver_reads_exact_path(self, mock_start, mock_poll):
         """Test 3: v2 input resolver reads exact path for path-like refs."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         store = ArtifactStore()
         meta1 = store.save(
@@ -2202,7 +2202,7 @@ class TestV2ExactPathResolution(unittest.TestCase):
             }),
         }
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Test task",
             input_artifacts={
@@ -2221,7 +2221,7 @@ class TestV2ExactPathResolution(unittest.TestCase):
     def test_v2_resolver_artifact_name_mismatch(self, mock_start):
         """Test 4: artifact name mismatch fails before role execution."""
         from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
         store = ArtifactStore()
         plan_meta = store.save(
@@ -2232,7 +2232,7 @@ class TestV2ExactPathResolution(unittest.TestCase):
             content="architect plan content",
         )
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Test task",
             input_artifacts={
@@ -2249,9 +2249,9 @@ class TestV2ExactPathResolution(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_v2_resolver_missing_path_fails(self, mock_start):
         """Test 5: missing artifact path fails clearly."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Test task",
             input_artifacts={
@@ -2266,9 +2266,9 @@ class TestV2ExactPathResolution(unittest.TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_v2_path_like_detection_narrow(self, mock_start):
         """Test: path-like detection only triggers on .artifact suffix."""
-        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.role_lifecycle import role_call_impl
 
-        result = start_role_v2_impl(
+        result = role_call_impl(
             role="architect",
             user_task="Test task",
             input_artifacts={

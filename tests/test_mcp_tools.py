@@ -1140,7 +1140,7 @@ class TestWrappedScalarArgs(unittest.TestCase):
         """artifact_list accepts wrapped run_id."""
         mock_impl.return_value = {"run_id": "test-run", "artifacts": []}
 
-        from mcp_agent.server import artifact_list
+        from mcp_agent.server import _artifact_list_internal as artifact_list
 
         result = artifact_list(run_id={"default": "20260605-abc123"})
 
@@ -1154,7 +1154,7 @@ class TestWrappedScalarArgs(unittest.TestCase):
         """artifact_list with plain run_id still works."""
         mock_impl.return_value = {"run_id": "test-run", "artifacts": []}
 
-        from mcp_agent.server import artifact_list
+        from mcp_agent.server import _artifact_list_internal as artifact_list
 
         result = artifact_list(run_id="20260605-abc123")
 

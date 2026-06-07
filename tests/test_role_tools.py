@@ -153,7 +153,7 @@ class TestRoleListTool(unittest.TestCase):
 
     def test_role_list_returns_six_roles(self):
         """role_list returns six roles (including coder_fix)."""
-        from mcp_agent.server import role_list
+        from mcp_agent.server import _role_list_internal as role_list
 
         result = role_list()
         self.assertIn("roles", result)
@@ -161,7 +161,7 @@ class TestRoleListTool(unittest.TestCase):
 
     def test_role_list_contains_scout(self):
         """role_list includes scout role."""
-        from mcp_agent.server import role_list
+        from mcp_agent.server import _role_list_internal as role_list
 
         result = role_list()
         names = [r["name"] for r in result["roles"]]
@@ -169,7 +169,7 @@ class TestRoleListTool(unittest.TestCase):
 
     def test_role_list_contains_architect(self):
         """role_list includes architect role."""
-        from mcp_agent.server import role_list
+        from mcp_agent.server import _role_list_internal as role_list
 
         result = role_list()
         names = [r["name"] for r in result["roles"]]
@@ -177,7 +177,7 @@ class TestRoleListTool(unittest.TestCase):
 
     def test_role_list_contains_coder(self):
         """role_list includes coder role."""
-        from mcp_agent.server import role_list
+        from mcp_agent.server import _role_list_internal as role_list
 
         result = role_list()
         names = [r["name"] for r in result["roles"]]
@@ -185,7 +185,7 @@ class TestRoleListTool(unittest.TestCase):
 
     def test_role_list_contains_reviewer(self):
         """role_list includes reviewer role."""
-        from mcp_agent.server import role_list
+        from mcp_agent.server import _role_list_internal as role_list
 
         result = role_list()
         names = [r["name"] for r in result["roles"]]
@@ -193,7 +193,7 @@ class TestRoleListTool(unittest.TestCase):
 
     def test_role_list_contains_publisher(self):
         """role_list includes publisher role."""
-        from mcp_agent.server import role_list
+        from mcp_agent.server import _role_list_internal as role_list
 
         result = role_list()
         names = [r["name"] for r in result["roles"]]
