@@ -2490,6 +2490,55 @@ def role_call(
             }
         }
     """
+    # ------------------------------------------------------------------
+    # Debug logging: raw MCP input shape
+    # ------------------------------------------------------------------
+    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+        from .safe_logging import (
+            DEBUG_ROLE_CALL,
+            correlate_id_from_args,
+            format_correlation,
+            safe_json_shape,
+            safe_preview,
+        )
+
+        if DEBUG_ROLE_CALL:
+            corr_id = correlate_id_from_args(
+                role_run_id=None, run_id=None, idempotency_key=idempotency_key
+            )
+
+            # Safe shape of role
+            role_shape = safe_json_shape(role)
+            role_type = role_shape.get("type", type(role).__name__) if isinstance(role_shape, dict) else type(role).__name__
+            role_preview_val = safe_json_shape(role).get("preview", str(role)[:200]) if isinstance(safe_json_shape(role), dict) else str(role)[:200]
+
+            # Safe shape of user_task (preview only, first 200 chars)
+            ut_shape = safe_json_shape(user_task)
+            ut_type = ut_shape.get("type", type(user_task).__name__) if isinstance(ut_shape, dict) else type(user_task).__name__
+            ut_len = ut_shape.get("len", len(str(user_task))) if isinstance(ut_shape, dict) else len(str(user_task))
+
+            # Metadata shape
+            meta_shape = safe_json_shape(metadata) if metadata is not None else None
+            meta_keys = meta_shape.get("keys", []) if meta_shape and isinstance(meta_shape, dict) else []
+
+            # input_artifacts shape
+            ia_shape = safe_json_shape(input_artifacts) if input_artifacts is not None else None
+            ia_count = ia_shape.get("len", 0) if ia_shape and isinstance(ia_shape, dict) else (len(input_artifacts) if isinstance(input_artifacts, (list, dict)) else 0)
+
+            # idempotency_key shape
+            ik_shape = safe_json_shape(idempotency_key) if idempotency_key is not None else None
+            ik_type = ik_shape.get("type", "NoneType") if ik_shape and isinstance(ik_shape, dict) else "NoneType"
+
+            logger.info(
+                "role_call.input %s role_type=%s role_preview=%s user_task_type=%s user_task_len=%d metadata_keys=%s input_artifacts_count=%d idempotency_key_type=%s",
+                format_correlation(corr_id, role=str(role)[:50]),
+                role_type, safe_preview(str(role_preview_val), 100),
+                ut_type, ut_len,
+                meta_keys,
+                ia_count,
+                ik_type,
+            )
+
     # Normalize inputs
     normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)

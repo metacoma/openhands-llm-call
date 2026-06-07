@@ -49,6 +49,19 @@ from .summary_validator import (
 logger = logging.getLogger("openhands-mcp")
 
 
+class ConversationStartError(Exception):
+    """Raised when starting an OpenHands conversation fails.
+
+    Contains the HTTP status code and response body (when available)
+    to aid debugging of 4xx/5xx errors from the /v1/call_lm endpoint.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None, body: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
+
 def _unwrap_text(value: Any) -> Any:
     """Unwrap MCP-style ``{"text": "..."}`` values.
 
@@ -127,6 +140,7 @@ def _start_conversation_on_fastapi(
     conversation_id: Optional[str] = None,
     url: Optional[str] = None,
     max_polls: Optional[int] = None,
+    _correlation_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """POST /v1/call_lm with no_wait=True and return the response dict.
 
@@ -144,6 +158,8 @@ def _start_conversation_on_fastapi(
         OpenHands LLM base URL override.
     max_polls :
         Optional per-request max poll count.
+    _correlation_id :
+        Optional correlation ID for diagnostic logging.
 
     Returns
     -------
@@ -167,11 +183,104 @@ def _start_conversation_on_fastapi(
     if conversation_id:
         payload["conversation_id"] = conversation_id
 
+    # ------------------------------------------------------------------
+    # Debug logging: outgoing payload shape
+    # ------------------------------------------------------------------
+    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+        from .safe_logging import (
+            DEBUG_ROLE_CALL,
+            correlate_id_from_args,
+            format_correlation,
+            safe_json_shape,
+            safe_preview,
+        )
+
+        if DEBUG_ROLE_CALL:
+            corr_id = _correlation_id or correlate_id_from_args()
+
+            payload_keys = list(payload.keys())
+            prompt_type = type(prompt).__name__
+            prompt_len = len(prompt) if isinstance(prompt, str) else 0
+            api_key_type = type(api_key).__name__ if api_key else "NoneType"
+            api_key_present = bool(api_key)
+            conv_id_present = bool(conversation_id)
+
+            logger.info(
+                "call_lm.request %s url=%s payload_keys=%s prompt_type=%s prompt_len=%d api_key_present=%s api_key_type=%s conversation_id_present=%s no_wait=%s no_wait_type=%s poll_interval=%s poll_interval_type=%s max_polls=%s max_polls_type=%s",
+                format_correlation(corr_id),
+                f"{base}/v1/call_lm",
+                payload_keys,
+                prompt_type, prompt_len,
+                api_key_present, api_key_type,
+                conv_id_present,
+                True, type(True).__name__,
+                _OPENHANDS_POLL_INTERVAL, type(_OPENHANDS_POLL_INTERVAL).__name__,
+                max_polls or (_OPENHANDS_MAX_RUNTIME // _OPENHANDS_POLL_INTERVAL),
+                type(int).__name__,
+            )
+
     resp = requests.post(
         f"{base}/v1/call_lm",
         json=payload,
         timeout=_OPENHANDS_REQUEST_TIMEOUT,
     )
+
+    # ------------------------------------------------------------------
+    # Debug logging: error response body on HTTP errors
+    # ------------------------------------------------------------------
+    if resp.status_code >= 400:
+        if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+            from .safe_logging import (
+                DEBUG_ROLE_CALL,
+                correlate_id_from_args,
+                format_correlation,
+            )
+
+            if DEBUG_ROLE_CALL:
+                corr_id = _correlation_id or correlate_id_from_args()
+                logger.error(
+                    "call_lm.response_error %s status=%d body=%s",
+                    format_correlation(corr_id),
+                    resp.status_code,
+                    resp.text[:4000],
+                )
+
+        # Raise with body included in message
+        raise requests.HTTPError(
+            f"HTTP {resp.status_code}; body={resp.text[:1000]}",
+            response=resp,
+        )
+
+    # ------------------------------------------------------------------
+    # Debug logging: success response shape
+    # ------------------------------------------------------------------
+    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+        from .safe_logging import (
+            DEBUG_ROLE_CALL,
+            correlate_id_from_args,
+            format_correlation,
+        )
+
+        if DEBUG_ROLE_CALL:
+            corr_id = _correlation_id or correlate_id_from_args()
+            result = resp.json()
+            resp_keys = list(result.keys()) if isinstance(result, dict) else []
+            resp_status = result.get("status", "(none)") if isinstance(result, dict) else "(none)"
+            task_id_present = bool(result.get("task_id")) if isinstance(result, dict) else False
+            conv_id_present = bool(result.get("conversation_id")) if isinstance(result, dict) else False
+            app_conv_id_present = bool(result.get("app_conversation_id")) if isinstance(result, dict) else False
+
+            logger.info(
+                "call_lm.response_ok %s status=%d response_keys=%s response_status=%s task_id_present=%s conversation_id_present=%s app_conversation_id_present=%s",
+                format_correlation(corr_id),
+                resp.status_code,
+                resp_keys,
+                resp_status,
+                task_id_present,
+                conv_id_present,
+                app_conv_id_present,
+            )
+
     resp.raise_for_status()
     return resp.json()
 
@@ -487,6 +596,55 @@ def role_call_impl(
         }
 
     # ------------------------------------------------------------------
+    # Debug logging: prompt render result
+    # ------------------------------------------------------------------
+    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+        from .safe_logging import (
+            DEBUG_ROLE_CALL,
+            correlate_id_from_args,
+            format_correlation,
+            safe_json_shape,
+            safe_preview,
+        )
+
+        if DEBUG_ROLE_CALL:
+            corr_id = correlate_id_from_args(
+                role_run_id=role_run_id, run_id=run_id, idempotency_key=idempotency_key
+            )
+
+            prompt_type = type(main_prompt).__name__
+            prompt_len = len(main_prompt) if isinstance(main_prompt, str) else 0
+            prompt_preview = safe_preview(main_prompt, 300) if isinstance(main_prompt, str) else str(main_prompt)[:300]
+
+            # Input artifact types (not content)
+            input_artifact_types = []
+            if input_artifacts and isinstance(input_artifacts, dict):
+                for k, v in input_artifacts.items():
+                    input_artifact_types.append(f"{k}={type(v).__name__}")
+
+            # Template name/path if available
+            template_name = role_spec.prompt_template or "(default)"
+
+            logger.info(
+                "role_call.prompt_rendered %s role=%s prompt_type=%s prompt_len=%d prompt_preview=%s template=%s input_artifact_types=%s",
+                format_correlation(corr_id, role=role),
+                role,
+                prompt_type, prompt_len, safe_preview(prompt_preview, 100),
+                template_name,
+                input_artifact_types,
+            )
+
+            # If prompt is not a string, log error immediately
+            if not isinstance(main_prompt, str):
+                logger.error(
+                    "role_call.prompt_invalid %s role=%s prompt_type=%s prompt_preview=%s — prompt must be str, will return controlled error",
+                    format_correlation(corr_id, role=role),
+                    role,
+                    prompt_type,
+                    str(main_prompt)[:200],
+                )
+
+    # ------------------------------------------------------------------
     # Step 6: Idempotency check — reuse existing run if same key
     # ------------------------------------------------------------------
     role_store = RoleRunStore()
@@ -544,6 +702,46 @@ def role_call_impl(
     attempt = role_store.get_attempt_count(run_id, role) + 1
     role_run_id = _generate_role_run_id(run_id, role, attempt)
 
+    # ------------------------------------------------------------------
+    # Debug logging: normalized values
+    # ------------------------------------------------------------------
+    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+        from .safe_logging import (
+            DEBUG_ROLE_CALL,
+            correlate_id_from_args,
+            format_correlation,
+            safe_preview,
+        )
+
+        if DEBUG_ROLE_CALL:
+            corr_id = correlate_id_from_args(
+                role_run_id=role_run_id, run_id=run_id, idempotency_key=idempotency_key
+            )
+
+            # Determine metadata keys for logging
+            meta_keys = list(metadata.keys()) if metadata and isinstance(metadata, dict) else []
+
+            # Normalize input_artifacts keys
+            ia_keys = list(input_artifacts.keys()) if input_artifacts and isinstance(input_artifacts, dict) else []
+
+            logger.info(
+                "role_call.normalized %s role=%s user_task_type=%s user_task_len=%d metadata_keys=%s input_artifacts_normalized_keys=%s idempotency_key=%s",
+                format_correlation(corr_id, role=role),
+                role,
+                type(user_task).__name__, len(user_task),
+                meta_keys,
+                ia_keys,
+                str(idempotency_key) if idempotency_key else "(none)",
+            )
+
+            # Validate role after normalization
+            if not role or not role.strip():
+                logger.error(
+                    "role_call.normalized.correlation_id=%s role=(empty) user_task_type=%s user_task_len=%d — role is empty after normalization, will return error",
+                    corr_id,
+                    type(user_task).__name__, len(user_task),
+                )
+
     # Save idempotency record with role_run_id (not run_id)
     if idempotency_key:
         role_store.save_idempotency_record(idempotency_scope, role_run_id)
@@ -564,21 +762,35 @@ def role_call_impl(
     # Step 7: Start OpenHands conversation (main prompt)
     # ------------------------------------------------------------------
     try:
+        # Compute correlation_id for error logging
+        corr_id_for_error = correlate_id_from_args(
+            role_run_id=role_run_id, run_id=run_id, idempotency_key=idempotency_key
+        ) if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"} else None
+
         conv_response = _start_conversation_on_fastapi(
             prompt=main_prompt,
             api_key=api_key or os.getenv("OPENHANDS_API_KEY", ""),
             llm_model=llm_model,
             url=url,
+            _correlation_id=corr_id_for_error,
         )
     except Exception as exc:
         role_store.update_role_run(
             role_run_id, lifecycle_state="error"
         )
+        # Build a message that includes the FastAPI 422 body when available
+        error_type = "ConversationStartError"
+        error_msg = f"Failed to start OpenHands conversation: {exc}"
+        if isinstance(exc, ConversationStartError):
+            error_msg = f"Failed to start OpenHands conversation: HTTP {exc.status_code}; body={exc.body}"
+        elif isinstance(exc, requests.HTTPError) and hasattr(exc, "response") and exc.response is not None:
+            error_msg = f"Failed to start OpenHands conversation: HTTP {exc.response.status_code}; body={exc.response.text[:1000]}"
+
         return {
             "status": "failed",
             "error": {
-                "type": "ConversationStartError",
-                "message": f"Failed to start OpenHands conversation: {exc}",
+                "type": error_type,
+                "message": error_msg,
                 "retryable": True,
             },
         }
