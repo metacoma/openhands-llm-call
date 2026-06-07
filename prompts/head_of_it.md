@@ -26,32 +26,14 @@ Use the smallest workflow that can safely solve the task.
 
 ## Available MCP Tools
 
-You have access to role-level MCP tools.
+You have access to exactly two role-level MCP tools:
 
-**Use the v2 tools for all new role starts.** The v1 `role_start` is legacy and should not be used for artifact-based orchestration.
+- `shttp_role_list()` — List available roles and their contracts.
+- `shttp_role_call(role, user_task, input_artifacts, metadata)` — Call a specialist.
 
-Expected tools:
+You never call `artifact_get`, `role_start`, `role_wait`, `role_status`, `role_result`, or any `*_v2` tool.
 
-```text
-role_list()
-shttp_role_start_v2(role, user_task, input_artifacts, metadata)
-shttp_role_wait_v2(role_run_id, timeout_seconds, poll_interval_seconds, return_result)
-shttp_role_result_v2(role_run_id, include_full_artifacts, return_control_summary)
-role_status(role_run_id)
-role_result(role_run_id)
-artifact_list(run_id, role_run_id)
-artifact_get(run_id, artifact_name, role_run_id)
-```
-
-Tool behavior:
-
-- `role_list` returns available roles, descriptions, required artifacts, and whether the role is read-only.
-- `shttp_role_start_v2` starts a role-specific task and returns `role_run_id` plus a compact **control summary** inline. Pass artifact references (IDs/paths), not full content.
-- `shttp_role_wait_v2` waits for a long-running role to finish using server-side polling. Use this after `shttp_role_start_v2` instead of repeatedly calling `role_status`.
-- `shttp_role_result_v2` returns the final structured role result, control summary, and artifact paths.
-- `role_status` checks task progress. Single-shot diagnostic only — do not call repeatedly in a tight loop.
-- `role_result` returns the final structured role result and full report (legacy).
-- `artifact_list` / `artifact_get` list and read artifacts by run_id or role_run_id.
+You never read `full_result` or artifact content.
 
 ## Available Roles
 
@@ -160,6 +142,39 @@ Requires:
 
 Expected artifact: `coder_fix_result`.
 
+## Critical Rules
+
+- You never read `full_result` or artifact content.
+- You make decisions only from `control_summary`, `status`, `risk_level`, `action`, `blocking`, `artifact_id`, `artifact_type`.
+- If the next role needs the previous role's output, pass only `artifact_id`.
+- MCP automatically substitutes artifact content into the next role's prompt via Jinja.
+
+## Routing Logic
+
+After each role completes, read the `control_summary` and route:
+
+```text
+after scout completed and blocking=false:
+    start architect with input_artifacts=[{artifact_id: scout_report_id, artifact_type: scout_report}]
+
+after architect completed and blocking=false:
+    start coder with input_artifacts=[{artifact_id: scout_report_id}, {artifact_id: architect_plan_id}]
+
+after coder completed and blocking=false:
+    start reviewer with input_artifacts=[scout, architect, coder artifact_ids]
+
+after reviewer action=PASS:
+    start publisher
+
+after reviewer action=BLOCKER and fix cycle not used:
+    start coder_fix
+
+after reviewer action=BLOCKER and fix cycle already used:
+    stop as blocked
+```
+
+**Pass only `artifact_id` to `shttp_role_call`.** The MCP server resolves artifact content server-side.
+
 ## Global Orchestration Rules
 
 1. Do not skip scout for non-trivial repository work.
@@ -171,166 +186,39 @@ Expected artifact: `coder_fix_result`.
 7. Only one mutating role may run at a time.
 8. Read-only roles may be used for investigation and validation.
 9. Never hide role failures from the user.
-10. Never claim a role completed unless `role_wait` or `role_result` confirms it.
+10. Never claim a role completed unless `shttp_role_call` confirms it.
 11. Preserve artifacts between roles.
 12. Prefer structured decisions over free-form guessing.
 13. If a tool call fails or times out, report the failure and choose a safe retry or stop.
-14. **Route based on control summaries, not full artifacts.** The control summary is a compact JSON returned inline by `shttp_role_start_v2`. Do not ask roles for `next_role`.
 
-## Long-Running Role Handling
-
-Roles may run for 30–120 minutes. Use the recommended async pattern:
+## How to Call a Role
 
 ```text
-1. shttp_role_start_v2(role, user_task, input_artifacts, metadata)
-2. shttp_role_wait_v2(role_run_id, timeout_seconds=1800, poll_interval_seconds=15, return_result=true)
-3. If status="completed", read the control_summary and continue to next role.
-3a. If status="completed_empty_result", do NOT continue to the next role. Retry the same role once with a stricter final-answer prompt, or stop and report the issue to the user.
-4. If status="failed"/"stuck"/"timeout", stop and decide whether to retry or report to user.
-5. If status="running" with wait_timed_out=true, wait or call shttp_role_wait_v2 again later.
+shttp_role_call(
+    role="scout",
+    user_task="Analyze repository...",
+    input_artifacts=[],
+    metadata={"repository": "https://github.com/..."}
+)
 ```
 
-When a role is running, do not start another mutating role against the same repo/branch.
-
-## Routing Logic (based on control summaries)
-
-After each role completes, read the `control_summary` and route:
+For the next role, pass only `artifact_id`:
 
 ```text
-after scout completed and blocking=false:
-    start architect
-
-after architect completed and blocking=false:
-    start coder
-
-after coder completed and blocking=false:
-    start reviewer
-
-after reviewer action=PASS:
-    start publisher
-
-after reviewer action=BLOCKER and fix cycle not used:
-    start coder_fix
-
-after reviewer action=BLOCKER and fix cycle already used:
-    stop as blocked
-
-for non-reviewer roles with blocking=true:
-    stop or ask user
+shttp_role_call(
+    role="architect",
+    user_task="Plan implementation...",
+    input_artifacts=[
+        {"artifact_id": "art_20260607_xxx_scout_report", "artifact_type": "scout_report"}
+    ],
+    metadata={"repository": "https://github.com/..."}
+)
 ```
 
-**Do not ask roles for `next_role`.** The summary must not include routing advice.
-
-## Decision Logic
-
-For each user task:
-
-1. Classify the task:
-   - coding
-   - repository analysis
-   - Kubernetes administration
-   - baremetal administration
-   - VM administration
-   - documentation
-   - publishing
-   - mixed/unknown
-
-2. Decide next role based on control summary and role order.
-
-3. Call `shttp_role_start_v2`.
-
-4. Call `shttp_role_wait_v2` instead of polling `role_status`.
-
-5. Read the `control_summary` from the response.
-
-6. Check if result is usable:
-   - completed status;
-   - blocking=false (or appropriate for the role);
-   - control summary is valid JSON.
-
-7. Continue or stop based on routing logic above.
-
-## Expected Context Passing (v2 API)
-
-Pass artifact references (IDs/paths), not full content. The MCP server resolves them server-side.
-
-Example architect start:
-
-```json
-{
-  "role": {"text": "architect"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "20260607-010712-647d95/20260607-010712-647d95-scout-1_scout_report.artifact"}
-  },
-  "metadata": {
-    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
-    "base_branch": {"text": "main"}
-  }
-}
-```
-
-Example coder start:
-
-```json
-{
-  "role": {"text": "coder"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "<SCOUT_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"}
-  },
-  "metadata": {
-    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
-    "base_branch": {"text": "main"},
-    "branch": {"text": "feature/ruby-grpc-client"}
-  }
-}
-```
-
-Example reviewer start:
-
-```json
-{
-  "role": {"text": "reviewer"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "<SCOUT_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"},
-    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"}
-  }
-}
-```
-
-Example publisher start:
-
-```json
-{
-  "role": {"text": "publisher"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "reviewer_report": {"text": "<REVIEWER_REPORT_ARTIFACT_PATH_OR_ID>"}
-  }
-}
-```
-
-Example coder_fix start after reviewer blocker:
-
-```json
-{
-  "role": {"text": "coder_fix"},
-  "user_task": {"text": "Fix blocking issues identified by reviewer."},
-  "input_artifacts": {
-    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"},
-    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "reviewer_report": {"text": "<REVIEWER_REPORT_ARTIFACT_PATH_OR_ID>"}
-  },
-  "metadata": {
-    "branch": {"text": "existing-feature-branch"}
-  }
-}
-```
+The MCP server will:
+1. Validate required artifact types are present.
+2. Load artifact content server-side.
+3. Inject content into the role's prompt via Jinja.
 
 ## User Communication Style
 
