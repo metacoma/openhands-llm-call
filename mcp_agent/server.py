@@ -21,7 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from .artifact_store import ArtifactStore
 from .task_store import TaskStore
 from . import role_tools as _role_tools
-from .roles import list_roles
+from .roles import get_role, list_roles
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -172,7 +172,6 @@ def _start_conversation_on_fastapi(
 # ---------------------------------------------------------------------------
 
 
-@MCP.tool()
 def openhands_start_task(
     prompt: str,
     api_key: str,
@@ -353,7 +352,6 @@ def openhands_start_task(
     }
 
 
-@MCP.tool()
 def openhands_get_task_status(
     task_id: Any,
     url: str | None = None,
@@ -559,7 +557,6 @@ def openhands_get_task_status(
     }
 
 
-@MCP.tool()
 def openhands_get_task_result(
     task_id: Any,
     url: str | None = None,
@@ -787,7 +784,6 @@ def openhands_get_task_result(
     }
 
 
-@MCP.tool()
 def openhands_get_task_events(
     task_id: Any,
     limit: Any = 50,
@@ -906,7 +902,6 @@ def openhands_get_task_events(
     }
 
 
-@MCP.tool()
 def openhands_cancel_task(task_id: Any) -> dict:
     """Cancel a previously started OpenHands task (best-effort).
 
@@ -956,7 +951,6 @@ def openhands_cancel_task(task_id: Any) -> dict:
     }
 
 
-@MCP.tool()
 def call_llm(
     prompt: str,
     api_key: str,
@@ -1084,7 +1078,6 @@ def call_llm(
     }
 
 
-@MCP.tool()
 def check_health() -> dict:
     """Check if the OpenHands LLM Call server is healthy."""
     resp = requests.get(f"{OPENHANDS_URL}/health", timeout=10)
@@ -1092,7 +1085,6 @@ def check_health() -> dict:
     return resp.json()
 
 
-@MCP.tool()
 def check_job(uid: str, url: str | None = None) -> dict:
     """Check the status of an async LLM job by its UID.
 
