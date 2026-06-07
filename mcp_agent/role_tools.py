@@ -672,6 +672,15 @@ def role_result_impl(
     st = task_status.get("status") or "unknown"
 
     if st != "completed":
+        # Persist non-completed terminal statuses observed from OpenHands
+        if st in TERMINAL_STATUSES:
+            try:
+                store.update_role_run(role_run_id, status=st)
+            except Exception:
+                logger.warning(
+                    "Failed to persist terminal status '%s' for role_run_id=%s",
+                    st, role_run_id,
+                )
         return {
             "role_run_id": role_run_id,
             "run_id": role_run["run_id"],
@@ -1107,6 +1116,68 @@ def role_wait_impl(
             "error": {
                 "type": error_type,
                 "message": f"Role was {st}.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st == "completed_empty_result":
+        # Use existing helper for canonical empty-result shape
+        return {
+            **_build_empty_result_response(
+                role_run_id, role_run, st
+            ),
+            "duration_seconds": duration_seconds,
+        }
+
+    if st in ("canceled",):
+        return {
+            "role_run_id": role_run_id,
+            "status": "canceled",
+            "has_result": False,
+            "error": {
+                "type": "RoleCancelled",
+                "message": "Role ended with terminal status 'canceled'.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st in ("timed_out",):
+        return {
+            "role_run_id": role_run_id,
+            "status": "timed_out",
+            "has_result": False,
+            "error": {
+                "type": "RoleTimeout",
+                "message": "Role ended with terminal status 'timed_out'.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    if st == "error":
+        return {
+            "role_run_id": role_run_id,
+            "status": "error",
+            "has_result": False,
+            "error": {
+                "type": "RoleError",
+                "message": "Role ended with terminal status 'error'.",
+                "retryable": True,
+            },
+            "duration_seconds": duration_seconds,
+        }
+
+    # Generic safety branch: any other terminal status must not return "running"
+    if st in TERMINAL_STATUSES:
+        return {
+            "role_run_id": role_run_id,
+            "status": st,
+            "has_result": False,
+            "error": {
+                "type": "RoleTerminalStatus",
+                "message": f"Role ended with terminal status '{st}'.",
                 "retryable": True,
             },
             "duration_seconds": duration_seconds,

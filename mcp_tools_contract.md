@@ -302,6 +302,40 @@ If another role is already running, `role_start` returns:
 }
 ```
 
+### Response (all terminal statuses)
+
+`role_wait` always returns a terminal status when the underlying role has
+reached a terminal state. It must **not** report `running` for terminal
+statuses such as `error`, `timed_out`, `canceled`, or `completed_empty_result`.
+
+| Status | Error type | Notes |
+|---|---|---|
+| `completed` | — | Returns result (or compact response if `return_result=false`) |
+| `completed_empty_result` | `EmptyRoleResult` | Has `diagnostics` with `answer_empty: true` |
+| `failed` | `RoleFailed` | — |
+| `stuck` | `OpenHandsStuckError` | — |
+| `error` | `RoleError` | — |
+| `cancelled` | `RoleCancelled` | — |
+| `canceled` | `RoleCancelled` | Normalized error type; status preserves spelling |
+| `timeout` | `RoleTimeout` | — |
+| `timed_out` | `RoleTimeout` | Normalized error type; status preserves spelling |
+
+Any terminal status not listed above will return:
+
+```json
+{
+  "role_run_id": "...",
+  "status": "<actual_status>",
+  "has_result": false,
+  "error": {
+    "type": "RoleTerminalStatus",
+    "message": "Role ended with terminal status '<actual_status>'.",
+    "retryable": true
+  },
+  "duration_seconds": <N>
+}
+```
+
 ### Response (bounded timeout — role still running)
 
 ```json
