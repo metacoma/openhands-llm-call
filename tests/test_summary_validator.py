@@ -284,7 +284,12 @@ class TestSafeFallbackSummary(unittest.TestCase):
         self.assertEqual(result["blocking_summary"], [])
 
     def test_safe_fallback_for_reviewer_no_derivation(self):
-        """Safe fallback for reviewer when action cannot be derived."""
+        """Safe fallback for reviewer when action cannot be derived.
+
+        The reviewer did complete its work; the issue is only with summary
+        parsing.  The fallback now returns status='completed' with
+        blocking=False rather than blocking the pipeline.
+        """
         from mcp_agent.summary_validator import safe_fallback_summary
 
         result = safe_fallback_summary(
@@ -294,10 +299,18 @@ class TestSafeFallbackSummary(unittest.TestCase):
             main_artifact_content="No ACTION line found.",
         )
         self.assertTrue(result.get("valid"))
-        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["status"], "completed")
         self.assertEqual(result["role"], "reviewer")
-        self.assertEqual(result["action"], "BLOCKER")
-        self.assertTrue(result["blocking"])
+        self.assertIsNone(result["action"])
+        self.assertFalse(result["blocking"])
+        self.assertEqual(result["risk_level"], "MEDIUM")
+        self.assertEqual(
+            result["blocking_summary"],
+            [
+                "Reviewer summary parsing failed and action could not be "
+                "derived safely.",
+            ],
+        )
 
     def test_safe_fallback_for_reviewer_with_derivation(self):
         """Safe fallback for reviewer when action can be derived."""

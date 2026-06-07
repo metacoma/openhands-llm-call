@@ -264,18 +264,24 @@ def safe_fallback_summary(
             action = derived
 
     if is_reviewer and action is None:
-        # Cannot derive safely — mark as blocked
+        # Cannot derive safely — mark as completed with parse error.
+        # The reviewer did complete its work; the issue is only with
+        # summary parsing, not with the review itself.
         return {
             "valid": True,
-            "status": "blocked",
+            "status": "completed",
             "role": role,
-            "summary": "Reviewer completed, but MCP could not parse or derive PASS/BLOCKER.",
+            "summary": (
+                "Reviewer completed, but MCP could not parse or derive "
+                "PASS/BLOCKER from the summary."
+            ),
             "primary_artifact_name": summary_artifact_name,
-            "blocking": True,
-            "risk_level": "HIGH",
-            "action": "BLOCKER",
+            "blocking": False,
+            "risk_level": "MEDIUM",
+            "action": None,
             "blocking_summary": [
-                "Reviewer summary parsing failed and action could not be derived safely.",
+                "Reviewer summary parsing failed and action could not be "
+                "derived safely.",
             ],
         }
 

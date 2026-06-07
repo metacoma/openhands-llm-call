@@ -348,19 +348,13 @@ def start_role_v2_impl(
     if metadata.get("context"):
         template_vars["context"] = str(metadata["context"])
 
-    # Inject artifact contents into template variables
-    # Map artifact names to template variable names
-    artifact_to_var = {
-        "scout_report": "scout_report",
-        "architect_plan": "architect_plan",
-        "coder_report": "coder_report",
-        "reviewer_report": "reviewer_report",
-        "coder_fix_result": "coder_fix_result",
-    }
-
+    # Inject artifact contents into template variables.
+    # Use artifact name directly as the Jinja2 variable name — the
+    # mapping was identity (artifact_name → same variable name) and
+    # the Jinja2 templates already expect the artifact name as the
+    # variable key, so no translation is needed.
     for artifact_name, content_ref in artifact_contents.items():
-        var_name = artifact_to_var.get(artifact_name, artifact_name)
-        template_vars[var_name] = content_ref
+        template_vars[artifact_name] = content_ref
 
     try:
         main_prompt = render_prompt(

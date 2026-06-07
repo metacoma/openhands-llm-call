@@ -2156,11 +2156,28 @@ def shttp_role_result_v2(
     artifact_store = ArtifactStore()
     artifacts_list = artifact_store.list(role_run.get("run_id", ""))
 
+    # Determine the expected summary artifact name from the role spec.
+    # Falls back to _summary suffix if the role is unknown or has no
+    # summary_artifact field.
+    summary_artifact_name: str | None = None
+    try:
+        role_spec = get_role(role_run.get("role", ""))
+        if role_spec and hasattr(role_spec, "summary_artifact"):
+            summary_artifact_name = role_spec.summary_artifact
+    except Exception:
+        pass
+
     artifacts_result: dict[str, Any] = {}
     primary_artifacts: list[dict[str, str]] = []
     for art in artifacts_list:
         art_name = art.get("artifact_name", "")
-        if art_name.endswith("_summary"):
+        is_summary = (
+            summary_artifact_name is not None
+            and art_name == summary_artifact_name
+        ) or (
+            summary_artifact_name is None and art_name.endswith("_summary")
+        )
+        if is_summary:
             artifacts_result["summary"] = {
                 "artifact_name": art_name,
                 "artifact_path": art.get("artifact_path"),
@@ -2185,7 +2202,16 @@ def shttp_role_result_v2(
             art_path = art.get("artifact_path", "")
             if art_path:
                 try:
-                    full_content = art.get("content", "")
+                    # Use artifact_store.get() to read actual file content.
+                    # artifact_store.list() returns metadata-only dicts that
+                    # do NOT include a "content" key — only get() reads the
+                    # file and augments the metadata with "content".
+                    full_meta = artifact_store.get(
+                        run_id, artifact_name=art_name
+                    )
+                    full_content = (
+                        full_meta["content"] if full_meta else ""
+                    )
                     if art_name.endswith("_summary"):
                         result.setdefault("summary_artifact", full_content)
                     else:
