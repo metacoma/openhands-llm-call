@@ -1071,5 +1071,642 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
         self.assertIn("https://github.com/example/repo", captured_prompts[0])
 
 
+class TestV2ArtifactStorage(unittest.TestCase):
+    """Test that v2 artifacts are stored through ArtifactStore correctly."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_v2_artifacts_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_primary_artifact_saved_via_artifact_store(self, mock_start, mock_poll):
+        """Scout primary artifact is saved through ArtifactStore, not legacy store."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Investigate the repo",
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("artifacts", result)
+        self.assertIn("primary", result["artifacts"])
+        primary_path = result["artifacts"]["primary"]["artifact_path"]
+        self.assertIsNotNone(primary_path)
+
+        # Verify artifact exists in ArtifactStore by listing its run directory
+        state_dir = os.path.join(self.tmpdir, "runs")
+        full_primary_path = os.path.join(state_dir, primary_path)
+        self.assertTrue(os.path.exists(full_primary_path))
+        # Verify .meta.json companion exists
+        meta_path = full_primary_path + ".meta.json"
+        self.assertTrue(os.path.exists(meta_path))
+        meta = json.loads(open(meta_path).read())
+        self.assertEqual(meta["artifact_name"], "scout_report")
+        self.assertEqual(meta["role"], "scout")
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_summary_artifact_saved_separately(self, mock_start, mock_poll):
+        """Summary artifact is a different file from primary."""
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Investigate the repo",
+            api_key="test-key",
+        )
+
+        # Primary and summary should have different artifact names
+        primary_name = result["artifacts"]["primary"]["artifact_name"]
+        summary_name = result["artifacts"]["summary"]["artifact_name"]
+        self.assertNotEqual(primary_name, summary_name)
+        self.assertEqual(primary_name, "scout_report")
+        self.assertEqual(summary_name, "scout_summary")
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_summary_does_not_overwrite_primary(self, mock_start, mock_poll):
+        """Saving summary does not overwrite primary artifact."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Investigate the repo",
+            api_key="test-key",
+        )
+
+        primary_path = result["artifacts"]["primary"]["artifact_path"]
+        summary_path = result["artifacts"]["summary"]["artifact_path"]
+
+        # Verify both artifacts exist and are different files
+        self.assertIsNotNone(primary_path)
+        self.assertIsNotNone(summary_path)
+        self.assertNotEqual(primary_path, summary_path)
+
+        state_dir = os.path.join(self.tmpdir, "runs")
+        full_primary = os.path.join(state_dir, primary_path)
+        full_summary = os.path.join(state_dir, summary_path)
+        self.assertTrue(os.path.exists(full_primary))
+        self.assertTrue(os.path.exists(full_summary))
+
+        # Verify primary content is non-empty (it stores the LLM response)
+        primary_content = open(full_primary).read()
+        self.assertTrue(len(primary_content.strip()) > 0)
+
+
+class TestV2EndToEndChain(unittest.TestCase):
+    """Mocked end-to-end v2 chain: scout → architect → coder → reviewer."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_v2_chain_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_full_v2_chain_artifact_refs_flow(self, mock_start, mock_poll):
+        """Artifact refs flow through the v2 chain correctly."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        produced_artifacts = {}
+
+        def make_scout_poll():
+            return {
+                "status": "completed",
+                "answer": json.dumps({
+                    "status": "completed",
+                    "role": "scout",
+                    "summary": "Scout completed.",
+                    "primary_artifact_name": "scout_report",
+                    "blocking": False,
+                    "risk_level": "LOW",
+                    "action": None,
+                    "blocking_summary": [],
+                }),
+            }
+
+        def make_architect_poll():
+            return {
+                "status": "completed",
+                "answer": json.dumps({
+                    "status": "completed",
+                    "role": "architect",
+                    "summary": "Architect completed.",
+                    "primary_artifact_name": "architect_plan",
+                    "blocking": False,
+                    "risk_level": "LOW",
+                    "action": None,
+                    "blocking_summary": [],
+                }),
+            }
+
+        def make_coder_poll():
+            return {
+                "status": "completed",
+                "answer": json.dumps({
+                    "status": "completed",
+                    "role": "coder",
+                    "summary": "Coder completed.",
+                    "primary_artifact_name": "coder_report",
+                    "blocking": False,
+                    "risk_level": "LOW",
+                    "action": None,
+                    "blocking_summary": [],
+                }),
+            }
+
+        def make_reviewer_poll():
+            return {
+                "status": "completed",
+                "answer": json.dumps({
+                    "status": "completed",
+                    "role": "reviewer",
+                    "summary": "Reviewer completed.",
+                    "primary_artifact_name": "reviewer_report",
+                    "blocking": False,
+                    "risk_level": "MEDIUM",
+                    "action": "PASS",
+                    "blocking_summary": [],
+                }),
+            }
+
+        # Step 1: Scout
+        mock_start.return_value = {
+            "task_id": "task-scout",
+            "conversation_id": "conv-scout",
+        }
+        mock_poll.side_effect = lambda *a, **k: make_scout_poll()
+
+        scout_result = start_role_v2_impl(
+            role="scout",
+            user_task="Implement a Ruby gRPC client for freeplane_plugin_grpc.",
+            metadata={"repository": "https://github.com/metacoma/freeplane_plugin_grpc"},
+            api_key="test-key",
+        )
+
+        self.assertEqual(scout_result["status"], "completed")
+        scout_artifact_path = scout_result["artifacts"]["primary"]["artifact_path"]
+        produced_artifacts["scout_report"] = scout_artifact_path
+
+        # Step 2: Architect (with scout_report)
+        mock_start.return_value = {
+            "task_id": "task-arch",
+            "conversation_id": "conv-arch",
+        }
+        mock_poll.side_effect = lambda *a, **k: make_architect_poll()
+
+        architect_result = start_role_v2_impl(
+            role="architect",
+            user_task="Plan implementation.",
+            input_artifacts={
+                "scout_report": scout_artifact_path,
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(architect_result["status"], "completed")
+        architect_artifact_path = architect_result["artifacts"]["primary"]["artifact_path"]
+        produced_artifacts["architect_plan"] = architect_artifact_path
+
+        # Step 3: Coder (with scout_report + architect_plan)
+        mock_start.return_value = {
+            "task_id": "task-coder",
+            "conversation_id": "conv-coder",
+        }
+        mock_poll.side_effect = lambda *a, **k: make_coder_poll()
+
+        coder_result = start_role_v2_impl(
+            role="coder",
+            user_task="Implement feature.",
+            input_artifacts={
+                "scout_report": scout_artifact_path,
+                "architect_plan": architect_artifact_path,
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(coder_result["status"], "completed")
+        coder_artifact_path = coder_result["artifacts"]["primary"]["artifact_path"]
+        produced_artifacts["coder_report"] = coder_artifact_path
+
+        # Step 4: Reviewer (with all artifacts)
+        mock_start.return_value = {
+            "task_id": "task-rev",
+            "conversation_id": "conv-rev",
+        }
+        mock_poll.side_effect = lambda *a, **k: make_reviewer_poll()
+
+        reviewer_result = start_role_v2_impl(
+            role="reviewer",
+            user_task="Review implementation.",
+            input_artifacts={
+                "scout_report": scout_artifact_path,
+                "architect_plan": architect_artifact_path,
+                "coder_report": coder_artifact_path,
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(reviewer_result["status"], "completed")
+        self.assertEqual(reviewer_result["control_summary"]["action"], "PASS")
+
+        # Verify all artifacts exist in ArtifactStore
+        state_dir = os.path.join(self.tmpdir, "runs")
+        for role_name, art_path in produced_artifacts.items():
+            full_path = os.path.join(state_dir, art_path)
+            self.assertTrue(os.path.exists(full_path), f"Artifact {role_name} not found at {full_path}")
+
+
+class TestV2ResultArtifactLoading(unittest.TestCase):
+    """Test shttp_role_result_v2 artifact loading."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_v2_result_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+        # Reset the role_tools singleton so it picks up the new state_dir
+        import mcp_agent.role_tools as rt_mod
+        rt_mod._role_store = None
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        import mcp_agent.role_tools as rt_mod
+        rt_mod._role_store = None
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_result_v2_no_undefined_run_id(self, mock_start, mock_poll):
+        """result_v2 does not use undefined run_id variable."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.server import shttp_role_result_v2
+
+        # Create a role run record via start_role_v2_impl
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Test task",
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        role_run_id = result["role_run_id"]
+
+        # Verify the role run record exists in the store
+        from mcp_agent.role_store import RoleRunStore
+        rs = RoleRunStore()
+        rr = rs.get_role_run(role_run_id)
+        self.assertIsNotNone(rr, "Role run record should exist")
+
+        # Extract run_id from the artifact path (format: run_id/filename.artifact)
+        primary_path = result["artifacts"]["primary"]["artifact_path"]
+        run_id = primary_path.split("/")[0] if "/" in primary_path else ""
+
+        # Verify artifacts were saved to ArtifactStore
+        store = ArtifactStore()
+        artifacts = store.list(run_id) if run_id else []
+        artifact_names = {a["artifact_name"] for a in artifacts}
+        self.assertIn("scout_report", artifact_names)
+        self.assertIn("scout_summary", artifact_names)
+
+        # Now call result_v2 — this should not raise NameError
+        # (Blocker 3: undefined run_id variable)
+        try:
+            result_v2 = shttp_role_result_v2(
+                role_run_id=role_run_id,
+                include_full_artifacts=False,
+                return_control_summary=True,
+            )
+        except NameError as e:
+            self.fail(f"shttp_role_result_v2 raised NameError: {e}")
+
+        self.assertEqual(result_v2["status"], "completed")
+        self.assertIn("artifacts", result_v2)
+        self.assertIn("primary", result_v2["artifacts"])
+        self.assertIn("summary", result_v2["artifacts"])
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_result_v2_include_full_artifacts_works(self, mock_start, mock_poll):
+        """result_v2 with include_full_artifacts=true loads content correctly."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.server import shttp_role_result_v2
+
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Test task with content",
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        role_run_id = result["role_run_id"]
+
+        # Call result_v2 with full artifacts
+        result_v2 = shttp_role_result_v2(
+            role_run_id=role_run_id,
+            include_full_artifacts=True,
+            return_control_summary=True,
+        )
+
+        self.assertEqual(result_v2["status"], "completed")
+        # Full artifact content should be included
+        self.assertIn("primary_artifact", result_v2)
+        self.assertIn("summary_artifact", result_v2)
+        # Primary artifact contains the mock LLM response
+        self.assertIn("Scout completed", result_v2["primary_artifact"])
+
+
+class TestV2SummarySchema(unittest.TestCase):
+    """Test v2 summary schema enforcement."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_v2_summary_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_v2_summary_rejects_next_role(self, mock_start, mock_poll):
+        """v2 summary schema rejects/strips next_role."""
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        # Return a summary with next_role field
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+                "next_role": "architect",  # Should be rejected
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Test task",
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # The validator should have stripped or rejected next_role
+        control_summary = result["control_summary"]
+        self.assertNotIn("next_role", control_summary)
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_reviewer_summary_requires_action_pass_or_blocker(self, mock_start, mock_poll):
+        """Reviewer summary requires action=PASS or action=BLOCKER."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        # Create required artifacts so reviewer passes validation
+        store = ArtifactStore()
+        store.save(
+            run_id="test-rev-001",
+            role_run_id="test-rev-001-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="# Scout Report\n\nTest.",
+        )
+        store.save(
+            run_id="test-rev-002",
+            role_run_id="test-rev-002-arch-1",
+            role="architect",
+            artifact_name="architect_plan",
+            content="# Architect Plan\n\nTest.",
+        )
+        store.save(
+            run_id="test-rev-003",
+            role_run_id="test-rev-003-coder-1",
+            role="coder",
+            artifact_name="coder_report",
+            content="# Coder Report\n\nTest.",
+        )
+
+        call_count = [0]
+
+        def poll_side_effect(task_id, url=None, max_polls=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call (main prompt) — return valid summary
+                return {
+                    "status": "completed",
+                    "answer": json.dumps({
+                        "status": "completed",
+                        "role": "reviewer",
+                        "summary": "Reviewer completed.",
+                        "primary_artifact_name": "reviewer_report",
+                        "blocking": False,
+                        "risk_level": "MEDIUM",
+                        "action": "PASS",  # Valid for reviewer
+                        "blocking_summary": [],
+                    }),
+                }
+            else:
+                # Subsequent calls (summary/repair) — return valid summary
+                return {
+                    "status": "completed",
+                    "answer": json.dumps({
+                        "status": "completed",
+                        "role": "reviewer",
+                        "summary": "Reviewer summary.",
+                        "primary_artifact_name": "reviewer_report",
+                        "blocking": False,
+                        "risk_level": "MEDIUM",
+                        "action": "PASS",
+                        "blocking_summary": [],
+                    }),
+                }
+
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.side_effect = poll_side_effect
+
+        result = start_role_v2_impl(
+            role="reviewer",
+            user_task="Review implementation.",
+            input_artifacts={
+                "scout_report": "test-rev-001/test-rev-001-scout-1_scout_report.artifact",
+                "architect_plan": "test-rev-002/test-rev-002-arch-1_architect_plan.artifact",
+                "coder_report": "test-rev-003/test-rev-003-coder-1_coder_report.artifact",
+            },
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        control_summary = result["control_summary"]
+        self.assertIn("action", control_summary)
+        self.assertEqual(control_summary["action"], "PASS")
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_non_reviewer_summary_requires_action_null(self, mock_start, mock_poll):
+        """Non-reviewer summary requires action=null."""
+        from mcp_agent.role_lifecycle import start_role_v2_impl
+
+        # Return a scout summary with action=PASS (invalid for non-reviewer)
+        mock_start.return_value = {
+            "task_id": "task-001",
+            "conversation_id": "conv-001",
+        }
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": "PASS",  # Invalid for non-reviewer
+                "blocking_summary": [],
+            }),
+        }
+
+        result = start_role_v2_impl(
+            role="scout",
+            user_task="Test task",
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # The validator should have set action to null
+        control_summary = result["control_summary"]
+        self.assertIsNone(control_summary["action"])
+
+
 if __name__ == "__main__":
     unittest.main()

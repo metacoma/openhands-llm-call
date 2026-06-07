@@ -696,20 +696,161 @@ resolves artifacts server-side and returns the control summary inline.
 
 ### `shttp_role_wait_v2`
 
-Wait for a v2 role run. Same shape as `role_wait` but for v2 runs.
+Wait for a v2 role run and return its status.
+
+**Important**: `shttp_role_start_v2` executes the full lifecycle
+synchronously (main prompt + summary prompt) and returns the completed
+result. In most cases, `shttp_role_wait_v2` is not needed because the
+result is already available from `start_v2`.
+
+This function is provided for compatibility with the established
+start → wait → result orchestration model.
+
+**When the role is already completed**, `wait_v2` delegates to
+`shttp_role_result_v2` to return the v2-coherent response shape
+(control summary + artifacts).
+
+**When the role is still running**, it polls using the legacy wait
+mechanism (handles OpenHands task polling).
+
+**Response (completed):**
+
+```json
+{
+  "status": "completed",
+  "role_run_id": "...",
+  "control_summary": {...},
+  "artifacts": {
+    "primary": {"artifact_name": "...", "artifact_path": "..."},
+    "summary": {"artifact_name": "...", "artifact_path": "..."}
+  }
+}
+```
+
+**Response (running):**
+
+```json
+{
+  "status": "running",
+  "role_run_id": "..."
+}
+```
 
 ### `shttp_role_result_v2`
 
 Get result for a v2 role run. Returns control summary inline and artifact
 paths (not content by default).
 
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `role_run_id` | string | required | The role run ID returned by `shttp_role_start_v2` |
+| `include_full_artifacts` | boolean | false | If true, include full artifact content |
+| `return_control_summary` | boolean | true | If true, include the control summary |
+
+**Response (default, no full artifacts):**
+
 ```json
 {
   "role_run_id": "...",
-  "include_full_artifacts": false,
-  "return_control_summary": true
+  "run_id": "...",
+  "role": "architect",
+  "status": "completed",
+  "control_summary": {
+    "status": "completed",
+    "role": "architect",
+    "summary": "Architect plan produced with 5 file changes.",
+    "primary_artifact_name": "architect_plan",
+    "blocking": false,
+    "risk_level": "LOW",
+    "action": null,
+    "blocking_summary": []
+  },
+  "artifacts": {
+    "primary": {
+      "artifact_name": "architect_plan",
+      "artifact_path": "20260607-010712-647d95/...-architect-1_architect_plan.artifact"
+    },
+    "summary": {
+      "artifact_name": "architect_summary",
+      "artifact_path": "20260607-010712-647d95/...-architect-1_architect_summary.artifact"
+    }
+  }
 }
 ```
+
+**Response (with `include_full_artifacts=true`):**
+
+Same as above, plus:
+
+```json
+{
+  "primary_artifact": "<full content>",
+  "summary_artifact": "<full content>"
+}
+```
+
+**Error response:**
+
+```json
+{
+  "status": "failed",
+  "error": {
+    "type": "UnknownRoleRunId",
+    "message": "No role run found for role_run_id='...'.",
+    "retryable": false
+  }
+}
+```
+
+### Required input artifacts by role
+
+| Role | Required `input_artifacts` |
+|---|---|
+| scout | *(none)* |
+| architect | `scout_report` |
+| coder | `scout_report`, `architect_plan` |
+| reviewer | `scout_report`, `architect_plan`, `coder_report` |
+| publisher | `reviewer_report` |
+| coder_fix | `architect_plan`, `coder_report`, `reviewer_report` |
+
+### Output artifacts by role
+
+| Role | Primary artifact name | Summary artifact name |
+|---|---|---|
+| scout | `scout_report` | `scout_summary` |
+| architect | `architect_plan` | `architect_summary` |
+| coder | `coder_report` | `coder_summary` |
+| reviewer | `reviewer_report` | `reviewer_summary` |
+| publisher | `publisher_instructions` | `publisher_summary` |
+| coder_fix | `coder_fix_result` | `coder_fix_summary` |
+
+### Control summary schema
+
+The control summary is returned inline by `shttp_role_start_v2` and
+`result_v2`. It follows this schema:
+
+```json
+{
+  "status": "completed" | "blocked",
+  "role": "scout" | "architect" | "coder" | "reviewer" | ...,
+  "summary": "Short factual summary of the role output.",
+  "primary_artifact_name": "scout_report",
+  "blocking": true | false,
+  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
+  "action": "PASS" | "BLOCKER" | null,
+  "blocking_summary": ["List of blocking issues"]
+}
+```
+
+**Rules:**
+
+- `action` must be `"PASS"` or `"BLOCKER"` for the **reviewer** role only.
+- `action` must be `null` for all non-reviewer roles.
+- `blocking_summary` must be a list (may be empty).
+- **No `next_role` field** — routing is the Head of Engineering's responsibility.
+- **No `ready_for_next_role` field** — routing is the Head of Engineering's responsibility.
 
 ### Head-of-Engineering routing logic
 

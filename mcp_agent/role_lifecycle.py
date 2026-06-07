@@ -270,7 +270,7 @@ def start_role_v2_impl(
     # Step 4: Resolve artifact references (server-side loading)
     # ------------------------------------------------------------------
     artifact_contents: dict[str, str] = {}
-    store = ArtifactStore()
+    artifact_store = ArtifactStore()
     for artifact_name, artifact_ref in input_artifacts.items():
         ref_str = str(artifact_ref) if not isinstance(artifact_ref, str) else artifact_ref
 
@@ -292,32 +292,25 @@ def start_role_v2_impl(
                 # artifact_name is the last underscore-separated segment
                 candidate_artifact_name = base.rsplit("_", 1)[-1] if "_" in base else base
                 try:
-                    meta = store.get(candidate_run_id, artifact_name=artifact_name)
+                    meta = artifact_store.get(candidate_run_id, artifact_name=artifact_name)
                     if meta and not meta.get("content_empty", True):
                         content = meta["content"]
                 except ValueError:
                     pass  # Invalid run_id format — try next strategy
 
-        # Strategy 2: Search all runs for an artifact with this name
-        if content is None:
-            try:
-                all_artifacts = store.list("")
-                for art_meta in all_artifacts:
-                    if art_meta.get("artifact_name") == artifact_name and not art_meta.get("content_empty", True):
-                        content = art_meta["content"]
-                        break
-            except (ValueError, OSError):
-                pass  # No artifacts found or state dir empty
+            # Strategy 2 removed: artifact_store.list("") always raises ValueError
+            # because _safe_component rejects empty strings. If Strategy 1
+            # fails, the artifact is genuinely not found.
 
-        if content is None:
-            return {
-                "status": "failed",
-                "error": {
-                    "type": "ArtifactNotFound",
-                    "message": f"artifact not found: {artifact_name}",
-                    "retryable": False,
-                },
-            }
+            if content is None:
+                return {
+                    "status": "failed",
+                    "error": {
+                        "type": "ArtifactNotFound",
+                        "message": f"artifact not found: {artifact_name}",
+                        "retryable": False,
+                    },
+                }
 
         if not content.strip():
             return {
@@ -464,13 +457,17 @@ def start_role_v2_impl(
     )
 
     # ------------------------------------------------------------------
-    # Step 9: Save primary artifact
+    # Step 9: Save primary artifact via ArtifactStore
     # ------------------------------------------------------------------
-    primary_artifact_path = role_store.save_artifact(
-        role_run_id, main_response
+    primary_meta = artifact_store.save(
+        run_id=run_id,
+        role_run_id=role_run_id,
+        role=role,
+        artifact_name=role_spec.output_artifact,
+        content=main_response,
     )
 
-    if primary_artifact_path is None:
+    if primary_meta is None:
         return {
             "status": "failed",
             "error": {
@@ -479,6 +476,8 @@ def start_role_v2_impl(
                 "retryable": True,
             },
         }
+
+    primary_artifact_path = primary_meta["artifact_path"]
 
     role_store.update_role_run(
         role_run_id,
@@ -646,11 +645,20 @@ def start_role_v2_impl(
         )
 
     # ------------------------------------------------------------------
-    # Step 15: Save summary artifact
+    # Step 15: Save summary artifact via ArtifactStore
     # ------------------------------------------------------------------
-    summary_artifact_path = role_store.save_artifact(
-        role_run_id, summary_text
+    summary_meta = artifact_store.save(
+        run_id=run_id,
+        role_run_id=role_run_id,
+        role=role,
+        artifact_name=role_spec.summary_artifact,
+        content=summary_text,
     )
+
+    if summary_meta is None:
+        summary_artifact_path = None
+    else:
+        summary_artifact_path = summary_meta["artifact_path"]
 
     role_store.update_role_run(
         role_run_id,
@@ -658,13 +666,23 @@ def start_role_v2_impl(
     )
 
     # ------------------------------------------------------------------
-    # Step 16: Mark completed
+    # Step 16: Mark completed and persist artifact metadata
     # ------------------------------------------------------------------
     role_store.update_role_run(
         role_run_id,
         status="completed",
         result_summary=json.dumps(control_summary),
         lifecycle_state="completed",
+        artifacts=json.dumps({
+            "primary": {
+                "artifact_name": role_spec.output_artifact,
+                "artifact_path": primary_artifact_path,
+            },
+            "summary": {
+                "artifact_name": role_spec.summary_artifact,
+                "artifact_path": summary_artifact_path,
+            },
+        }),
     )
 
     # ------------------------------------------------------------------

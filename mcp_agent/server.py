@@ -18,6 +18,7 @@ import requests
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 
+from .artifact_store import ArtifactStore
 from .task_store import TaskStore
 from . import role_tools as _role_tools
 
@@ -2040,18 +2041,32 @@ def shttp_role_wait_v2(
     poll_interval_seconds: Any = None,
     return_result: Any = None,
 ) -> dict:
-    """Wait for a v2 role run.
+    """Wait for a v2 role run and return its status.
 
-    Same shape as ``role_wait`` but operates on v2 role runs.
+    **Note**: ``shttp_role_start_v2`` executes the full lifecycle
+    synchronously (main prompt + summary prompt) and returns the
+    completed result. In most cases, ``shttp_role_wait_v2`` is not
+    needed because the result is already available from ``start_v2``.
+
+    This function is provided for compatibility with the established
+    start → wait → result orchestration model.
 
     Args:
         role_run_id: The role run ID returned by ``shttp_role_start_v2``.
         timeout_seconds: Maximum seconds to wait (default 1800).
         poll_interval_seconds: Seconds between status checks (default 15).
-        return_result: If true, inline the full result (default true).
+        return_result: If true, inline the control summary (default true).
 
     Returns:
-        Same shape as ``role_wait`` response.
+        On success:
+        {
+            "status": "completed" | "running" | "failed",
+            "role_run_id": "...",
+            "control_summary": {...},  // if return_result=true and completed
+            "artifacts": {...}          // if return_result=true and completed
+        }
+        On failure:
+        {"status": "failed", "error": {...}}
     """
     # Normalize inputs
     try:
@@ -2069,9 +2084,37 @@ def shttp_role_wait_v2(
             },
         }
 
+    normalized_return_result = normalize_bool(return_result, default=True)
+
+    # Load role run record
+    role_store = _role_tools._get_role_store()
+    role_run = role_store.get_role_run(normalized_role_run_id)
+
+    if role_run is None:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "UnknownRoleRunId",
+                "message": f"No role run found for role_run_id='{normalized_role_run_id}'.",
+                "retryable": False,
+            },
+        }
+
+    current_status = role_run.get("status", "unknown")
+
+    # If already completed, return the result directly
+    if current_status == "completed" and normalized_return_result:
+        # Delegate to result_v2 for the full v2 response shape
+        return shttp_role_result_v2(
+            role_run_id=normalized_role_run_id,
+            include_full_artifacts=False,
+            return_control_summary=True,
+        )
+
+    # If not completed, poll using legacy wait (it handles OpenHands task polling)
+    # This path is rarely taken because start_v2 is synchronous
     normalized_timeout = normalize_int(timeout_seconds, default=None)
     normalized_poll_interval = normalize_int(poll_interval_seconds, default=None)
-    normalized_return_result = normalize_bool(return_result, default=True)
 
     return _role_tools.role_wait_impl(
         role_run_id=normalized_role_run_id,
@@ -2134,9 +2177,10 @@ def shttp_role_result_v2(
         }
 
     # Build base response
+    run_id = role_run.get("run_id", "")
     result: dict[str, Any] = {
         "role_run_id": normalized_role_run_id,
-        "run_id": role_run.get("run_id"),
+        "run_id": run_id,
         "role": role_run.get("role"),
         "status": role_run.get("status", "unknown"),
     }
@@ -2154,7 +2198,7 @@ def shttp_role_result_v2(
 
     # Add artifact paths
     artifact_store = ArtifactStore()
-    artifacts_list = artifact_store.list(role_run.get("run_id", ""))
+    artifacts_list = artifact_store.list(run_id) if run_id else []
 
     # Determine the expected summary artifact name from the role spec.
     # Falls back to _summary suffix if the role is unknown or has no
