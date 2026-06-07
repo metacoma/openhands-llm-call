@@ -8,6 +8,7 @@ import contextlib
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -317,6 +318,45 @@ app = FastAPI(
         "Creates agent conversations and returns the final LLM answer."
     ),
 )
+
+# ---------------------------------------------------------------------------
+# Validation error handler — logs 422 detail for debugging
+# ---------------------------------------------------------------------------
+
+SENSITIVE_KEYS = {"api_key", "authorization", "token", "password", "secret"}
+
+
+def _sanitize_body_for_log(body_bytes: bytes) -> dict:
+    """Parse JSON body and redact sensitive fields for logging."""
+    try:
+        import json
+        body = json.loads(body_bytes)
+        if isinstance(body, dict):
+            for key in list(body.keys()):
+                if key.lower() in SENSITIVE_KEYS:
+                    body[key] = "***REDACTED***"
+        return body
+    except (json.JSONDecodeError, TypeError):
+        return {"raw_preview": body_bytes[:1000].decode("utf-8", errors="replace")}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """Log validation errors with body shape and return controlled 422."""
+    body_bytes = await request.body()
+
+    # Log the validation error with sanitized body
+    logger.error(
+        "request.validation_error path=%s errors=%s body_preview=%s",
+        request.url.path,
+        exc.errors(),
+        str(_sanitize_body_for_log(body_bytes))[:1000],
+    )
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
 
 
 @app.post("/v1/call_lm", response_model=CallLMResponse)

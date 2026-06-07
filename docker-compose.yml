@@ -9,6 +9,8 @@ services:
       - OPENHANDS_URL=${OPENHANDS_URL:-http://localhost:3000}
       - OPENHANDS_API_KEY=${OPENHANDS_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      # Uncomment to enable debug logging for role_call → /v1/call_lm pipeline:
+      # - MCP_DEBUG_ROLE_CALL=1
     restart: unless-stopped
 
   mcp_agent:
@@ -23,6 +25,8 @@ services:
       - MCP_PORT=8000
       - FASTMCP_HOST=0.0.0.0
       - FASTMCP_PORT=8000
+      # Uncomment to enable debug logging for role_call → /v1/call_lm pipeline:
+      # - MCP_DEBUG_ROLE_CALL=1
     depends_on:
       - openhands_llm
     restart: unless-stopped
