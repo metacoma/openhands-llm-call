@@ -91,6 +91,17 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     def test_architect_start_with_scout_report_succeeds(self, mock_start, mock_poll):
         """Starting architect with valid scout_report succeeds."""
         from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.artifact_store import ArtifactStore
+
+        # Create a scout_report artifact in the store so resolution succeeds
+        store = ArtifactStore()
+        store.save(
+            run_id="test-run-001",
+            role_run_id="test-run-001-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="# Scout Report\n\nRepository analyzed.",
+        )
 
         mock_start.return_value = {
             "task_id": "task-002",
@@ -114,7 +125,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             role="architect",
             user_task="Plan implementation",
             input_artifacts={
-                "scout_report": "scout_report_path_or_id",
+                "scout_report": "test-run-001/test-run-001-scout-1_scout_report.artifact",
             },
             api_key="test-key",
         )
@@ -221,6 +232,22 @@ class TestRoleLifecycleValidation(unittest.TestCase):
     def test_coder_fix_role_exists(self, mock_start, mock_poll):
         """coder_fix role can be started."""
         from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.artifact_store import ArtifactStore
+
+        # Create required artifacts in the store so resolution succeeds
+        store = ArtifactStore()
+        for art_name, content in [
+            ("architect_plan", "# Architect Plan\n\nPlan content."),
+            ("coder_report", "# Coder Report\n\nImplementation done."),
+            ("reviewer_report", "# Reviewer Report\n\nReview passed."),
+        ]:
+            store.save(
+                run_id="test-run-cf",
+                role_run_id=f"test-run-cf-{art_name}-1",
+                role=art_name.split("_")[0],
+                artifact_name=art_name,
+                content=content,
+            )
 
         mock_start.return_value = {
             "task_id": "task-003",
@@ -244,9 +271,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             role="coder_fix",
             user_task="Fix blockers",
             input_artifacts={
-                "architect_plan": "architect_plan_path",
-                "coder_report": "coder_report_path",
-                "reviewer_report": "reviewer_report_path",
+                "architect_plan": "test-run-cf/test-run-cf-architect_plan-1_architect_plan.artifact",
+                "coder_report": "test-run-cf/test-run-cf-coder_report-1_coder_report.artifact",
+                "reviewer_report": "test-run-cf/test-run-cf-reviewer_report-1_reviewer_report.artifact",
             },
             api_key="test-key",
         )
@@ -697,6 +724,22 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
     def test_reviewer_summary_must_contain_action(self, mock_start, mock_poll):
         """Reviewer summary must contain action=PASS or action=BLOCKER."""
         from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.artifact_store import ArtifactStore
+
+        # Create required artifacts in the store so resolution succeeds
+        store = ArtifactStore()
+        for art_name, content in [
+            ("scout_report", "# Scout Report\n\nFacts gathered."),
+            ("architect_plan", "# Architect Plan\n\nPlan defined."),
+            ("coder_report", "# Coder Report\n\nACTION: BLOCKER\n\nFix needed."),
+        ]:
+            store.save(
+                run_id="test-run-rv",
+                role_run_id=f"test-run-rv-{art_name}-1",
+                role=art_name.split("_")[0],
+                artifact_name=art_name,
+                content=content,
+            )
 
         call_count = [0]
 
@@ -746,9 +789,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             role="reviewer",
             user_task="Review implementation",
             input_artifacts={
-                "scout_report": "scout_report_path",
-                "architect_plan": "architect_plan_path",
-                "coder_report": "coder_report_path",
+                "scout_report": "test-run-rv/test-run-rv-scout_report-1_scout_report.artifact",
+                "architect_plan": "test-run-rv/test-run-rv-architect_plan-1_architect_plan.artifact",
+                "coder_report": "test-run-rv/test-run-rv-coder_report-1_coder_report.artifact",
             },
             api_key="test-key",
         )
@@ -842,6 +885,17 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
     def test_artifact_contents_loaded_server_side(self, mock_start, mock_poll):
         """Artifact contents are loaded server-side into the main prompt."""
         from mcp_agent.role_lifecycle import start_role_v2_impl
+        from mcp_agent.artifact_store import ArtifactStore
+
+        # Create a scout_report artifact in the store so resolution succeeds
+        store = ArtifactStore()
+        store.save(
+            run_id="test-run-as",
+            role_run_id="test-run-as-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="# Scout Report\n\nRepository analyzed.\n\nKey findings:\n- Proto files found\n- Ruby bindings generated",
+        )
 
         captured_prompts = []
 
@@ -872,20 +926,21 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
 
         mock_poll.side_effect = poll_side_effect
 
-        # Pass artifact references (not content)
+        # Pass artifact reference (path, not content)
         result = start_role_v2_impl(
             role="architect",
             user_task="Plan implementation",
             input_artifacts={
-                "scout_report": "artifact_ref_123",  # Not full content!
+                "scout_report": "test-run-as/test-run-as-scout-1_scout_report.artifact",
             },
             api_key="test-key",
         )
 
         self.assertEqual(result["status"], "completed")
-        # The first prompt should contain the artifact reference
+        # The first prompt should contain the artifact content (loaded server-side)
         self.assertTrue(len(captured_prompts) >= 1)
-        self.assertIn("artifact_ref_123", captured_prompts[0])
+        self.assertIn("# Scout Report", captured_prompts[0])
+        self.assertIn("Proto files found", captured_prompts[0])
 
 
 if __name__ == "__main__":

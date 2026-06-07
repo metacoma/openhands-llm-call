@@ -38,7 +38,7 @@ from .artifact_store import ArtifactStore
 from .lock_manager import RoleLockManager
 from .prompt_renderer import render_prompt
 from .role_store import RoleRunStore, _generate_run_id, _generate_role_run_id
-from .roles import get_role
+from .roles import get_role, list_roles
 from .summary_validator import (
     derive_reviewer_action_from_main_artifact,
     repair_summary,
@@ -226,7 +226,7 @@ def start_role_v2_impl(
     try:
         role_spec = get_role(role)
     except KeyError:
-        available = ", ".join(sorted(get_role.__self__.keys()) if hasattr(get_role, '__self__') else [])
+        available = ", ".join(sorted(r["name"] for r in list_roles()))
         return {
             "status": "failed",
             "error": {
@@ -272,14 +272,64 @@ def start_role_v2_impl(
     artifact_contents: dict[str, str] = {}
     store = ArtifactStore()
     for artifact_name, artifact_ref in input_artifacts.items():
-        # Resolve the reference: could be a path, ID, or full name
         ref_str = str(artifact_ref) if not isinstance(artifact_ref, str) else artifact_ref
 
-        # Try to find the artifact by name in the artifact store
-        # We need a run_id to look up artifacts. The artifact reference
-        # might contain a run_id prefix (e.g., "20260607-010712-647d95/...").
-        # For now, we store the reference and resolve it when needed.
-        artifact_contents[artifact_name] = ref_str
+        # Try to resolve the reference to actual content.
+        # The reference can be:
+        #   1. A path like "run_id/filename.artifact" (from ArtifactStore)
+        #   2. A bare artifact name — fall back to searching by name
+        #   3. A role_run_id — look up via role_store
+        content = None
+
+        # Strategy 1: Parse run_id + artifact_name from a path-like reference
+        if "/" in ref_str or "\\" in ref_str:
+            parts = ref_str.replace("\\", "/").split("/")
+            if len(parts) >= 2:
+                candidate_run_id = parts[0]
+                filename = parts[-1]
+                # Extract artifact_name from filename like "run-scout-1_scout_report.artifact"
+                base = filename.replace(".artifact", "").replace(".meta.json", "")
+                # artifact_name is the last underscore-separated segment
+                candidate_artifact_name = base.rsplit("_", 1)[-1] if "_" in base else base
+                try:
+                    meta = store.get(candidate_run_id, artifact_name=artifact_name)
+                    if meta and not meta.get("content_empty", True):
+                        content = meta["content"]
+                except ValueError:
+                    pass  # Invalid run_id format — try next strategy
+
+        # Strategy 2: Search all runs for an artifact with this name
+        if content is None:
+            try:
+                all_artifacts = store.list("")
+                for art_meta in all_artifacts:
+                    if art_meta.get("artifact_name") == artifact_name and not art_meta.get("content_empty", True):
+                        content = art_meta["content"]
+                        break
+            except (ValueError, OSError):
+                pass  # No artifacts found or state dir empty
+
+        if content is None:
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "ArtifactNotFound",
+                    "message": f"artifact not found: {artifact_name}",
+                    "retryable": False,
+                },
+            }
+
+        if not content.strip():
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "ArtifactReadError",
+                    "message": f"failed to read artifact: {artifact_name}",
+                    "retryable": False,
+                },
+            }
+
+        artifact_contents[artifact_name] = content
 
     # ------------------------------------------------------------------
     # Step 5: Render main prompt

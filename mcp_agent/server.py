@@ -2157,6 +2157,7 @@ def shttp_role_result_v2(
     artifacts_list = artifact_store.list(role_run.get("run_id", ""))
 
     artifacts_result: dict[str, Any] = {}
+    primary_artifacts: list[dict[str, str]] = []
     for art in artifacts_list:
         art_name = art.get("artifact_name", "")
         if art_name.endswith("_summary"):
@@ -2165,10 +2166,15 @@ def shttp_role_result_v2(
                 "artifact_path": art.get("artifact_path"),
             }
         else:
-            artifacts_result["primary"] = {
+            primary_artifacts.append({
                 "artifact_name": art_name,
                 "artifact_path": art.get("artifact_path"),
-            }
+            })
+    # Store first primary for backward compatibility; keep all in a list
+    if primary_artifacts:
+        artifacts_result["primary"] = primary_artifacts[0]
+        if len(primary_artifacts) > 1:
+            artifacts_result["primaries"] = primary_artifacts
 
     result["artifacts"] = artifacts_result
 
@@ -2180,7 +2186,7 @@ def shttp_role_result_v2(
             if art_path:
                 try:
                     full_content = art.get("content", "")
-                    if "summary" in art_name:
+                    if art_name.endswith("_summary"):
                         result.setdefault("summary_artifact", full_content)
                     else:
                         result.setdefault("primary_artifact", full_content)
