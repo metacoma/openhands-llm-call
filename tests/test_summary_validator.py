@@ -286,9 +286,9 @@ class TestSafeFallbackSummary(unittest.TestCase):
     def test_safe_fallback_for_reviewer_no_derivation(self):
         """Safe fallback for reviewer when action cannot be derived.
 
-        The reviewer did complete its work; the issue is only with summary
-        parsing.  The fallback now returns status='completed' with
-        blocking=False rather than blocking the pipeline.
+        When the reviewer summary cannot be parsed AND ACTION cannot be
+        derived from the main artifact, the fallback MUST block the pipeline
+        to prevent unsafe PASS/BLOCKER routing by Head of Engineering.
         """
         from mcp_agent.summary_validator import safe_fallback_summary
 
@@ -299,18 +299,39 @@ class TestSafeFallbackSummary(unittest.TestCase):
             main_artifact_content="No ACTION line found.",
         )
         self.assertTrue(result.get("valid"))
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["role"], "reviewer")
-        self.assertIsNone(result["action"])
-        self.assertFalse(result["blocking"])
-        self.assertEqual(result["risk_level"], "MEDIUM")
+        self.assertEqual(result["action"], "BLOCKER")
+        self.assertTrue(result["blocking"])
+        self.assertEqual(result["risk_level"], "HIGH")
         self.assertEqual(
             result["blocking_summary"],
             [
-                "Reviewer summary parsing failed and action could not be "
+                "Reviewer summary parsing failed and ACTION could not be "
                 "derived safely.",
             ],
         )
+
+    def test_safe_fallback_for_reviewer_no_derivation_returns_blocker(self):
+        """Safe fallback for reviewer when action cannot be derived MUST return BLOCKER.
+
+        This is a critical regression test: reviewer is the only role that
+        controls PASS/BLOCKER routing. If fallback returns action=null,
+        Head of Engineering cannot safely route to publisher or coder_fix.
+        """
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        result = safe_fallback_summary(
+            role="reviewer",
+            summary_artifact_name="reviewer_summary",
+            is_reviewer=True,
+            main_artifact_content="No ACTION line found.",
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["action"], "BLOCKER")
+        self.assertTrue(result["blocking"])
+        self.assertEqual(result["risk_level"], "HIGH")
 
     def test_safe_fallback_for_reviewer_with_derivation(self):
         """Safe fallback for reviewer when action can be derived."""

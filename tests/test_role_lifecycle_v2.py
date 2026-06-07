@@ -797,11 +797,11 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "completed")
-        # Should fall back to safe summary: the reviewer completed its work;
-        # the issue is only with summary parsing.  action=None, blocking=False.
+        # Should fall back to safe summary: reviewer fallback returns BLOCKER
+        # when action cannot be derived from the main artifact.
         self.assertTrue(result["control_summary"].get("valid"))
-        self.assertIsNone(result["control_summary"]["action"])
-        self.assertFalse(result["control_summary"].get("blocking"))
+        self.assertEqual(result["control_summary"]["action"], "BLOCKER")
+        self.assertTrue(result["control_summary"].get("blocking"))
 
     @patch("mcp_agent.role_lifecycle._poll_task_status")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")

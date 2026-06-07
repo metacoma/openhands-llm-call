@@ -573,7 +573,7 @@ data plane    = full role artifacts for specialist roles
 | coder | coder_report | coder_summary |
 | reviewer | reviewer_report | reviewer_summary |
 | coder_fix | coder_fix_result | coder_fix_summary |
-| publisher | publish_instructions | publisher_summary |
+| publisher | publisher_instructions | publisher_summary |
 
 These artifacts may be long and detailed. They are passed to later roles by
 ID/path/name only — **never** pasted into JSON payloads.
@@ -591,7 +591,7 @@ structured, and safe to return inline.
 | coder | scout_report, architect_plan | coder_report |
 | reviewer | scout_report, architect_plan, coder_report | reviewer_report |
 | coder_fix | architect_plan, coder_report, reviewer_report | coder_fix_result |
-| publisher | coder_report, reviewer_report | publish_instructions |
+| publisher | coder_report, reviewer_report | publisher_instructions |
 
 ### Summary JSON schema
 

@@ -294,6 +294,16 @@ def start_role_v2_impl(
                 try:
                     meta = artifact_store.get(candidate_run_id, artifact_name=artifact_name)
                     if meta and not meta.get("content_empty", True):
+                        # Verify the resolved artifact's name matches the expected key
+                        if meta.get("artifact_name") != artifact_name:
+                            return {
+                                "status": "failed",
+                                "error": {
+                                    "type": "ArtifactNameMismatch",
+                                    "message": f"artifact name mismatch: expected {artifact_name}, got {meta.get('artifact_name')}",
+                                    "retryable": False,
+                                },
+                            }
                         content = meta["content"]
                 except ValueError:
                     pass  # Invalid run_id format — try next strategy
