@@ -1994,7 +1994,7 @@ def shttp_role_start_v2(
     if isinstance(normalized_input_artifacts, dict):
         resolved_artifacts: dict[str, str] = {}
         for k, v in normalized_input_artifacts.items():
-            resolved_artifacts[k] = str(v) if v is not None else ""
+            resolved_artifacts[k] = unwrap_text(v) if v is not None else ""
         normalized_input_artifacts = resolved_artifacts
     elif isinstance(normalized_input_artifacts, str):
         try:
@@ -2008,7 +2008,7 @@ def shttp_role_start_v2(
     if isinstance(normalized_metadata, dict):
         resolved_metadata: dict[str, str] = {}
         for k, v in normalized_metadata.items():
-            resolved_metadata[k] = str(v) if v is not None else ""
+            resolved_metadata[k] = unwrap_text(v) if v is not None else ""
         normalized_metadata = resolved_metadata
     elif isinstance(normalized_metadata, str):
         try:

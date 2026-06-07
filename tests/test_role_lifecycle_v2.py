@@ -943,5 +943,133 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
         self.assertIn("Proto files found", captured_prompts[0])
 
 
+class TestMCPStyleWrappedValues(unittest.TestCase):
+    """Test that MCP-style wrapped values are correctly unwrapped in shttp_role_start_v2."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_lifecycle_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = os.path.join(
+            self.tmpdir, "runs"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_shttp_role_start_v2_unwraps_artifact_refs(self, mock_start, mock_poll):
+        """shttp_role_start_v2 correctly unwraps MCP-style wrapped artifact references."""
+        from mcp_agent.artifact_store import ArtifactStore
+        from mcp_agent.server import shttp_role_start_v2
+
+        # Create a scout_report artifact in the store so resolution succeeds
+        store = ArtifactStore()
+        store.save(
+            run_id="test-run-mcp",
+            role_run_id="test-run-mcp-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="# Scout Report\n\nRepository analyzed.",
+        )
+
+        captured_prompts = []
+
+        def start_side_effect(*args, **kwargs):
+            prompt = args[0] if args else kwargs.get("prompt", "")
+            captured_prompts.append(prompt)
+            return {
+                "task_id": f"task-{len(captured_prompts)}",
+                "conversation_id": "conv-main",
+            }
+
+        mock_start.side_effect = start_side_effect
+
+        def poll_side_effect(task_id, url=None, max_polls=None):
+            return {
+                "status": "completed",
+                "answer": json.dumps({
+                    "status": "completed",
+                    "role": "architect",
+                    "summary": "Architect completed.",
+                    "primary_artifact_name": "architect_plan",
+                    "blocking": False,
+                    "risk_level": "LOW",
+                    "action": None,
+                    "blocking_summary": [],
+                }),
+            }
+
+        mock_poll.side_effect = poll_side_effect
+
+        # Pass artifact references as MCP-style wrapped dicts: {"text": "path"}
+        result = shttp_role_start_v2(
+            role={"text": "architect"},
+            user_task={"text": "Plan implementation"},
+            input_artifacts={
+                "scout_report": {"text": "test-run-mcp/test-run-mcp-scout-1_scout_report.artifact"},
+            },
+            api_key={"text": "test-key"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # The first prompt should contain the artifact content (loaded server-side)
+        self.assertTrue(len(captured_prompts) >= 1)
+        self.assertIn("# Scout Report", captured_prompts[0])
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_shttp_role_start_v2_unwraps_metadata(self, mock_start, mock_poll):
+        """shttp_role_start_v2 correctly unwraps MCP-style wrapped metadata."""
+        from mcp_agent.server import shttp_role_start_v2
+
+        captured_prompts = []
+
+        def start_side_effect(*args, **kwargs):
+            prompt = args[0] if args else kwargs.get("prompt", "")
+            captured_prompts.append(prompt)
+            return {
+                "task_id": f"task-{len(captured_prompts)}",
+                "conversation_id": "conv-main",
+            }
+
+        mock_start.side_effect = start_side_effect
+
+        def poll_side_effect(task_id, url=None, max_polls=None):
+            return {
+                "status": "completed",
+                "answer": json.dumps({
+                    "status": "completed",
+                    "role": "scout",
+                    "summary": "Scout completed.",
+                    "primary_artifact_name": "scout_report",
+                    "blocking": False,
+                    "risk_level": "LOW",
+                    "action": None,
+                    "blocking_summary": [],
+                }),
+            }
+
+        mock_poll.side_effect = poll_side_effect
+
+        # Pass metadata as MCP-style wrapped dicts
+        result = shttp_role_start_v2(
+            role={"text": "scout"},
+            user_task={"text": "Investigate the repo"},
+            metadata={
+                "repository": {"text": "https://github.com/example/repo"},
+                "base_branch": {"text": "main"},
+            },
+            api_key={"text": "test-key"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        # The prompt should contain the unwrapped metadata values
+        self.assertTrue(len(captured_prompts) >= 1)
+        self.assertIn("https://github.com/example/repo", captured_prompts[0])
+
+
 if __name__ == "__main__":
     unittest.main()
