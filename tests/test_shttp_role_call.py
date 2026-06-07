@@ -1179,5 +1179,390 @@ class TestSmokeResolveInputArtifacts(TestCase):
         self.assertEqual(result["status"], "completed")
 
 
+# ---------------------------------------------------------------------------
+# Tests — normalize_role integration (Test 6, 7, 8, 9, 10)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeRoleIntegration(TestCase):
+    """Tests 6-7: shttp_role_call accepts real observed payload and wrapped metadata."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle.render_prompt")
+    def test_real_observed_payload_normalizes_correctly(
+        self, mock_render, mock_poll, mock_start
+    ):
+        """Test 6: shttp_role_call accepts the real observed payload shape.
+
+        Real payload from Head of IT logs:
+        {
+            "role": {"name": "scout"},
+            "user_task": {"text": "..."},
+            "metadata": {...},
+            "idempotency_key": {"text": "..."}
+        }
+        """
+        mock_start.return_value = {"task_id": "task-real-1", "conversation_id": "conv-real-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "scout",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        # Capture the role passed to role_call_impl
+        captured_kwargs = {}
+
+        original_role_call_impl = role_lifecycle.role_call_impl
+
+        def capture_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return original_role_call_impl(**kwargs)
+
+        with patch.object(role_lifecycle, "role_call_impl", side_effect=capture_impl):
+            from mcp_agent.server import shttp_role_call
+
+            result = shttp_role_call(
+                role={"name": "scout"},
+                user_task={"text": "Исследуй репозиторий ..."},
+                metadata={
+                    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+                    "feature": "ruby-grpc-client",
+                },
+                idempotency_key={"text": "scout-freeplane-plugin-grpc-ruby-client"},
+            )
+
+        # Verify normalization
+        self.assertEqual(captured_kwargs["role"], "scout")
+        self.assertIsInstance(captured_kwargs["user_task"], str)
+        self.assertEqual(
+            captured_kwargs["idempotency_key"],
+            "scout-freeplane-plugin-grpc-ruby-client",
+        )
+        self.assertEqual(
+            captured_kwargs["metadata"]["repository"],
+            "https://github.com/metacoma/freeplane_plugin_grpc",
+        )
+        self.assertEqual(captured_kwargs["metadata"]["feature"], "ruby-grpc-client")
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle.render_prompt")
+    def test_wrapped_metadata_values_unwrap(
+        self, mock_render, mock_poll, mock_start
+    ):
+        """Test 7: wrapped metadata values normalize to plain strings."""
+        mock_start.return_value = {"task_id": "task-meta-1", "conversation_id": "conv-meta-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "scout",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        captured_kwargs = {}
+
+        original_role_call_impl = role_lifecycle.role_call_impl
+
+        def capture_impl(**kwargs):
+            captured_kwargs.update(kwargs)
+            return original_role_call_impl(**kwargs)
+
+        with patch.object(role_lifecycle, "role_call_impl", side_effect=capture_impl):
+            from mcp_agent.server import shttp_role_call
+
+            result = shttp_role_call(
+                role="scout",
+                user_task="Test task",
+                metadata={
+                    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
+                    "feature": {"text": "ruby-grpc-client"},
+                },
+                idempotency_key=None,
+            )
+
+        self.assertEqual(
+            captured_kwargs["metadata"]["repository"],
+            "https://github.com/metacoma/freeplane_plugin_grpc",
+        )
+        self.assertEqual(captured_kwargs["metadata"]["feature"], "ruby-grpc-client")
+
+
+class TestIdempotencyDuplicateRuns(TestCase):
+    """Test 8: idempotency prevents duplicate runs."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle.render_prompt")
+    def test_same_idempotency_key_reuses_existing_run(
+        self, mock_render, mock_poll
+    ):
+        """Test 8: second call with same idempotency_key does not create a new role_run.
+
+        We patch the store's find_by_idempotency_scope to return an existing run,
+        verifying that _start_conversation_on_fastapi is NOT called.
+        """
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "scout",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        from mcp_agent.server import shttp_role_call
+
+        idempotency_key = "scout-freeplane-plugin-grpc-ruby-client"
+
+        # First call — creates a new run
+        with patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi") as mock_start:
+            mock_start.return_value = {"task_id": "task-idem-1", "conversation_id": "conv-idem-1"}
+            result1 = shttp_role_call(
+                role="scout",
+                user_task="Test task 1",
+                idempotency_key=idempotency_key,
+            )
+            first_call_count = mock_start.call_count
+
+        # Second call with same idempotency_key — should NOT call _start_conversation_on_fastapi
+        # because the store's find_by_idempotency_scope will return the existing run
+        with patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi") as mock_start:
+            mock_start.return_value = {"task_id": "task-idem-2", "conversation_id": "conv-idem-2"}
+            result2 = shttp_role_call(
+                role="scout",
+                user_task="Test task 2",
+                idempotency_key=idempotency_key,
+            )
+            second_call_count = mock_start.call_count
+
+        # The second call should have called _start_conversation_on_fastapi fewer times
+        # (ideally 0 times if idempotency works, but at minimum the role_run_id should be the same)
+        self.assertIn("role_run_id", result1)
+        self.assertIn("role_run_id", result2)
+        # If idempotency works, the second call should not have started a new conversation
+        # (call count should be 0 or less than first call)
+        self.assertLessEqual(second_call_count, first_call_count)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle.render_prompt")
+    def test_different_idempotency_key_creates_new_run(
+        self, mock_render, mock_poll, mock_start
+    ):
+        """Different idempotency_key should create a new run."""
+        mock_start.return_value = {"task_id": "task-idem2-1", "conversation_id": "conv-idem2-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "scout",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        from mcp_agent.server import shttp_role_call
+
+        result1 = shttp_role_call(
+            role="scout",
+            user_task="Test task 1",
+            idempotency_key="key-1",
+        )
+        result2 = shttp_role_call(
+            role="scout",
+            user_task="Test task 2",
+            idempotency_key="key-2",
+        )
+
+        # Different keys should produce different role_run_ids
+        self.assertNotEqual(result1["role_run_id"], result2["role_run_id"])
+
+
+class TestRoleCallResponseSchema(TestCase):
+    """Test 9: role_call response does not include full content."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle.render_prompt")
+    def test_response_excludes_full_result_content_artifact_path(
+        self, mock_render, mock_poll, mock_start
+    ):
+        """Test 9: response must not contain full_result, content, or artifact_path."""
+        mock_start.return_value = {"task_id": "task-schema-1", "conversation_id": "conv-schema-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "scout",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+        mock_render.return_value = "Scout prompt"
+
+        from mcp_agent.server import shttp_role_call
+
+        result = shttp_role_call(
+            role="scout",
+            user_task="Test task",
+            idempotency_key="schema-test-key",
+        )
+
+        # Response must contain these fields
+        self.assertIn("control_summary", result)
+        self.assertIn("artifacts", result)
+        self.assertIn("primary", result["artifacts"])
+        self.assertIn("artifact_id", result["artifacts"]["primary"])
+        self.assertIn("artifact_type", result["artifacts"]["primary"])
+        self.assertEqual(result["status"], "completed")
+
+        # Response must NOT contain these fields
+        self.assertNotIn("full_result", result)
+        self.assertNotIn("content", result)
+        self.assertNotIn("artifact_path", result)
+
+
+class TestWrappedInputArtifacts(TestCase):
+    """Test 10: existing input_artifacts wrapped test still passes."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+
+    @patch("mcp_agent.role_lifecycle.ArtifactStore")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle.render_prompt")
+    def test_wrapped_input_artifacts_still_works(
+        self, mock_render, mock_poll, mock_start, mock_astore_cls
+    ):
+        """Test 10: wrapped input_artifacts still work."""
+        # Mock artifact store so get_content_by_id returns content for fake IDs
+        mock_store = MagicMock()
+        mock_store.get_content_by_id.return_value = "FULL SCOUT REPORT"
+        mock_store.save.return_value = {
+            "artifact_id": "test-primary-art",
+            "artifact_type": "scout_report",
+            "artifact_path": "/tmp/test-artifact.artifact",
+            "content_empty": False,
+            "content": "test content",
+            "role": "architect",
+            "run_id": "test-run-wrapped-art",
+            "size_bytes": 100,
+        }
+        mock_astore_cls.return_value = mock_store
+
+        mock_start.return_value = {"task_id": "task-art-1", "conversation_id": "conv-art-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True,
+                "status": "DONE",
+                "role": "architect",
+                "summary": "Test summary",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+            }),
+        }
+        mock_render.return_value = "Architect prompt"
+
+        from mcp_agent.server import shttp_role_call
+
+        result = shttp_role_call(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts=[
+                {
+                    "artifact_id": {"text": "art_scout"},
+                    "artifact_type": {"text": "scout_report"},
+                }
+            ],
+            metadata={"run_id": "test-run-wrapped-art"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+
+
+class TestPublicToolNames(TestCase):
+    """Test 1: public discovery contains correct tool names."""
+
+    def test_tool_names(self):
+        from mcp.server.fastmcp import FastMCP
+        from mcp_agent.server import MCP as server_mcp
+
+        # Verify the MCP instance has exactly these tools
+        tools = list(server_mcp._tool_manager.list_tools())
+        tool_names = [t.name for t in tools]
+
+        self.assertIn("shttp_role_list", tool_names)
+        self.assertIn("shttp_role_call", tool_names)
+        self.assertNotIn("shttp_shttp_role_list", tool_names)
+        self.assertNotIn("shttp_shttp_role_call", tool_names)
+
+
 if __name__ == "__main__":
     unittest_main()

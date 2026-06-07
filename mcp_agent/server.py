@@ -1324,6 +1324,66 @@ def normalize_artifact_name(value: Any) -> str | None:
     )
 
 
+def normalize_role(value: Any) -> str:
+    """Normalize a role name that may be wrapped in various MCP/LLM shapes.
+
+    Accepts:
+    - "scout"
+    - {"text": "scout"}
+    - {"name": "scout"}
+    - {"role": "scout"}
+    - {"name": {"text": "scout"}}
+    - {"role": {"text": "scout"}}
+    """
+    if isinstance(value, str):
+        return value.strip()
+
+    if isinstance(value, dict):
+        # Check common LLM/MCP wrapper keys in priority order
+        for key in ("name", "role", "value", "id", "text"):
+            if key in value:
+                inner = value[key]
+                # Recursively unwrap nested wrappers
+                result = normalize_role(inner)
+                return result
+
+    # Fallback: convert to string (handles numbers, bools, etc.)
+    return str(value).strip()
+
+
+def _unwrap_dict_values(value: Any) -> Any:
+    """Recursively unwrap dict values that may contain {\"text\": ...} wrappers.
+
+    If *value* is a dict with a single \"text\" key, it is unwrapped recursively.
+    If *value* is a dict with other keys, each value is unwrapped recursively.
+    If a value is a string that looks like JSON, it is parsed as JSON.
+    """
+    if isinstance(value, dict):
+        # Single-key {"text": ...} -> unwrap and recurse
+        if len(value) == 1 and "text" in value:
+            return _unwrap_dict_values(value["text"])
+        # Multi-key dict -> unwrap each value
+        result: dict[str, Any] = {}
+        for k, v in value.items():
+            result[k] = _unwrap_dict_values(v)
+        return result
+
+    if isinstance(value, str):
+        # Try parsing as JSON in case the LLM sent a JSON string
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return _unwrap_dict_values(parsed)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return value
+
+    if isinstance(value, list):
+        return [_unwrap_dict_values(item) for item in value]
+
+    return value
+
+
 def _build_invalid_role_run_id_error(field_name: str = "role_run_id") -> dict:
     """Build an LLM-friendly error for invalid role_run_id."""
     return {
@@ -2431,7 +2491,7 @@ def shttp_role_call(
         }
     """
     # Normalize inputs
-    normalized_role = normalize_string(role, "role")
+    normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)
     normalized_input_artifacts = (
         unwrap_text(input_artifacts)
@@ -2473,12 +2533,9 @@ def shttp_role_call(
     else:
         normalized_input_artifacts = {}
 
-    # Normalize metadata
+    # Normalize metadata — use recursive unwrapping for nested wrappers
     if isinstance(normalized_metadata, dict):
-        resolved_metadata: dict[str, str] = {}
-        for k, v in normalized_metadata.items():
-            resolved_metadata[k] = unwrap_text(v) if v is not None else ""
-        normalized_metadata = resolved_metadata
+        normalized_metadata = _unwrap_dict_values(normalized_metadata)
     elif isinstance(normalized_metadata, str):
         try:
             normalized_metadata = json.loads(normalized_metadata)
