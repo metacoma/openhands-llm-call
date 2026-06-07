@@ -780,5 +780,86 @@ class TestRoleWaitWrappedArgs(unittest.TestCase):
         self.assertEqual(call_kwargs["poll_interval_seconds"], 30)
 
 
+# ---------------------------------------------------------------------------
+# Tests for wait_job_until_terminal — deadline already expired (PR #36)
+# ---------------------------------------------------------------------------
+
+
+class TestWaitJobUntilTerminalDeadlineExpired(unittest.TestCase):
+    """Test that wait_job_until_terminal handles pre-expired deadline gracefully.
+
+    Regression tests for UnboundLocalError when ``deadline`` is already in the
+    past before the first poll iteration.
+    """
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_deadline_already_expired_does_not_crash(self, mock_get_status):
+        """When deadline is in the past, no poll should occur; returns timeout."""
+        from mcp_agent.role_lifecycle import wait_job_until_terminal
+
+        status, data = wait_job_until_terminal(
+            job_id="job-1",
+            deadline=time.monotonic() - 1,
+            poll_interval_seconds=1,
+        )
+
+        self.assertEqual(status, "timeout")
+        self.assertTrue(data.get("timeout"))
+        # _get_task_status_once must NOT have been called
+        mock_get_status.assert_not_called()
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_normal_completed_still_works(self, mock_get_status):
+        """First poll returns running, second poll returns completed."""
+        from mcp_agent.role_lifecycle import wait_job_until_terminal
+
+        call_count = 0
+
+        def side_effect(task_id, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"_normalized_status": "running", "status": "running"}
+            return {"_normalized_status": "completed", "status": "completed"}
+
+        mock_get_status.side_effect = side_effect
+
+        now = time.monotonic()
+        status, data = wait_job_until_terminal(
+            job_id="job-2",
+            deadline=now + 10,
+            poll_interval_seconds=1,
+        )
+
+        self.assertEqual(status, "completed")
+        self.assertEqual(data.get("_normalized_status"), "completed")
+        self.assertEqual(call_count, 2)
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_summary_starts_after_deadline(self, mock_get_status):
+        """Simulate role_wait scenario: main job completed near deadline,
+        summary phase gets an already-expired deadline."""
+        from mcp_agent.role_lifecycle import wait_job_until_terminal
+
+        # Simulate: main job completed just before deadline
+        # Now summary phase starts with deadline already expired
+        expired_deadline = time.monotonic() - 1
+
+        status, data = wait_job_until_terminal(
+            job_id="summary-job-1",
+            deadline=expired_deadline,
+            poll_interval_seconds=1,
+        )
+
+        self.assertEqual(status, "timeout")
+        self.assertTrue(data.get("timeout"))
+        mock_get_status.assert_not_called()
+
+        # Caller should handle this gracefully:
+        # summary_text = data.get("answer", "") or ""  → returns ""
+        summary_text = data.get("answer", "") or ""
+        self.assertEqual(summary_text, "")
+
+
 if __name__ == "__main__":
     unittest.main()

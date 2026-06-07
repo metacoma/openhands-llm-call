@@ -452,21 +452,30 @@ def wait_job_until_terminal(
         ``"error"``, ``"cancelled"``, ``"timeout"``.
         *response_data* is the last response from ``_get_task_status_once``.
     """
+    # Synthetic timeout response — used when deadline is already expired
+    # before any poll occurs, or as the final fallback after polling.
+    last_response: dict[str, Any] = {
+        "_normalized_status": "running",
+        "status": "running",
+        "timeout": True,
+        "message": "Deadline expired before job reached terminal state.",
+    }
+
     while time.monotonic() < deadline:
-        response = _get_task_status_once(job_id)
-        status = response.get("_normalized_status", "unknown")
+        last_response = _get_task_status_once(job_id)
+        status = last_response.get("_normalized_status", "unknown")
 
         if status in ("completed", "completed_empty_result",
                        "failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
-            return (status, response)
+            return (status, last_response)
 
         # Still running — wait
         if time.monotonic() >= deadline:
             break
         time.sleep(poll_interval_seconds)
 
-    # Deadline exceeded — return last known state
-    return ("timeout", response)
+    # Deadline exceeded — return last known state (or synthetic timeout if never polled)
+    return ("timeout", last_response)
 
 
 def _to_public_artifact_ref(raw: dict, *, role: str) -> dict[str, Any]:
@@ -1333,16 +1342,16 @@ def role_lifecycle_wait_impl(
         summary_job_id = conversation_id or "unknown"
 
     # ------------------------------------------------------------------
-    # Compute remaining deadline for summary/repair phase (Blocker 3)
+    # Deadline for summary/repair phase
     # ------------------------------------------------------------------
-    remaining_deadline = max(deadline, time.monotonic())
+    summary_deadline = deadline
 
     # ------------------------------------------------------------------
     # Wait for summary response using polling helper (Blocker 2)
     # ------------------------------------------------------------------
     summary_status, summary_response_data = wait_job_until_terminal(
         job_id=summary_job_id,
-        deadline=remaining_deadline,
+        deadline=summary_deadline,
         poll_interval_seconds=poll_interval_seconds,
     )
 
@@ -1407,7 +1416,7 @@ def role_lifecycle_wait_impl(
             # ------------------------------------------------------------------
             repair_status, repair_response_data = wait_job_until_terminal(
                 job_id=repair_job_id,
-                deadline=remaining_deadline,
+                deadline=summary_deadline,
                 poll_interval_seconds=poll_interval_seconds,
             )
 
