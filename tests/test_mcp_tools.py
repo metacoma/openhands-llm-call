@@ -919,13 +919,16 @@ class TestWrappedScalarArgs(unittest.TestCase):
 
     # -- role_wait with wrapped arguments -----------------------------------
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_role_wait_wrapped_timeout_seconds(self, mock_impl):
         """role_wait accepts wrapped timeout_seconds."""
         mock_impl.return_value = {
             "status": "completed",
-            "has_result": False,
-            "result_available": True,
+            "role_run_id": "role-1",
+            "run_id": "run-1",
+            "role": "scout",
+            "control_summary": {},
+            "artifacts": {},
         }
 
         from mcp_agent.server import role_wait
@@ -934,7 +937,6 @@ class TestWrappedScalarArgs(unittest.TestCase):
             role_run_id="role-1",
             timeout_seconds={"default": 1800},
             poll_interval_seconds={"default": 15},
-            return_result={"default": True},
         )
 
         self.assertEqual(result["status"], "completed")
@@ -942,9 +944,8 @@ class TestWrappedScalarArgs(unittest.TestCase):
         call_kwargs = mock_impl.call_args[1]
         self.assertEqual(call_kwargs["timeout_seconds"], 1800)
         self.assertEqual(call_kwargs["poll_interval_seconds"], 15)
-        self.assertTrue(call_kwargs["return_result"])
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_role_wait_wrapped_role_run_id(self, mock_impl):
         """role_wait accepts wrapped role_run_id."""
         mock_impl.return_value = {"status": "running"}
@@ -973,10 +974,10 @@ class TestWrappedScalarArgs(unittest.TestCase):
         self.assertFalse(result["error"]["retryable"])
         mock_impl.assert_not_called()
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_role_wait_plain_scalars_still_work(self, mock_impl):
         """role_wait with plain scalars still works."""
-        mock_impl.return_value = {"status": "completed", "has_result": False}
+        mock_impl.return_value = {"status": "completed"}
 
         from mcp_agent.server import role_wait
 
@@ -984,7 +985,6 @@ class TestWrappedScalarArgs(unittest.TestCase):
             role_run_id="role-1",
             timeout_seconds=1800,
             poll_interval_seconds=15,
-            return_result=True,
         )
 
         self.assertEqual(result["status"], "completed")
