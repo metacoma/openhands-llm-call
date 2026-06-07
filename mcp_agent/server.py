@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from .artifact_store import ArtifactStore
 from .task_store import TaskStore
 from . import role_tools as _role_tools
+from .roles import list_roles
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -1408,7 +1409,9 @@ def _build_another_role_running_error(
     return result
 
 
-@MCP.tool()
+# Legacy role tools — kept as internal helpers but NOT exposed to
+# Head of IT.  Decorated with @MCP.tool() removed so they are invisible
+# to MCP tool discovery.  Available for debugging as plain Python functions.
 def role_start(
     role: str,
     prompt: Any = None,
@@ -1573,7 +1576,6 @@ def role_start(
     )
 
 
-@MCP.tool()
 def role_status(role_run_id: Any) -> dict:
     """Single-shot diagnostic status check.
 
@@ -1603,7 +1605,6 @@ def role_status(role_run_id: Any) -> dict:
     return _role_tools.role_status_impl(role_run_id=normalized_role_run_id)
 
 
-@MCP.tool()
 def role_result(
     role_run_id: Any,
     include_full_result: Any = True,
@@ -1685,7 +1686,6 @@ def role_result(
 # ---------------------------------------------------------------------------
 
 
-@MCP.tool()
 def role_wait(
     role_run_id: Any,
     timeout_seconds: Any = None,
@@ -1867,7 +1867,6 @@ def artifact_list(run_id: Any = None, role_run_id: Any = None) -> dict:
     return _role_tools.artifact_list_impl(run_id=normalized_run_id)
 
 
-@MCP.tool()
 def artifact_get(
     run_id: Any = None,
     artifact_name: Any = None,
@@ -1922,11 +1921,11 @@ def artifact_get(
 
 
 # ---------------------------------------------------------------------------
-# v2 Role MCP tools (artifact-reference API with in-conversation summary)
+# Legacy v2 Role tools — kept as internal helpers but NOT exposed to
+# Head of IT.  The new canonical tool is ``shttp_role_call``.
 # ---------------------------------------------------------------------------
 
 
-@MCP.tool()
 def shttp_role_start_v2(
     role: Any,
     user_task: Any,
@@ -1937,7 +1936,9 @@ def shttp_role_start_v2(
     url: Any = None,
     idempotency_key: Any = None,
 ) -> dict:
-    """Start a role using the v2 artifact-reference API.
+    """Start a role using the legacy v2 artifact-reference API.
+
+    **Deprecated.** Use ``shttp_role_call`` instead.
 
     Accepts artifact IDs/paths (not content). MCP server resolves them.
     Returns control summary inline after two-step same-conversation lifecycle.
@@ -2034,7 +2035,6 @@ def shttp_role_start_v2(
     )
 
 
-@MCP.tool()
 def shttp_role_wait_v2(
     role_run_id: Any,
     timeout_seconds: Any = None,
@@ -2124,7 +2124,6 @@ def shttp_role_wait_v2(
     )
 
 
-@MCP.tool()
 def shttp_role_result_v2(
     role_run_id: Any,
     include_full_artifacts: Any = None,
@@ -2133,6 +2132,8 @@ def shttp_role_result_v2(
     """Get result for a v2 role run.
 
     Returns control summary inline and artifact paths (not content).
+
+    **Deprecated.** Use ``shttp_role_call`` instead.
 
     Args:
         role_run_id: The role run ID returned by ``shttp_role_start_v2``.
@@ -2243,17 +2244,25 @@ def shttp_role_result_v2(
                 artifacts_result["summary"] = {
                     "artifact_name": art_name,
                     "artifact_path": art.get("artifact_path"),
+                    "artifact_id": art.get("artifact_id", ""),
                 }
             else:
                 primary_artifacts.append({
                     "artifact_name": art_name,
                     "artifact_path": art.get("artifact_path"),
+                    "artifact_id": art.get("artifact_id", ""),
                 })
         # Store first primary for backward compatibility; keep all in a list
         if primary_artifacts:
             artifacts_result["primary"] = primary_artifacts[0]
             if len(primary_artifacts) > 1:
                 artifacts_result["primaries"] = primary_artifacts
+
+    # Ensure artifact_id is present in artifacts (backward compat)
+    for key in ("primary", "summary"):
+        if key in artifacts_result and isinstance(artifacts_result[key], dict):
+            if "artifact_id" not in artifacts_result[key]:
+                artifacts_result[key]["artifact_id"] = ""
 
     result["artifacts"] = artifacts_result
 
@@ -2321,6 +2330,198 @@ def shttp_role_result_v2(
             result["warnings"] = warnings_list
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Public MCP tools for Head of IT
+# ---------------------------------------------------------------------------
+
+
+@MCP.tool()
+def shttp_role_list() -> dict:
+    """List available roles and their contracts for ``shttp_role_call``.
+
+    Returns a minimal ``roles`` list with the fields Head of IT needs:
+    name, readonly, requires_artifacts, output_artifact_type.
+
+    Example::
+
+        {
+            "roles": [
+                {
+                    "name": "scout",
+                    "readonly": true,
+                    "requires_artifacts": [],
+                    "output_artifact_type": "scout_report"
+                },
+                {
+                    "name": "architect",
+                    "readonly": true,
+                    "requires_artifacts": ["scout_report"],
+                    "output_artifact_type": "architect_plan"
+                }
+            ]
+        }
+    """
+    roles = list_roles()
+    return {
+        "roles": [
+            {
+                "name": r["name"],
+                "readonly": r["readonly"],
+                "requires_artifacts": r.get("requires_artifacts", []),
+                "output_artifact_type": r.get("output_artifact", ""),
+            }
+            for r in roles
+        ]
+    }
+
+
+@MCP.tool()
+def shttp_role_call(
+    role: Any,
+    user_task: Any,
+    input_artifacts: Any = None,
+    metadata: Any = None,
+    api_key: Any = None,
+    llm_model: Any = None,
+    url: Any = None,
+    idempotency_key: Any = None,
+) -> dict:
+    """Call a specialist role.
+
+    This is the **only** public tool Head of IT uses to invoke a worker
+    role.  It executes the full two-step lifecycle (main prompt →
+    summary prompt) synchronously and returns ``control_summary`` plus
+    ``artifact_id`` references — never artifact content.
+
+    Parameters
+    ----------
+    role :
+        The role name (e.g. ``"scout"``, ``"architect"``, ``"coder"``).
+    user_task :
+        The user task text. Required and must be non-empty.
+    input_artifacts :
+        List of ``{"artifact_id": "...", "artifact_type": "..."}`` dicts
+        (preferred) or a ``{artifact_type: artifact_id}`` mapping
+        (backward compat).  The MCP server resolves artifact content
+        server-side via Jinja injection.
+    metadata :
+        Optional metadata dict (e.g. ``{"repository": "..."}``).
+    api_key :
+        OpenHands API key.
+    llm_model :
+        LLM model override.
+    url :
+        OpenHands LLM base URL override.
+    idempotency_key :
+        Optional stable key to deduplicate retried calls.
+
+    Returns
+    -------
+    dict
+        ``role_run_id``, ``run_id``, ``role``, ``status``,
+        ``control_summary``, and ``artifacts`` (primary + summary with
+        ``artifact_id`` — never ``artifact_path`` or content).
+
+    Example::
+
+        {
+            "role_run_id": "20260607-xxx-architect-1",
+            "run_id": "20260607-xxx",
+            "role": "architect",
+            "status": "completed",
+            "control_summary": {
+                "status": "DONE",
+                "role": "architect",
+                "summary": "Plan implemented.",
+                "blocking": false,
+                "risk_level": "LOW",
+                "action": null
+            },
+            "artifacts": {
+                "primary": {
+                    "artifact_id": "art_20260607-xxx_architect_1_architect_plan",
+                    "artifact_type": "architect_plan",
+                    "created_by": "architect"
+                },
+                "summary": {
+                    "artifact_id": "art_20260607-xxx_architect_1_control_summary",
+                    "artifact_type": "control_summary",
+                    "created_by": "architect"
+                }
+            }
+        }
+    """
+    # Normalize inputs
+    normalized_role = normalize_string(role, "role")
+    normalized_user_task = unwrap_text(user_task)
+    normalized_input_artifacts = (
+        unwrap_text(input_artifacts)
+        if input_artifacts is not None
+        else None
+    )
+    normalized_metadata = (
+        unwrap_text(metadata) if metadata is not None else None
+    )
+    normalized_api_key = unwrap_text(api_key) if api_key is not None else ""
+    normalized_llm_model = unwrap_text(llm_model) if llm_model is not None else None
+    normalized_url = unwrap_text(url) if url is not None else None
+    normalized_idempotency_key = unwrap_text(
+        idempotency_key
+    ) if idempotency_key is not None else None
+
+    # Normalize input_artifacts to a plain dict
+    if isinstance(normalized_input_artifacts, dict):
+        resolved_artifacts: dict[str, str] = {}
+        for k, v in normalized_input_artifacts.items():
+            resolved_artifacts[k] = unwrap_text(v) if v is not None else ""
+        normalized_input_artifacts = resolved_artifacts
+    elif isinstance(normalized_input_artifacts, list):
+        # New format: list of {"artifact_id": "...", "artifact_type": "..."}
+        resolved_artifacts: dict[str, str] = {}
+        for entry in normalized_input_artifacts:
+            if isinstance(entry, dict):
+                aid = entry.get("artifact_id", "")
+                atype = entry.get("artifact_type", "")
+                if aid and atype:
+                    resolved_artifacts[atype] = str(aid)
+        normalized_input_artifacts = resolved_artifacts
+    elif isinstance(normalized_input_artifacts, str):
+        try:
+            normalized_input_artifacts = json.loads(normalized_input_artifacts)
+        except (json.JSONDecodeError, TypeError):
+            normalized_input_artifacts = {}
+    else:
+        normalized_input_artifacts = {}
+
+    # Normalize metadata
+    if isinstance(normalized_metadata, dict):
+        resolved_metadata: dict[str, str] = {}
+        for k, v in normalized_metadata.items():
+            resolved_metadata[k] = unwrap_text(v) if v is not None else ""
+        normalized_metadata = resolved_metadata
+    elif isinstance(normalized_metadata, str):
+        try:
+            normalized_metadata = json.loads(normalized_metadata)
+        except (json.JSONDecodeError, TypeError):
+            normalized_metadata = {}
+    else:
+        normalized_metadata = {}
+
+    # Import and call the lifecycle implementation
+    from . import role_lifecycle
+
+    return role_lifecycle.role_call_impl(
+        role=normalized_role,
+        user_task=str(normalized_user_task) if normalized_user_task else "",
+        input_artifacts=normalized_input_artifacts,
+        metadata=normalized_metadata,
+        api_key=str(normalized_api_key) if normalized_api_key else "",
+        llm_model=str(normalized_llm_model) if normalized_llm_model else None,
+        url=str(normalized_url) if normalized_url else None,
+        idempotency_key=str(normalized_idempotency_key) if normalized_idempotency_key else None,
+    )
 
 
 # ---------------------------------------------------------------------------

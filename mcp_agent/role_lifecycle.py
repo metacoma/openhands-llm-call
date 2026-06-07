@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Two-step role lifecycle with in-conversation summary.
 
-Provides ``start_role_v2_impl`` which implements the full two-step
+Provides ``role_call_impl`` which implements the full two-step
 lifecycle: main prompt → response → summary prompt → response →
 validation → control summary returned inline.
 
@@ -34,7 +34,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from .artifact_store import ArtifactStore
+from .artifact_store import ArtifactStore, _generate_artifact_id
 from .lock_manager import RoleLockManager
 from .prompt_renderer import render_prompt
 from .role_store import RoleRunStore, _generate_run_id, _generate_role_run_id
@@ -47,6 +47,52 @@ from .summary_validator import (
 )
 
 logger = logging.getLogger("openhands-mcp")
+
+
+def resolve_input_artifacts(
+    input_artifacts: Any,
+) -> dict[str, str]:
+    """Normalize *input_artifacts* to a ``{artifact_type: artifact_id}`` dict.
+
+    Accepts both the new list-of-objects format and the legacy dict format::
+
+        # New (preferred):
+        [{"artifact_id": "art_xxx", "artifact_type": "scout_report"}, ...]
+
+        # Legacy (backward compat):
+        {"scout_report": "art_xxx", ...}
+
+    Returns a plain ``{artifact_type: artifact_id}`` dict.
+    """
+    if input_artifacts is None:
+        return {}
+
+    if isinstance(input_artifacts, list):
+        result: dict[str, str] = {}
+        for entry in input_artifacts:
+            if isinstance(entry, dict):
+                aid = entry.get("artifact_id", "")
+                atype = entry.get("artifact_type", "")
+                if aid and atype:
+                    result[atype] = str(aid)
+        return result
+
+    if isinstance(input_artifacts, dict):
+        result: dict[str, str] = {}
+        for k, v in input_artifacts.items():
+            result[k] = str(v) if v is not None else ""
+        return result
+
+    # String — try JSON parse
+    if isinstance(input_artifacts, str):
+        try:
+            parsed = json.loads(input_artifacts)
+            return resolve_input_artifacts(parsed)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    return {}
+
 
 # Import from server module to avoid circular dependency at import time
 # These are set at module load time from env vars
@@ -172,7 +218,7 @@ def _poll_task_status(
     }
 
 
-def start_role_v2_impl(
+def role_call_impl(
     role: str,
     user_task: str,
     input_artifacts: Optional[dict[str, Any]] = None,
@@ -207,7 +253,9 @@ def start_role_v2_impl(
     Returns
     -------
     dict
-        Control summary with artifact paths, or an error dict.
+        Control summary with ``artifact_id`` (not ``artifact_path``),
+        or an error dict.  The public response never contains
+        ``full_result``, artifact ``content``, or ``artifact_path``.
 
     Raises
     ------
@@ -496,12 +544,7 @@ def start_role_v2_impl(
         }
 
     primary_artifact_path = primary_meta["artifact_path"]
-
-    role_store.update_role_run(
-        role_run_id,
-        artifact_path=primary_artifact_path,
-        lifecycle_state="primary_artifact_saved",
-    )
+    primary_artifact_id = primary_meta.get("artifact_id", "")
 
     # ------------------------------------------------------------------
     # Step 10: Render and send summary prompt (same conversation)
@@ -570,12 +613,14 @@ def start_role_v2_impl(
             "control_summary": control_summary,
             "artifacts": {
                 "primary": {
-                    "artifact_name": role_spec.output_artifact,
-                    "artifact_path": primary_artifact_path,
+                    "artifact_id": primary_artifact_id,
+                    "artifact_type": role_spec.output_artifact,
+                    "created_by": role,
                 },
                 "summary": {
-                    "artifact_name": role_spec.summary_artifact,
-                    "artifact_path": None,
+                    "artifact_id": "",
+                    "artifact_type": role_spec.summary_artifact,
+                    "created_by": role,
                 },
             },
         }
@@ -674,9 +719,13 @@ def start_role_v2_impl(
     )
 
     if summary_meta is None:
-        summary_artifact_path = None
+        # Defensive: generate a synthetic artifact_id when save() fails.
+        # This should not happen in practice since save() always returns meta.
+        summary_artifact_id = _generate_artifact_id(
+            run_id, role, 1, role_spec.summary_artifact
+        )
     else:
-        summary_artifact_path = summary_meta["artifact_path"]
+        summary_artifact_id = summary_meta.get("artifact_id", "")
 
     role_store.update_role_run(
         role_run_id,
@@ -698,7 +747,7 @@ def start_role_v2_impl(
             },
             "summary": {
                 "artifact_name": role_spec.summary_artifact,
-                "artifact_path": summary_artifact_path,
+                "artifact_path": summary_artifact_id,
             },
         }),
     )
@@ -708,16 +757,24 @@ def start_role_v2_impl(
     # ------------------------------------------------------------------
     return {
         "role_run_id": role_run_id,
+        "run_id": run_id,
+        "role": role,
         "status": "completed",
         "control_summary": control_summary,
         "artifacts": {
             "primary": {
-                "artifact_name": role_spec.output_artifact,
-                "artifact_path": primary_artifact_path,
+                "artifact_id": primary_artifact_id,
+                "artifact_type": role_spec.output_artifact,
+                "created_by": role,
             },
             "summary": {
-                "artifact_name": role_spec.summary_artifact,
-                "artifact_path": summary_artifact_path,
+                "artifact_id": summary_artifact_id,
+                "artifact_type": role_spec.summary_artifact,
+                "created_by": role,
             },
         },
     }
+
+
+# Backward-compatible alias for existing callers/tests.
+start_role_v2_impl = role_call_impl

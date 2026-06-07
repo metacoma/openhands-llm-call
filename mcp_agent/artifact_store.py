@@ -45,6 +45,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _generate_artifact_id(
+    run_id: str, role: str, attempt: int = 1, artifact_type: str = ""
+) -> str:
+    """Generate a stable, opaque artifact ID.
+
+    Format: art_<run_id>_<role>_<attempt>_<artifact_type>
+    Example: art_20260607-124753-abc123_scout_1_scout_report
+    """
+    return f"art_{run_id}_{role}_{attempt}_{artifact_type}"
+
+
 class ArtifactStore:
     """File-based artifact store for role orchestration.
 
@@ -72,6 +83,7 @@ class ArtifactStore:
         role: str,
         artifact_name: str,
         content: str,
+        artifact_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Save an artifact and return its metadata record.
 
@@ -87,11 +99,16 @@ class ArtifactStore:
             Logical name (e.g. ``"scout_report"``).
         content :
             The artifact text content.
+        artifact_id :
+            Opaque artifact identifier.  Auto-generated if not provided.
 
         Returns
         -------
         dict
-            Artifact metadata record.
+            Artifact metadata record with ``artifact_id``, ``artifact_type``
+            (alias for ``artifact_name``), ``role``, ``role_run_id``,
+            ``run_id``, ``created_at``, ``size_bytes``, plus legacy
+            ``artifact_name`` and ``artifact_path`` keys for backward compat.
         """
         # Validate all user-controlled path components
         safe_run_id = _safe_component(run_id, "run_id")
@@ -109,16 +126,28 @@ class ArtifactStore:
         # Write content
         artifact_path.write_text(content, encoding="utf-8")
 
+        # Generate artifact_id if not provided
+        if artifact_id is None:
+            # Extract attempt from role_run_id (last segment after last '-')
+            parts = role_run_id.rsplit("-", 1)
+            attempt = int(parts[-1]) if parts[-1].isdigit() else 1
+            artifact_id = _generate_artifact_id(
+                safe_run_id, role, attempt, artifact_name
+            )
+
         # Write companion metadata
         # Store artifact_path relative to state_dir for safe resolution
         rel_path = f"{safe_run_id}/{filename}"
         meta = {
+            "artifact_id": artifact_id,
             "artifact_name": artifact_name,
+            "artifact_type": artifact_name,
             "role": role,
             "role_run_id": role_run_id,
             "run_id": run_id,
             "artifact_path": rel_path,
             "created_at": _now_iso(),
+            "size_bytes": len(content.encode("utf-8")),
         }
         meta_path = run_dir / f"{filename}.meta.json"
         meta_path.write_text(
@@ -310,6 +339,58 @@ class ArtifactStore:
         meta_with_content["content_empty"] = not meta_with_content["content"].strip()
         meta_with_content["valid_role_report"] = bool(meta_with_content["content"].strip())
         return meta_with_content
+
+    def get_content_by_id(self, artifact_id: str) -> str:
+        """Resolve an *artifact_id* to its content string.
+
+        This is an **internal server-only** method used during Jinja
+        prompt rendering.  It is NOT exposed as an MCP tool so that
+        Head of IT never receives artifact content.
+
+        Parameters
+        ----------
+        artifact_id :
+            Opaque artifact identifier (e.g. ``"art_run-scout-1_scout_report"``).
+
+        Returns
+        -------
+        str
+            The artifact content.
+
+        Raises
+        ------
+        ValueError
+            If the artifact cannot be found or resolved.
+        """
+        if not isinstance(artifact_id, str) or not artifact_id:
+            raise ValueError("invalid artifact_id")
+
+        # Strip the "art_" prefix to get the run_id portion
+        if artifact_id.startswith("art_"):
+            remainder = artifact_id[4:]
+        else:
+            remainder = artifact_id
+
+        # Parse: <run_id>_<role>_<attempt>_<artifact_type>
+        # run_id may contain dashes and colons, so we need to be careful.
+        # Strategy: scan all artifacts in state_dir for a matching artifact_id.
+        for meta_path in self.state_dir.rglob("*.meta.json"):
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if data.get("artifact_id") == artifact_id:
+                # Validate the artifact file still exists
+                artifact_rel = data.get("artifact_path", "")
+                full_path = self.state_dir / artifact_rel
+                try:
+                    self._ensure_under_state_dir(full_path)
+                except ValueError:
+                    continue
+                if full_path.exists():
+                    return full_path.read_text(encoding="utf-8")
+
+        raise ValueError(f"artifact not found: {artifact_id}")
 
     # -- internals ---------------------------------------------------------
 

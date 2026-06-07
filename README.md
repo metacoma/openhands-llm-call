@@ -17,15 +17,13 @@ User / Head-of-IT
               │   openhands_start_task, openhands_get_task_status,
               │   openhands_get_task_result, openhands_get_task_events,
               │   openhands_cancel_task, call_llm, check_health, check_job
-              ├── Role tools
-              │   role_list, role_start, role_status, role_result
-              ├── Artifact tools
-              │   artifact_list, artifact_get
+              ├── Public role tools
+              │   shttp_role_list, shttp_role_call
+              ├── Artifact store (mcp_agent/artifact_store.py)
               ├── Role registry (config/roles.yaml)
               ├── Prompt renderer (mcp_agent/prompt_renderer.py)
               ├── Role run store (mcp_agent/role_store.py)
-              ├── Lock manager (mcp_agent/lock_manager.py)
-              └── Artifact store (mcp_agent/artifact_store.py)
+              └── Lock manager (mcp_agent/lock_manager.py)
 ```
 
 ## Installation
@@ -112,555 +110,54 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 | `check_health` | Health-check the backend |
 | `check_job` | Check an async LLM job by UID |
 
-### Role tools
+### Public Role Tools
 
 | Tool | Purpose |
 |---|---|
-| `role_list` | List available worker roles |
-| `role_start` | Start a named worker role |
-| `role_wait` | Wait for a long-running role to finish (server-side polling) |
-| `role_status` | Single-shot diagnostic status check (**diagnostic only** — do not poll repeatedly) |
-| `role_result` | Get the result of a completed role |
+| `shttp_role_list` | List available roles and their contracts |
+| `shttp_role_call` | Call a specialist (single tool for all role orchestration) |
 
-#### `role_start`
+#### `shttp_role_list`
 
-**Recommended (prompt-only) usage:**
+Returns a list of available roles with their contracts.
 
-```json
-{
-  "role": "scout",
-  "prompt": "Analyze GitHub repository https://github.com/metacoma/example on main branch. Clone it if necessary. Do not modify files.",
-  "context": {
-    "run_id": "20260605-abc123",
-    "idempotency_key": "initial-scout"
-  },
-  "artifacts": {}
-}
-```
-
-**Backward-compatible usage (user_task):**
-
-> **Note:** `prompt`-only mode is preferred. `user_task` is kept for backward compatibility.
-> `repo`, `base_branch`, and `branch` are deprecated — repository URL and branch should be included in the `prompt` text.
+**Example response:**
 
 ```json
 {
-  "role": "scout",
-  "user_task": "Analyze repository and find where to implement feature X",
-  "repo": "https://github.com/metacoma/example",
-  "base_branch": "main",
-  "branch": null,
-  "context": {
-    "run_id": "20260605-abc123"
-  },
-  "artifacts": {},
-  "idempotency_key": "initial-scout"
-}
-```
-
-**Parameters:**
-
-| Parameter | Required | Description |
-|---|---|---|
-| `role` | Yes | The role name (e.g. `scout`, `architect`, `coder`, `reviewer`, `publisher`) |
-| `prompt` | Yes (or `user_task`) | The task/prompt description. Takes precedence over `user_task` |
-| `user_task` | Yes (or `prompt`) | Deprecated alias for `prompt`. Kept for backward compatibility |
-| `context` | No | Dict with `run_id`, `idempotency_key`, etc. |
-| `artifacts` | No | Mapping of artifact names to content |
-| `idempotency_key` | No | Top-level idempotency key (takes precedence over `context.idempotency_key`) |
-| `repo` | No | Deprecated. If provided as a dict it is normalized to a string or discarded. No longer passed to OpenHands |
-| `base_branch` | No | Deprecated. See `repo` |
-| `branch` | No | Deprecated. See `repo` |
-
-**Notes:**
-
-- `repo`, `base_branch`, and `branch` are **deprecated**. Repository URL and branch should be included in the `prompt` text. OpenHands creates an empty/default sandbox with no selected repository metadata.
-- `idempotency_key` (top-level or in `context`) prevents duplicate tasks on retry.
-- `timeout_minutes` is included in the response from the role config.
-- `idempotent_reuse: true` indicates the call was deduplicated.
-
-For mutating roles (`readonly: false`, currently only `coder`), a file-based
-lock is acquired on `repo|branch`. Concurrent starts for the same repo/branch
-fail with a clear error.
-
-#### `role_status`
-
-`role_status` is a **single-shot diagnostic status check**. It is **diagnostic
-only** — do not call it repeatedly in a tight loop from an LLM orchestrator.
-Use `role_wait` for normal long-running role orchestration.
-
-> **Warning:** Do not implement orchestration by repeatedly calling
-> `role_status` in a tight loop. Use `role_wait` for server-side polling.
-> Repeated identical `role_status` calls can trigger OpenHands' stuck-loop
-> detector in the top-level orchestrator.
-
-#### `role_result`
-
-```json
-{
-  "role_run_id": "20260605-abc123-scout-1",
-  "include_full_result": false
-}
-```
-
-- Default `include_full_result=true` preserves existing behavior.
-- When `false`, `full_result` is `null` and `full_result_omitted` is `true`,
-  but artifact metadata is still returned.
-
-#### `role_wait` — server-side polling
-
-Wait for a long-running role to finish using server-side polling. Use this after
-`role_start` instead of repeatedly calling `role_status`.
-
-**Recommended flow:**
-
-```text
-role_start -> role_wait
-```
-
-**Example:**
-
-1. Start the role:
-
-```json
-{
-  "role": "scout",
-  "prompt": "Analyze repository https://github.com/metacoma/freeplane_plugin_grpc on main branch. Only inspect, do not modify files. Return scout report.",
-  "context": {},
-  "artifacts": {}
-}
-```
-
-2. Wait for completion:
-
-```json
-{
-  "role_run_id": "20260605-abc123-scout-1",
-  "timeout_seconds": 1800,
-  "poll_interval_seconds": 15,
-  "return_result": true
-}
-```
-
-**Parameters:**
-
-| Parameter | Required | Description |
-|---|---|---|
-| `role_run_id` | Yes | The role run ID returned by `role_start` |
-| `timeout_seconds` | No | Maximum seconds to wait (default 1800, clamped to [1, 7200]) |
-| `poll_interval_seconds` | No | Seconds between status checks (default 15, clamped to [5, 120]) |
-| `return_result` | No | If `true` (default), inline the full result. If `false`, return compact response with `result_available: true` |
-
-**Configuration (environment variables):**
-
-| Variable | Default | Description |
-|---|---|---|
-| `OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS` | `1800` | Default timeout |
-| `OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS` | `15` | Default poll interval |
-| `OPENHANDS_ROLE_WAIT_MAX_TIMEOUT_SECONDS` | `7200` | Maximum allowed timeout |
-
-**Responses:**
-
-- **Completed** (with result)::
-
-  ```json
-  {
-    "role_run_id": "20260605-abc123-scout-1",
-    "status": "completed",
-    "has_result": true,
-    "result": "...",
-    "duration_seconds": 742
-  }
-  ```
-
-- **Terminal failure**::
-
-  ```json
-  {
-    "role_run_id": "20260605-abc123-scout-1",
-    "status": "failed",
-    "has_result": false,
-    "error": {
-      "type": "RoleFailed",
-      "message": "...",
-      "retryable": true
+  "roles": [
+    {
+      "name": "scout",
+      "readonly": true,
+      "requires_artifacts": [],
+      "output_artifact_type": "scout_report"
+    },
+    {
+      "name": "architect",
+      "readonly": true,
+      "requires_artifacts": ["scout_report"],
+      "output_artifact_type": "architect_plan"
     }
-  }
-  ```
-
-- **Bounded timeout** (role still running)::
-
-  ```json
-  {
-    "role_run_id": "20260605-abc123-scout-1",
-    "status": "running",
-    "has_result": false,
-    "wait_timed_out": true,
-    "message": "Role is still running after bounded wait. Call role_wait again later.",
-    "poll_after_seconds": 60
-  }
-  ```
-
-## Role Result Contract
-
-A role is successful only when it returns a non-empty final LLM answer.
-
-`status=completed` with an empty answer is treated as `completed_empty_result`
-or `EmptyRoleResult`.
-
-### role_wait behavior
-
-`role_wait(return_result=true)` waits for completion and validates the final
-answer. It includes a post-completion retry window (default 60 seconds,
-5-second intervals) to handle races where OpenHands marks the conversation
-completed before the final assistant answer is visible through the API.
-
-Example request:
-
-```json
-{
-  "role_run_id": "...",
-  "timeout_seconds": 1800,
-  "poll_interval_seconds": 30,
-  "return_result": true
+  ]
 }
 ```
 
-Successful response:
+#### `shttp_role_call`
+
+The only public tool Head of IT uses to invoke a worker role. Executes the
+full two-step lifecycle (main prompt → summary prompt) synchronously and
+returns `control_summary` plus `artifact_id` references — never artifact content.
+
+**Example — scout call:**
 
 ```json
 {
-  "status": "completed",
-  "has_result": true,
-  "full_result": "...non-empty answer...",
-  "artifact_path_scope": "mcp_agent_state_internal",
-  "artifact_access": "Use artifact_get to read this artifact. Do not read artifact_path from an OpenHands terminal."
-}
-```
-
-Empty response:
-
-```json
-{
-  "status": "completed_empty_result",
-  "has_result": false,
-  "error": {
-    "type": "EmptyRoleResult",
-    "message": "Role completed but did not return a final LLM answer.",
-    "retryable": true,
-    "suggested_next_action": "Retry this role once with a stricter final-answer prompt."
-  },
-  "diagnostics": {
-    "conversation_id": "...",
-    "task_id": "...",
-    "answer_empty": true
-  }
-}
-```
-
-### Orchestrator rule
-
-If `role_wait` returns `completed_empty_result`, do **not** continue to the
-next role. Retry the same role once with a stricter final-answer prompt, or
-stop and report the issue to the user.
-
-### Force refresh
-
-`role_result_impl(role_run_id, force_refresh=True)` bypasses cached empty
-answers by re-fetching from the OpenHands FastAPI backend. This is used
-internally by `role_wait` during its post-completion retry window.
-
-### Artifact path scope
-
-The `artifact_path` field in role result responses is MCP-internal and must
-be read via `artifact_get`, not via terminal commands (e.g. `cat`).
-
-```json
-{
-  "artifact_path": "state_dir/run_id/filename.artifact",
-  "artifact_path_scope": "mcp_agent_state_internal"
-}
-```
-
-### Empty artifact diagnostics
-
-When `artifact_get` returns an artifact with empty content:
-
-```json
-{
-  "content": "",
-  "content_empty": true,
-  "valid_role_report": false,
-  "warning": {
-    "type": "EmptyArtifactContent",
-    "message": "Artifact exists but content is empty."
-  }
-}
-```
-
-### Artifact tools
-
-| Tool | Purpose |
-|---|---|
-| `artifact_list` | List artifacts for a run |
-| `artifact_get` | Get an artifact by name or role_run_id |
-
-#### `artifact_list`
-
-```json
-{
-  "run_id": "20260605-abc123"
-}
-```
-
-Returns `{run_id, artifacts: [...]}` where each artifact includes
-`artifact_name`, `role`, `role_run_id`, `artifact_path`, `created_at`.
-
-#### `artifact_get`
-
-Prefer `role_run_id` when available:
-
-```json
-{
-  "role_run_id": "20260605-abc123-scout-1"
-}
-```
-
-Or by `run_id` and `artifact_name`:
-
-```json
-{
-  "run_id": "20260605-abc123",
-  "artifact_name": "scout_report"
-}
-```
-
-Returns artifact metadata with `content` field. Path traversal is
-prevented — artifacts can only be read from the configured state directory.
-
-> **Note:** If OpenHands wraps these values as `{"default": "..."}`, the server
-> will normalize them automatically.
-
-### OpenHands scalar argument wrapping compatibility
-
-Some OpenHands versions may wrap scalar MCP arguments into objects like:
-
-```json
-{
-  "timeout_seconds": {
-    "default": 1800
-  }
-}
-```
-
-or:
-
-```json
-{
-  "run_id": {
-    "default": "20260605-abc123"
-  }
-}
-```
-
-The MCP server normalizes these wrapped values at the tool boundary before
-passing clean types to internal implementations.
-
-Recommended user-facing examples still use plain scalar values:
-
-```json
-{
-  "timeout_seconds": 1800,
-  "run_id": "20260605-abc123"
-}
-```
-
-## Head-of-IT Usage Example
-
-### Recommended orchestration flow
-
-After `role_start`, call `role_wait`. Do not repeatedly call `role_status`.
-
-```text
-1. role_list()
-   → Returns available roles
-
-2. role_start(
-      role="scout",
-      prompt="Analyze repository https://github.com/metacoma/example on main branch. Do not modify files.",
-      context={"run_id": "20260605-abc123", "idempotency_key": "initial-scout"}
-   )
-   → Returns: {run_id, role_run_id, role, status: "running", poll_after_seconds: 30, timeout_minutes: 60}
-
-3. role_wait(role_run_id="20260605-abc123-scout-1", timeout_seconds=1800, return_result=true)
-   → If completed: continue to the next role
-   → If running with wait_timed_out=true: call role_wait again later
-   → If failed/stuck/timeout/cancelled: stop and decide whether to retry or report to the user
-
-4. artifact_get(role_run_id="20260605-abc123-scout-1")
-   → Returns artifact content
-
-5. role_start(
-      role="architect",
-      prompt="Plan implementation based on scout report",
-      artifacts={"scout_report": "<content from step 4>"}
-   )
-   → Returns: {run_id, role_run_id, role, status: "running", ...}
-
-6. Continue the pipeline: role_wait → artifact_get → role_start
-```
-
-### Legacy example (deprecated — uses `role_status` polling)
-
-> The following example uses `role_status` polling which is **not recommended**
-> for LLM orchestrators. Use `role_wait` instead.
-
-```text
-1. role_list()
-   → Returns available roles
-
-2. role_start(
-      role="scout",
-      user_task="Analyze repository and find where to implement feature X",
-      repo="https://github.com/metacoma/example",
-      base_branch="main",
-      context={"run_id": "20260605-abc123", "idempotency_key": "initial-scout"}
-   )
-   → Returns: {run_id, role_run_id, role, status: "running", poll_after_seconds: 30, timeout_minutes: 60}
-
-3. role_status(role_run_id="20260605-abc123-scout-1")
-   → Poll until status == "completed"
-
-4. role_result(role_run_id="20260605-abc123-scout-1", include_full_result=false)
-   → Returns: {status: "completed", action, risk, artifact_path, result_summary, full_result: null, full_result_omitted: true}
-
-5. artifact_get(run_id="20260605-abc123", artifact_name="scout_report")
-   → Returns artifact content
-
-6. role_start(
-      role="architect",
-      user_task="Plan implementation",
-      repo="https://github.com/metacoma/example",
-      base_branch="main",
-      artifacts={"scout_report": "<content from step 5>"}
-   )
-   → Returns: {run_id, role_run_id, role, status: "running", ...}
-
-7. Continue the pipeline: role_status → role_result → artifact_get → role_start
-```
-
-## v2 API — Artifact-based Role Orchestration
-
-> **Deprecation notice:** `role_start` is legacy. Head-of-Engineering should use
-> `shttp_role_start_v2`. Legacy `prompt.text` mode should not be used for
-> artifact-based orchestration.
-
-### Control plane vs data plane
-
-The v2 API separates role execution into two planes:
-
-```
-control plane = short summaries for Head-of-Engineering
-data plane    = full role artifacts for specialist roles
-```
-
-**Data plane:** Full role outputs are stored as artifacts:
-
-| Role | Output artifact | Summary artifact |
-|---|---|---|
-| scout | scout_report | scout_summary |
-| architect | architect_plan | architect_summary |
-| coder | coder_report | coder_summary |
-| reviewer | reviewer_report | reviewer_summary |
-| coder_fix | coder_fix_result | coder_fix_summary |
-| publisher | publisher_instructions | publisher_summary |
-
-These artifacts may be long and detailed. They are passed to later roles by
-ID/path/name only — **never** pasted into JSON payloads.
-
-**Control plane:** Every role execution produces a compact control summary.
-Head-of-Engineering reads this to decide routing. The summary is short,
-structured, and safe to return inline.
-
-### Required artifact matrix
-
-| Role | Required artifacts | Output artifact |
-|---|---|---|
-| scout | *(none)* | scout_report |
-| architect | scout_report | architect_plan |
-| coder | scout_report, architect_plan | coder_report |
-| reviewer | scout_report, architect_plan, coder_report | reviewer_report |
-| coder_fix | architect_plan, coder_report, reviewer_report | coder_fix_result |
-| publisher | coder_report, reviewer_report | publisher_instructions |
-
-### Summary JSON schema
-
-Every role produces a summary with this schema:
-
-```json
-{
-  "status": "completed" | "blocked",
-  "role": "<role>",
-  "summary": "<short factual summary for Head-of-Engineering>",
-  "primary_artifact_name": "<artifact name>",
-  "blocking": true | false,
-  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
-  "action": "PASS" | "BLOCKER" | null,
-  "blocking_summary": ["..."]
-}
-```
-
-**Rules:**
-
-- Only reviewer may set `action` to `PASS` or `BLOCKER`.
-- Non-reviewer roles must set `action` to `null`.
-- The summary must **not** include `next_role` or `ready_for_next_role`.
-- Keep `summary` under 1000 characters unless blockers require more detail.
-
-### Two-step same-conversation lifecycle
-
-Each role run follows this lifecycle:
-
-```
-created
-→ main_prompt_rendered
-→ main_prompt_sent
-→ main_response_received
-→ primary_artifact_saved
-→ summary_prompt_sent
-→ summary_response_received
-→ summary_artifact_saved
-→ completed
-```
-
-If summary parsing fails, one repair attempt is made. If repair also fails,
-a safe fallback summary is returned.
-
-### `shttp_role_start_v2`
-
-Start a role using artifact ID references (not raw content). The MCP server
-resolves artifacts server-side and returns the control summary inline.
-
-**Example — scout:**
-
-```json
-{
-  "role": {"text": "scout"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
+  "role": "scout",
+  "user_task": "Analyze repository https://github.com/metacoma/example",
+  "input_artifacts": [],
   "metadata": {
-    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"}
-  }
-}
-```
-
-**Example — architect (with artifact reference):**
-
-```json
-{
-  "role": {"text": "architect"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "input_artifacts": {
-    "scout_report": {"text": "20260607-010712-647d95/20260607-010712-647d95-scout-1_scout_report.artifact"}
+    "repository": "https://github.com/metacoma/example",
+    "base_branch": "main"
   }
 }
 ```
@@ -669,398 +166,167 @@ resolves artifacts server-side and returns the control summary inline.
 
 ```json
 {
-  "role_run_id": "20260607-010712-647d95-architect-1",
+  "role_run_id": "20260607-xxx-scout-1",
+  "run_id": "20260607-xxx",
+  "role": "scout",
   "status": "completed",
   "control_summary": {
-    "status": "completed",
-    "role": "architect",
-    "summary": "Architect plan produced with 5 file changes.",
-    "primary_artifact_name": "architect_plan",
+    "status": "DONE",
+    "role": "scout",
+    "summary": "Repository analyzed.",
     "blocking": false,
     "risk_level": "LOW",
-    "action": null,
-    "blocking_summary": []
+    "action": null
   },
   "artifacts": {
     "primary": {
-      "artifact_name": "architect_plan",
-      "artifact_path": "..."
+      "artifact_id": "art_20260607-xxx_scout_1_scout_report",
+      "artifact_type": "scout_report",
+      "created_by": "scout"
     },
     "summary": {
-      "artifact_name": "architect_summary",
-      "artifact_path": "..."
+      "artifact_id": "art_20260607-xxx_scout_1_control_summary",
+      "artifact_type": "control_summary",
+      "created_by": "scout"
     }
   }
 }
 ```
 
-### `shttp_role_wait_v2`
-
-Wait for a v2 role run and return its status.
-
-**Important**: `shttp_role_start_v2` executes the full lifecycle
-synchronously (main prompt + summary prompt) and returns the completed
-result. In most cases, `shttp_role_wait_v2` is not needed because the
-result is already available from `start_v2`.
-
-This function is provided for compatibility with the established
-start → wait → result orchestration model.
-
-**When the role is already completed**, `wait_v2` delegates to
-`shttp_role_result_v2` to return the v2-coherent response shape
-(control summary + artifacts).
-
-**When the role is still running**, it polls using the legacy wait
-mechanism (handles OpenHands task polling).
-
-**Response (completed):**
+**Example — architect call with artifact_id:**
 
 ```json
 {
-  "status": "completed",
-  "role_run_id": "...",
-  "control_summary": {...},
-  "artifacts": {
-    "primary": {"artifact_name": "...", "artifact_path": "..."},
-    "summary": {"artifact_name": "...", "artifact_path": "..."}
+  "role": "architect",
+  "user_task": "Plan implementation of feature X.",
+  "input_artifacts": [
+    {
+      "artifact_id": "art_20260607-xxx_scout_1_scout_report",
+      "artifact_type": "scout_report"
+    }
+  ],
+  "metadata": {
+    "repository": "https://github.com/metacoma/example",
+    "base_branch": "main"
   }
 }
 ```
-
-**Response (running):**
-
-```json
-{
-  "status": "running",
-  "role_run_id": "..."
-}
-```
-
-### `shttp_role_result_v2`
-
-Get result for a v2 role run. Returns control summary inline and artifact
-paths (not content by default).
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `role_run_id` | string | required | The role run ID returned by `shttp_role_start_v2` |
-| `include_full_artifacts` | boolean | false | If true, include full artifact content |
-| `return_control_summary` | boolean | true | If true, include the control summary |
-
-**Response (default, no full artifacts):**
-
-```json
-{
-  "role_run_id": "...",
-  "run_id": "...",
-  "role": "architect",
-  "status": "completed",
-  "control_summary": {
-    "status": "completed",
-    "role": "architect",
-    "summary": "Architect plan produced with 5 file changes.",
-    "primary_artifact_name": "architect_plan",
-    "blocking": false,
-    "risk_level": "LOW",
-    "action": null,
-    "blocking_summary": []
-  },
-  "artifacts": {
-    "primary": {
-      "artifact_name": "architect_plan",
-      "artifact_path": "20260607-010712-647d95/...-architect-1_architect_plan.artifact"
-    },
-    "summary": {
-      "artifact_name": "architect_summary",
-      "artifact_path": "20260607-010712-647d95/...-architect-1_architect_summary.artifact"
-    }
-  }
-}
-```
-
-**Response (with `include_full_artifacts=true`):**
-
-Same as above, with `content` attached to each artifact entry and full content also
-available as top-level keys for backward compatibility:
-
-```json
-{
-  "role_run_id": "...",
-  "run_id": "...",
-  "role": "architect",
-  "status": "completed",
-  "control_summary": { ... },
-  "artifacts": {
-    "primary": {
-      "artifact_name": "architect_plan",
-      "artifact_path": "...",
-      "content": "<full primary content>"
-    },
-    "summary": {
-      "artifact_name": "architect_summary",
-      "artifact_path": "...",
-      "content": "<full summary content>"
-    }
-  },
-  "primary_artifact": "<full primary content>",
-  "summary_artifact": "<full summary content>"
-}
-```
-
-When an artifact fails to load, a `warnings` array is included:
-
-```json
-{
-  "warnings": [
-    "failed to load full artifact summary scout_summary at <path>: artifact not found: <path>"
-  ]
-}
-```
-
-**Notes:**
-
-- `shttp_role_result_v2(include_full_artifacts=true)` loads full artifact content by exact
-  `artifact_path` using `ArtifactStore.get_by_path()`.
-- Default v2 result (`include_full_artifacts=false`) returns only artifact references and
-  control summary � no full content.
-- Full artifact content loading is intended for debugging/inspection and may return warnings
-  if artifacts are missing or have name mismatches.
-
-**Error response:**
-
-```json
-{
-  "status": "failed",
-  "error": {
-    "type": "UnknownRoleRunId",
-    "message": "No role run found for role_run_id='...'.",
-    "retryable": false
-  }
-}
-```
-
-### Required input artifacts by role
-
-| Role | Required `input_artifacts` |
-|---|---|
-| scout | *(none)* |
-| architect | `scout_report` |
-| coder | `scout_report`, `architect_plan` |
-| reviewer | `scout_report`, `architect_plan`, `coder_report` |
-| publisher | `reviewer_report` |
-| coder_fix | `architect_plan`, `coder_report`, `reviewer_report` |
-
-### Output artifacts by role
-
-| Role | Primary artifact name | Summary artifact name |
+| Parameter | Required | Description |
 |---|---|---|
-| scout | `scout_report` | `scout_summary` |
-| architect | `architect_plan` | `architect_summary` |
-| coder | `coder_report` | `coder_summary` |
-| reviewer | `reviewer_report` | `reviewer_summary` |
-| publisher | `publisher_instructions` | `publisher_summary` |
-| coder_fix | `coder_fix_result` | `coder_fix_summary` |
+| `role` | Yes | The role name (e.g. `scout`, `architect`, `coder`, `reviewer`, `publisher`) |
+| `user_task` | Yes | The task description |
+| `input_artifacts` | No | List of `{"artifact_id": "...", "artifact_type": "..."}` dicts |
+| `metadata` | No | Dict with `repository`, `base_branch`, etc. |
+| `api_key` | No | OpenHands API key |
+| `llm_model` | No | LLM model override |
+| `url` | No | OpenHands LLM base URL override |
+| `idempotency_key` | No | Deduplication key |
 
-### Control summary schema
+### Internal helpers (not exposed to Head of IT)
 
-The control summary is returned inline by `shttp_role_start_v2` and
-`result_v2`. It follows this schema:
+The following functions are kept as internal helpers in ``server.py``
+without the ``@MCP.tool()`` decorator.  They are **not** visible to
+Head of IT via MCP tool discovery.
 
-```json
-{
-  "status": "completed" | "blocked",
-  "role": "scout" | "architect" | "coder" | "reviewer" | ...,
-  "summary": "Short factual summary of the role output.",
-  "primary_artifact_name": "scout_report",
-  "blocking": true | false,
-  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
-  "action": "PASS" | "BLOCKER" | null,
-  "blocking_summary": ["List of blocking issues"]
-}
-```
-
-**Rules:**
-
-- `action` must be `"PASS"` or `"BLOCKER"` for the **reviewer** role only.
-- `action` must be `null` for all non-reviewer roles.
-- `blocking_summary` must be a list (may be empty).
-- **No `next_role` field** — routing is the Head of Engineering's responsibility.
-- **No `ready_for_next_role` field** — routing is the Head of Engineering's responsibility.
-
-### Head-of-Engineering routing logic
-
-Route based on role order and control summary — **not** on `next_role` from
-the role:
-
-```
-after scout completed and blocking=false:
-    start architect
-
-after architect completed and blocking=false:
-    start coder
-
-after coder completed and blocking=false:
-    start reviewer
-
-after reviewer action=PASS:
-    start publisher
-
-after reviewer action=BLOCKER and fix cycle not used:
-    start coder_fix
-
-after reviewer action=BLOCKER and fix cycle already used:
-    stop as blocked
-```
-
-For non-reviewer roles:
-
-```
-if blocking=true:
-    stop or ask user
-```
-
-### Migration from legacy `role_start`
-
-| Legacy (`role_start`) | v2 (`shttp_role_start_v2`) |
+| Function | Purpose |
 |---|---|
-| Pass artifact content inline in `artifacts` | Pass artifact IDs/paths in `input_artifacts` |
-| Returns `run_id`, `role_run_id` only | Returns `control_summary` inline |
-| Orchestrator reads artifacts to decide routing | Orchestrator reads control summary to decide routing |
-| No summary mechanism | In-conversation summary with JSON validation |
+| ``role_start_impl`` | Legacy role-start implementation (internal) |
+| ``role_wait_impl`` | Legacy server-side polling (internal) |
+| ``role_status`` | Single-shot diagnostic status check (internal) |
+| ``role_result`` | Get result of a completed role (internal) |
+| ``artifact_get`` | Read artifact content (debug only) |
+| ``shttp_role_start_v2`` | Legacy v2 role start (deprecated, hidden) |
+| ``shttp_role_wait_v2`` | Legacy v2 wait (deprecated, hidden) |
+| ``shttp_role_result_v2`` | Legacy v2 result (deprecated, hidden) |
 
-**Before (legacy):**
 
-```json
-{
-  "role": "architect",
-  "user_task": "Plan implementation",
-  "artifacts": {
-    "scout_report": "<full scout report content...>"
-  }
-}
-```
-
-**After (v2):**
-
-```json
-{
-  "role": {"text": "architect"},
-  "user_task": {"text": "Plan implementation"},
-  "input_artifacts": {
-    "scout_report": {"text": "20260607-010712-647d95/...-scout-1_scout_report.artifact"}
-  }
-}
-```
-
-### Example full role chain (v2)
+### Example full role chain
 
 ```text
-1. shttp_role_start_v2(scout, user_task="...")
+1. shttp_role_call(role="scout", user_task="...")
+   → control_summary.status = "completed"
+   → artifacts.primary.artifact_id = "art_..._scout_report"
+
+2. shttp_role_call(
+     role="architect",
+     user_task="...",
+     input_artifacts=[{artifact_id: "art_..._scout_report", artifact_type: "scout_report"}]
+   )
+   → control_summary.status = "completed"
+   → artifacts.primary.artifact_id = "art_..._architect_plan"
+
+3. shttp_role_call(
+     role="coder",
+     user_task="...",
+     input_artifacts=[
+       {artifact_id: "art_..._scout_report", artifact_type: "scout_report"},
+       {artifact_id: "art_..._architect_plan", artifact_type: "architect_plan"}
+     ]
+   )
    → control_summary.status = "completed"
 
-2. shttp_role_start_v2(architect, user_task="...", input_artifacts={scout_report: "<path>"})
-   → control_summary.status = "completed"
-
-3. shttp_role_start_v2(coder, user_task="...", input_artifacts={scout_report: "<path>", architect_plan: "<path>"})
-   → control_summary.status = "completed"
-
-4. shttp_role_start_v2(reviewer, user_task="...", input_artifacts={scout_report: "<path>", architect_plan: "<path>", coder_report: "<path>"})
+4. shttp_role_call(
+     role="reviewer",
+     user_task="...",
+     input_artifacts=[
+       {artifact_id: "art_..._scout_report", artifact_type: "scout_report"},
+       {artifact_id: "art_..._architect_plan", artifact_type: "architect_plan"},
+       {artifact_id: "art_..._coder_report", artifact_type: "coder_report"}
+     ]
+   )
    → control_summary.action = "PASS" or "BLOCKER"
 
 5. If action = PASS:
-     shttp_role_start_v2(publisher, ...)
+     shttp_role_call(role="publisher", ...)
    If action = BLOCKER:
-     shttp_role_start_v2(coder_fix, ...)
+     shttp_role_call(role="coder_fix", ...)
 ```
 
-## LLM-safe MCP usage
+## How it works
 
-### Correct role flow
+### Single-role synchronous call
 
-1. Call ``role_start``.
-2. Extract only the string field ``role_run_id``.
-3. Call ``role_wait`` with flat JSON arguments.
-4. Use ``artifact_get`` to read artifacts.
-5. Pass artifact contents to the next role.
-6. Start the next role only after the previous role has completed.
+``shttp_role_call`` is the only public tool Head of IT uses to invoke a
+worker role.  It executes the **full two-step lifecycle** synchronously:
 
-**Correct:**
+1. Render the main prompt (with artifact content injected via Jinja).
+2. Start an OpenHands conversation and wait for the main response.
+3. Save the primary artifact via ``ArtifactStore``.
+4. Send a summary prompt into the **same** ``conversation_id``.
+5. Wait for the summary response, validate/repair it.
+6. Save the summary artifact.
+7. Return ``control_summary`` + ``artifact_id`` references only — never
+   artifact content.
 
-```json
-{
-  "role_run_id": "RUN-scout-1",
-  "timeout_seconds": 1800,
-  "poll_interval_seconds": 15,
-  "return_result": true
-}
-```
-
-**Incorrect:**
-
-```json
-{
-  "role_run_id": {
-    "role_run_id": "RUN-scout-1",
-    "status": "running"
-  }
-}
-```
-
-If ``role_wait`` fails because of malformed arguments, do **not** call ``role_start`` again.
-Retry ``role_wait`` with the existing ``role_run_id``.
+Head of IT never calls ``role_wait``, ``role_start``, or ``artifact_get``.
+The MCP server handles all waiting and artifact resolution internally.
 
 ### Single-threaded execution
 
 This server assumes the underlying model may only run one role at a time.
 
-**Do not start multiple roles in parallel.**
+**Do not start multiple roles in parallel.**  Call ``shttp_role_call``
+sequentially — each call blocks until the role completes.
 
 **Correct:**
 
 ```text
-role_start scout
-role_wait scout
-artifact_get scout
-role_start architect
-role_wait architect
-artifact_get architect
-role_start coder
-role_wait coder
-artifact_get coder
-role_start reviewer
-role_wait reviewer
-artifact_get reviewer
+shttp_role_call scout
+shttp_role_call architect
+shttp_role_call coder
+shttp_role_call reviewer
+shttp_role_call publisher
 ```
 
 **Incorrect:**
 
 ```text
-role_start scout
-role_start architect
-role_start coder
-```
-
-If you attempt to start a second role while the first is still running, the server returns:
-
-```json
-{
-  "error": "another_role_running",
-  "message": "Another role is already running. This MCP server is configured for single-threaded model execution. Wait for the current role using role_wait before starting the next role.",
-  "active_role_run_id": "20260606-215637-1c1074-scout-1",
-  "active_role": "scout",
-  "active_status": "running",
-  "next_action": {
-    "tool": "role_wait",
-    "arguments": {
-      "role_run_id": "20260606-215637-1c1074-scout-1",
-      "timeout_seconds": 1800,
-      "poll_interval_seconds": 15,
-      "return_result": true
-    }
-  }
-}
+shttp_role_call scout
+shttp_role_call architect   ← do not start until scout completes
+shttp_role_call coder       ← do not start until architect completes
 ```
 
 ### Stale active lock prevention
@@ -1083,16 +349,6 @@ as active and includes a warning in the error message.
 
 This means a previous role is still active or could not be proven terminal.
 
-Use the `next_action` field and call `role_wait` with the provided
-`role_run_id`.
-
-Do not call `role_start` again unless the previous role reached a
-terminal state.
-
-If you see the message "The active role status could not be refreshed
-from OpenHands; the lock may be stale," it means the server could not
-verify whether the previous role has actually finished. In this case:
-
 1. Check the OpenHands backend directly for the task status.
 2. If the task has completed, you can manually delete or update the
    role-run JSON file in `OPENHANDS_ROLE_STATE_DIR` to clear the stale lock.
@@ -1106,13 +362,10 @@ status (e.g., OpenHands returns `"unknown"`, an empty response, or the
 API is unavailable), it preserves single-threaded safety and treats the
 role as still active.
 
-In this case, `role_start` may return `another_role_running` with
-`refresh_failed: true` and a `refresh_warning` explaining the issue.
-
 **What to do:**
 
-1. Follow the `next_action` field and call `role_wait` for the existing
-   `role_run_id`.
+1. Follow the `next_action` field and call ``shttp_role_call`` for the
+   existing role (it will return the existing result if already completed).
 2. Do NOT start another role until the previous role is confirmed terminal.
 3. If the OpenHands backend is temporarily unavailable, wait and retry.
 4. If the task has actually completed (verified externally), manually
