@@ -54,6 +54,36 @@ def _write_role_config(state_dir: Path) -> Path:
             requires_artifacts:
               - scout_report
             output_artifact: architect_plan
+          coder:
+            description: "Implementation worker"
+            model: "openai/qwen3:32b"
+            prompt_template: "prompts/coder.md"
+            readonly: false
+            timeout_minutes: 120
+            requires_artifacts:
+              - scout_report
+              - architect_plan
+            output_artifact: coder_report
+          reviewer:
+            description: "Read-only reviewer"
+            model: "openai/qwen3:32b"
+            prompt_template: "prompts/reviewer.md"
+            readonly: true
+            timeout_minutes: 75
+            requires_artifacts:
+              - scout_report
+              - architect_plan
+              - coder_report
+            output_artifact: reviewer_report
+          publisher:
+            description: "Publish instruction generator"
+            model: "openai/qwen3:32b"
+            prompt_template: "prompts/publisher.md"
+            readonly: true
+            timeout_minutes: 30
+            requires_artifacts:
+              - reviewer_report
+            output_artifact: publisher_instructions
         """),
         encoding="utf-8",
     )
@@ -2328,3 +2358,272 @@ class TestRoleWaitPublicTool(TestCase):
         for tool in legacy_tools:
             self.assertNotIn(tool, tool_names,
                            f"{tool} should NOT be a public MCP tool")
+
+# ---------------------------------------------------------------------------
+# Test 1: role_call tool description mentions flat-only
+# ---------------------------------------------------------------------------
+
+class TestRoleCallDescriptionFlatOnly(TestCase):
+    """Test that role_call docstring contains flat-only documentation."""
+
+    def test_role_call_description_mentions_flat_scalar_fields(self):
+        """role_call docstring contains 'flat scalar fields'."""
+        from mcp_agent.server import role_call
+        self.assertIn("flat", role_call.__doc__.lower())
+        self.assertIn("scalar", role_call.__doc__.lower())
+
+    def test_role_call_description_forbids_metadata(self):
+        """role_call docstring says 'Do not pass metadata'."""
+        from mcp_agent.server import role_call
+        doc = role_call.__doc__
+        self.assertTrue(
+            any(phrase in doc for phrase in [
+                "Do not pass metadata",
+                "do not pass metadata",
+                "Do NOT pass metadata",
+            ]),
+            "role_call description must forbid metadata",
+        )
+
+    def test_role_call_description_forbids_input_artifacts(self):
+        """role_call docstring says 'Do not pass input_artifacts'."""
+        from mcp_agent.server import role_call
+        doc = role_call.__doc__
+        self.assertTrue(
+            any(phrase in doc for phrase in [
+                "Do not pass input_artifacts",
+                "do not pass input_artifacts",
+                "Do NOT pass input_artifacts",
+            ]),
+            "role_call description must forbid input_artifacts",
+        )
+
+    def test_role_call_description_mentions_role_wait(self):
+        """role_call docstring mentions role_wait."""
+        from mcp_agent.server import role_call
+        self.assertIn("role_wait", role_call.__doc__)
+
+    def test_role_call_description_mentions_artifact_fields(self):
+        """role_call docstring mentions all artifact field names."""
+        from mcp_agent.server import role_call
+        doc = role_call.__doc__
+        for field in ["scout_report_artifact_id", "architect_plan_artifact_id"]:
+            self.assertIn(field, doc, f"role_call must mention {field}")
+
+
+# ---------------------------------------------------------------------------
+# Test 2: role_wait tool description mentions polling rule
+# ---------------------------------------------------------------------------
+
+class TestRoleWaitDescriptionPollingRule(TestCase):
+    """Test that role_wait docstring contains polling rule."""
+
+    def test_role_wait_description_mentions_polling_rule(self):
+        """role_wait docstring says 'call role_wait again with the same role_run_id'."""
+        from mcp_agent.server import role_wait
+        doc = role_wait.__doc__
+        self.assertIn("role_wait", doc)
+        self.assertIn("same role_run_id", doc.lower())
+
+    def test_role_wait_description_forbids_role_call_polling(self):
+        """role_wait docstring says 'Never call role_call again for polling'."""
+        from mcp_agent.server import role_wait
+        doc = role_wait.__doc__
+        self.assertTrue(
+            any(phrase in doc.lower() for phrase in [
+                "never call role_call",
+                "do not call role_call",
+                "do not start the role again",
+            ]),
+            "role_wait must forbid using role_call for polling",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 3: role_list response contains usage docs
+# ---------------------------------------------------------------------------
+
+class TestRoleListResponseUsageDocs(TestCase):
+    """Test that role_list response contains usage/routing documentation."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    def test_role_list_contains_public_tools(self):
+        """role_list response contains public_tools key."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        self.assertIn("public_tools", result)
+        self.assertIn("role_list", result["public_tools"])
+        self.assertIn("role_call", result["public_tools"])
+        self.assertIn("role_wait", result["public_tools"])
+
+    def test_role_list_contains_workflow(self):
+        """role_list response contains workflow key."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        self.assertIn("workflow", result)
+        self.assertIsInstance(result["workflow"], list)
+        self.assertGreater(len(result["workflow"]), 0)
+
+    def test_role_list_contains_flat_role_call_contract(self):
+        """role_list response contains flat_role_call_contract key."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        self.assertIn("flat_role_call_contract", result)
+        contract = result["flat_role_call_contract"]
+        self.assertTrue(contract["use_only_flat_scalar_fields"])
+        self.assertIn("forbidden_fields", contract)
+        self.assertIn("artifact_fields", contract)
+
+    def test_role_list_contains_routing_examples(self):
+        """role_list response contains routing_examples key."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        self.assertIn("routing_examples", result)
+        re = result["routing_examples"]
+        self.assertIn("architect_after_scout", re)
+        self.assertIn("coder_after_architect", re)
+        self.assertIn("reviewer_after_coder", re)
+        self.assertIn("publisher_after_pass", re)
+
+
+# ---------------------------------------------------------------------------
+# Test 4: role_list routing maps required fields
+# ---------------------------------------------------------------------------
+
+class TestRoleListRoutingMapsRequiredFields(TestCase):
+    """Test that role_list returns correct required_flat_fields per role."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    def test_architect_required_flat_fields(self):
+        """Architect role has required_flat_fields = ['scout_report_artifact_id']."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        architect = next(r for r in result["roles"] if r["name"] == "architect")
+        self.assertIn("required_flat_fields", architect)
+        self.assertEqual(architect["required_flat_fields"], ["scout_report_artifact_id"])
+
+    def test_coder_required_flat_fields(self):
+        """Coder role has required_flat_fields = ['scout_report_artifact_id', 'architect_plan_artifact_id']."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        coder = next(r for r in result["roles"] if r["name"] == "coder")
+        self.assertIn("required_flat_fields", coder)
+        self.assertEqual(
+            coder["required_flat_fields"],
+            ["scout_report_artifact_id", "architect_plan_artifact_id"],
+        )
+
+    def test_reviewer_required_flat_fields(self):
+        """Reviewer role has required_flat_fields = ['scout_report_artifact_id', 'architect_plan_artifact_id', 'coder_report_artifact_id']."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        reviewer = next(r for r in result["roles"] if r["name"] == "reviewer")
+        self.assertIn("required_flat_fields", reviewer)
+        self.assertEqual(
+            reviewer["required_flat_fields"],
+            [
+                "scout_report_artifact_id",
+                "architect_plan_artifact_id",
+                "coder_report_artifact_id",
+            ],
+        )
+
+    def test_publisher_required_flat_fields(self):
+        """Publisher role has required_flat_fields = ['reviewer_report_artifact_id']."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        publisher = next(r for r in result["roles"] if r["name"] == "publisher")
+        self.assertIn("required_flat_fields", publisher)
+        self.assertEqual(publisher["required_flat_fields"], ["reviewer_report_artifact_id"])
+
+
+# ---------------------------------------------------------------------------
+# Test 5: no nested public examples
+# ---------------------------------------------------------------------------
+
+class TestNoNestedPublicExamples(TestCase):
+    """Test that public role_call docs do not recommend nested fields."""
+
+    def test_role_call_doc_forbids_metadata_not_recommended(self):
+        """role_call docstring does not recommend metadata as a public field."""
+        from mcp_agent.server import role_call
+        doc = role_call.__doc__
+        lines = doc.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if "metadata" in stripped.lower():
+                # Should be in a forbidden/reject context
+                self.assertTrue(
+                    any(kw in stripped.lower() for kw in [
+                        "do not", "do not pass", "forbidden", "not", "never",
+                    ]),
+                    f"metadata should only appear in forbidden context, found: {stripped}",
+                )
+
+    def test_role_call_doc_forbids_input_artifacts_not_recommended(self):
+        """role_call docstring does not recommend input_artifacts as a public field."""
+        from mcp_agent.server import role_call
+        doc = role_call.__doc__
+        lines = doc.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if "input_artifacts" in stripped.lower():
+                self.assertTrue(
+                    any(kw in stripped.lower() for kw in [
+                        "do not", "do not pass", "forbidden", "not", "never",
+                    ]),
+                    f"input_artifacts should only appear in forbidden context, found: {stripped}",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Test 6: public tools remain only role_list/role_call/role_wait
+# ---------------------------------------------------------------------------
+
+class TestPublicToolsRemainOnlyThree(TestCase):
+    """Test that exactly three public MCP tools are exposed."""
+
+    def test_exactly_three_public_tools(self):
+        """Exactly three public MCP tools: role_list, role_call, role_wait."""
+        tool_names = _get_public_tool_names()
+        self.assertEqual(tool_names, {"role_list", "role_call", "role_wait"})
+
+    def test_no_legacy_tools_exposed(self):
+        """Legacy tools are NOT in public tool list."""
+        tool_names = _get_public_tool_names()
+        legacy = {
+            "role_start", "role_status", "role_result",
+            "artifact_get", "artifact_list",
+            "shttp_role_start_v2", "shttp_role_wait_v2",
+            "shttp_role_result_v2", "shttp_role_call",
+            "shttp_role_wait", "shttp_role_list",
+        }
+        self.assertEqual(
+            tool_names & legacy, set(),
+            f"Legacy tools exposed: {tool_names & legacy}",
+        )
+
