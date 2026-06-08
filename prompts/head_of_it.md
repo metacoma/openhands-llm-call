@@ -276,7 +276,7 @@ When you receive an error from any tool:
 1. Read `error.type` to understand the problem.
 2. If `error.retryable = false`, do **not** retry. Stop and report BLOCKED.
 3. Follow `error.next_action.tool` to determine the next step.
-4. If `error.type = InvalidFlatPayload`, read `correct_example` and retry with flat fields.
+4. If `error.type = InvalidFlatRoleCallPayload`, read `correct_example` and retry with flat fields.
 5. If `error.type = MissingRequiredArtifact`, call `role_call` for the missing role.
 6. If `error.type = AnotherRoleRunning`, call `role_wait` with the existing `role_run_id`.
 7. Read `error.do_not` to avoid common anti-patterns.
