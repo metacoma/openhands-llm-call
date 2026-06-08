@@ -12,11 +12,14 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Literal
+import hashlib
+from typing import Any, Annotated, Literal
 
 import requests
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from pydantic import BeforeValidator
+from pydantic_core import PydanticUseDefault
 
 from .artifact_store import ArtifactStore
 from .task_store import TaskStore
@@ -1232,6 +1235,21 @@ def _unwrap_to_scalar(value: Any) -> Any:
     return value
 
 
+# Known scalar-wrapper keys that LLMs may use to wrap a scalar value.
+# Single-key dicts with these keys are unwrapped; unknown single-key dicts
+# are returned as-is so the caller can reject them as dangerous payloads.
+_KNOWN_SCALAR_WRAPPER_KEYS: tuple[str, ...] = (
+    "text",
+    "value",
+    "default",
+    "name",
+    "id",
+    "artifact_id",
+    "string",
+    "content",
+)
+
+
 def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
     """Unwrap a scalar value that may be wrapped in various MCP/LLM dict shapes.
 
@@ -1244,22 +1262,25 @@ def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
     - {"artifact_id": "x"} → "x"
     - Extra keys passed in *extra_keys* (e.g. ["role", "idempotency_key"])
 
-    If the dict has multiple keys and none match, return the original value.
+    Single-key dicts with unknown keys are returned as-is (caller rejects).
+    Multi-key dicts with unknown keys are also returned as-is.
     """
     # Plain scalar → pass through
     if not isinstance(value, dict):
         return value
 
-    # Single-key dict → unwrap that key's value
+    # Single-key dict → unwrap only if key is a known wrapper
     if len(value) == 1:
         key = next(iter(value))
-        inner = value[key]
-        # Recurse for nested wrappers
-        result = unwrap_scalar(inner)
-        return result
+        if key in _KNOWN_SCALAR_WRAPPER_KEYS or (extra_keys and key in extra_keys):
+            inner = value[key]
+            # Recurse for nested wrappers
+            result = unwrap_scalar(inner)
+            return result
+        # Unknown single-key dict → return as-is (caller will reject)
+        return value
 
-    # Multi-key dict → check known keys
-    # Priority order: text, value, name, default, id, artifact_id, then extra_keys
+    # Multi-key dict → check known keys in priority order
     for key in ("text", "value", "name", "default", "id", "artifact_id"):
         if key in value:
             return unwrap_scalar(value[key])
@@ -1369,6 +1390,7 @@ def normalize_artifact_name(value: Any) -> str | None:
 def normalize_role(value: Any) -> str:
     """Normalize a role name that may be wrapped in various MCP/LLM shapes.
 
+    Case-insensitive: "Scout" -> "scout", "SCOUT" -> "scout".
     Accepts:
     - "scout"
     - {"text": "scout"}
@@ -1378,7 +1400,7 @@ def normalize_role(value: Any) -> str:
     - {"role": {"text": "scout"}}
     """
     if isinstance(value, str):
-        return value.strip()
+        return value.strip().lower()
 
     if isinstance(value, dict):
         # Check common LLM/MCP wrapper keys in priority order
@@ -1389,8 +1411,10 @@ def normalize_role(value: Any) -> str:
                 result = normalize_role(inner)
                 return result
 
-    # Fallback: convert to string (handles numbers, bools, etc.)
-    return str(value).strip()
+    # Fallback: convert to string (handles numbers, bools, etc.).
+    # This is a safety net — Pydantic's Literal validation will reject
+    # invalid role names that somehow reach this point.
+    return str(value).strip().lower()
 
 
 def _unwrap_dict_values(value: Any) -> Any:
@@ -1424,6 +1448,65 @@ def _unwrap_dict_values(value: Any) -> Any:
         return [_unwrap_dict_values(item) for item in value]
 
     return value
+
+
+# ---------------------------------------------------------------------------
+# Pydantic BeforeValidator type aliases for LLM-friendly MCP arguments
+# ---------------------------------------------------------------------------
+
+
+def _normalize_mcp_string(v: Any) -> str:
+    """Normalize a string argument that may be wrapped in scalar wrappers."""
+    if v is None:
+        return ""
+    unwrapped = unwrap_scalar(v)
+    if isinstance(unwrapped, str):
+        return unwrapped
+    # Fallback: convert to string (handles numbers, bools, etc.)
+    return str(unwrapped)
+
+
+def _normalize_mcp_int(v: Any) -> int:
+    """Normalize an int argument that may be wrapped or string-encoded.
+
+    Raises PydanticUseDefault when v is None, so Pydantic uses the
+    function-signature default (e.g., 1800 for timeout_seconds).
+    """
+    if v is None:
+        raise PydanticUseDefault()
+    return normalize_int(v, default=0)
+
+
+def _normalize_mcp_bool(v: Any) -> bool:
+    """Normalize a bool argument that may be wrapped or string-encoded.
+
+    Raises PydanticUseDefault when v is None, so Pydantic uses the
+    function-signature default (e.g., True for return_result).
+    """
+    if v is None:
+        raise PydanticUseDefault()
+    return normalize_bool(v, default=False)
+
+
+def _normalize_mcp_role(v: Any) -> str:
+    """Normalize a role name with case-insensitive matching and wrapper unwrapping."""
+    raw = normalize_role(v)
+    return raw.strip().lower()
+
+
+# Type aliases — these are the BeforeValidator-annotated types used in MCP tool
+# signatures.  BeforeValidator runs BEFORE Pydantic's type check, so:
+#   - McpString normalizes {"value": "abc"} → "abc" before Pydantic checks str
+#   - McpInt normalizes {"text": "1800"} → 1800 before Pydantic checks int
+#   - McpBool normalizes {"text": "true"} → True before Pydantic checks bool
+#   - McpRole normalizes " Scout " → "scout" before Pydantic checks Literal[...]
+McpString = Annotated[str, BeforeValidator(_normalize_mcp_string)]
+McpInt = Annotated[int, BeforeValidator(_normalize_mcp_int)]
+McpBool = Annotated[bool, BeforeValidator(_normalize_mcp_bool)]
+
+# Role names from config/roles.yaml: scout, architect, coder, reviewer, publisher, coder_fix
+_MCP_ROLES = Literal["scout", "architect", "coder", "reviewer", "publisher", "coder_fix"]
+McpRole = Annotated[_MCP_ROLES, BeforeValidator(_normalize_mcp_role)]
 
 
 def _build_invalid_role_run_id_error(field_name: str = "role_run_id") -> dict:
@@ -1763,10 +1846,10 @@ def role_result(
 
 @MCP.tool()
 def role_wait(
-    role_run_id: str,
-    timeout_seconds: int = 1800,
-    poll_interval_seconds: int = 30,
-    return_result: bool = True,
+    role_run_id: McpString,
+    timeout_seconds: McpInt = 1800,
+    poll_interval_seconds: McpInt = 30,
+    return_result: McpBool = True,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result.
     """
@@ -1802,8 +1885,8 @@ def role_wait(
             },
         }
 
-    normalized_timeout = normalize_int(_timeout, default=None)
-    normalized_poll_interval = normalize_int(_poll, default=None)
+    normalized_timeout = normalize_int(_timeout, default=1800)
+    normalized_poll_interval = normalize_int(_poll, default=30)
     normalized_return_result = normalize_bool(return_result, default=True)
 
     # Call the new lifecycle-aware role_wait implementation
@@ -2181,8 +2264,8 @@ def _internal_role_wait(
 
     # If not completed, poll using legacy wait (it handles OpenHands task polling)
     # This path is rarely taken because start_v2 is synchronous
-    normalized_timeout = normalize_int(timeout_seconds, default=None)
-    normalized_poll_interval = normalize_int(poll_interval_seconds, default=None)
+    normalized_timeout = normalize_int(timeout_seconds, default=1800)
+    normalized_poll_interval = normalize_int(poll_interval_seconds, default=30)
 
     return _role_tools.role_wait_impl(
         role_run_id=normalized_role_run_id,
@@ -2442,8 +2525,6 @@ def role_list() -> dict:
             r2_output = r2.get("output_artifact", "")
             if r2_output and r2_output in req:
                 requires_list.append(r2["name"])
-            elif not req and r2["name"] == "scout":
-                requires_list.append(r2["name"])
         workflow_steps.append({
             "step": i,
             "role": r["name"],
@@ -2584,7 +2665,10 @@ def _invalid_flat_role_call_error(field_name: str) -> dict:
             "type": "InvalidFlatRoleCallPayload",
             "message": (
                 f"Field '{field_name}' must be a plain scalar value, not an object. "
-                "Do not pass {{\"text\": \"...\"}} wrappers or nested payloads. "
+                "Accidental scalar wrappers like {{\"text\": \"...\"}}, {{\"value\": \"...\"}}, "
+                "or {{\"default\": \"...\"}} are normalized by the server. "
+                "This error means a real nested payload was passed: "
+                "metadata/input_artifacts/context/artifact content/full_result/messages/tool_calls. "
                 "Pass artifact ids in dedicated fields: scout_report_artifact_id, "
                 "architect_plan_artifact_id, coder_report_artifact_id, "
                 "reviewer_report_artifact_id, publisher_instructions_artifact_id."
@@ -2601,18 +2685,136 @@ def _invalid_flat_role_call_error(field_name: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Artifact content detection
+# ---------------------------------------------------------------------------
+
+
+def _looks_like_artifact_content(value: Any) -> bool:
+    """Return True if *value* looks like full artifact content (not an artifact_id)."""
+    if not isinstance(value, dict):
+        return False
+    # {"content": "long text"} — likely artifact content
+    if "content" in value and len(value) == 1:
+        inner = value["content"]
+        if isinstance(inner, str) and len(inner) > 20:
+            return True
+    # {"artifact_content": "..."}
+    if "artifact_content" in value:
+        return True
+    # {"full_result": ...}, {"result": ...}
+    if "full_result" in value or "result" in value:
+        return True
+    # {"messages": [...]} — chat history, not an ID
+    if "messages" in value and isinstance(value["messages"], list):
+        return True
+    # {"tool_calls": [...]} — LLM tool calls, not an ID
+    if "tool_calls" in value and isinstance(value["tool_calls"], list):
+        return True
+    return False
+
+
+def _artifact_content_error(field_name: str) -> dict:
+    """Return structured error for artifact content passed as artifact_id."""
+    return {
+        "status": "failed",
+        "error": {
+            "type": "ArtifactContentAsId",
+            "retryable": True,
+            "message": (
+                f"Field '{field_name}' appears to contain artifact content, not an artifact ID. "
+                "Pass only the artifact ID (e.g., 'art_abc123'), not the full content."
+            ),
+            "correct_example": {
+                "role": "scout",
+                "user_task": "Analyze repository ...",
+                "repository": "https://github.com/example/repo",
+                "feature": "feature-name",
+                "scout_report_artifact_id": "art_abc123",
+            },
+            "do_not": [
+                "Do not pass full artifact content as artifact_id.",
+                "Do not pass nested metadata/input_artifacts/context.",
+            ],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Loop guard: detect repeated identical invalid tool calls
+# ---------------------------------------------------------------------------
+
+# Module-level state for loop detection
+_invalid_call_fingerprints: dict[str, list[dict]] = {}
+_LOOP_GUARD_MAX_REPEATED = 2
+_LOOP_GUARD_TTL_SECONDS = 300  # 5 minutes
+
+
+def _compute_payload_fingerprint(payload: dict) -> str:
+    """Compute a hash fingerprint of a tool call payload for loop detection."""
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:32]
+
+
+def _check_loop_guard(tool_name: str, payload: dict) -> dict | None:
+    """Check if the same invalid payload was repeated too many times.
+
+    Returns structured error dict if loop detected, else None.
+    """
+    fp = _compute_payload_fingerprint(payload)
+    now = datetime.now(timezone.utc)
+
+    if tool_name not in _invalid_call_fingerprints:
+        _invalid_call_fingerprints[tool_name] = []
+
+    # Clean old entries
+    _invalid_call_fingerprints[tool_name] = [
+        entry for entry in _invalid_call_fingerprints[tool_name]
+        if (now - entry["ts"]).total_seconds() < _LOOP_GUARD_TTL_SECONDS
+    ]
+
+    # Check for repeated identical fingerprint
+    for entry in _invalid_call_fingerprints[tool_name]:
+        if entry["fp"] == fp:
+            entry["count"] += 1
+            if entry["count"] > _LOOP_GUARD_MAX_REPEATED:
+                return {
+                    "status": "failed",
+                    "error": {
+                        "type": "RepeatedInvalidToolCall",
+                        "retryable": False,
+                        "message": (
+                            f"The same invalid tool call was repeated {_LOOP_GUARD_MAX_REPEATED + 1} times. "
+                            "Stop retrying and use correct_example exactly."
+                        ),
+                        "correct_example": {
+                            "role": "scout",
+                            "user_task": "Analyze repository ...",
+                            "repository": "https://github.com/example/repo",
+                            "feature": "feature-name",
+                            "idempotency_key": "feature-scout",
+                        },
+                    },
+                }
+            return None
+
+    # New fingerprint
+    _invalid_call_fingerprints[tool_name].append({"fp": fp, "count": 1, "ts": now})
+    return None
+
+
 @MCP.tool()
 def role_call(
-    role: Literal["scout", "architect", "coder", "reviewer", "publisher", "coder_fix"],
-    user_task: str,
-    repository: str = "",
-    feature: str = "",
-    scout_report_artifact_id: str = "",
-    architect_plan_artifact_id: str = "",
-    coder_report_artifact_id: str = "",
-    reviewer_report_artifact_id: str = "",
-    publisher_instructions_artifact_id: str = "",
-    idempotency_key: str | None = None,
+    role: McpRole,
+    user_task: McpString,
+    repository: McpString = "",
+    feature: McpString = "",
+    scout_report_artifact_id: McpString = "",
+    architect_plan_artifact_id: McpString = "",
+    coder_report_artifact_id: McpString = "",
+    reviewer_report_artifact_id: McpString = "",
+    publisher_instructions_artifact_id: McpString = "",
+    idempotency_key: McpString = "",
 ) -> dict:
     """Start one specialist role. Use flat scalar fields only: role, user_task, repository, feature, *_artifact_id, idempotency_key. Do not pass metadata, input_artifacts, nested JSON, artifact content, or full_result. After role_call returns role_run_id, call role_wait with the same role_run_id. Do not call role_call again for polling. Artifact routing: architect needs scout_report_artifact_id; coder needs scout_report_artifact_id + architect_plan_artifact_id; reviewer needs scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id; publisher needs reviewer_report_artifact_id. For detailed routing, call role_list.
     """
@@ -2672,9 +2874,24 @@ def role_call(
         "idempotency_key": idempotency_key,
     }
 
+    # ------------------------------------------------------------------
+    # Detect bad nested payload in ANY field (BLOCKER 1)
+    # MUST run BEFORE unwrap / artifact ID validation.
+    # ------------------------------------------------------------------
+    _loop_guard_fp = None
     for field_name, raw_value in _raw_fields.items():
         if _looks_like_old_nested_role_call_payload(raw_value):
+            _loop_guard_fp = _compute_payload_fingerprint(_raw_fields)
+            loop_error = _check_loop_guard("role_call", _raw_fields)
+            if loop_error:
+                return loop_error
             return _invalid_flat_role_call_error(field_name)
+        if _looks_like_artifact_content(raw_value):
+            _loop_guard_fp = _compute_payload_fingerprint(_raw_fields)
+            loop_error = _check_loop_guard("role_call", _raw_fields)
+            if loop_error:
+                return loop_error
+            return _artifact_content_error(field_name)
 
     # ------------------------------------------------------------------
     # Unwrap all scalar fields (unwrap_text/unwrap_scalar handle {"text": "..."} wrappers)

@@ -300,12 +300,13 @@ Waits for a role run to complete. Polls server-side.
 
 ## Flat Payload Rule
 
-All string fields must be **plain strings**, not objects:
+All string fields should be **plain strings**. The server accepts and normalizes accidental scalar wrappers (`{"text": ...}`, `{"value": ...}`, `{"default": ...}`, etc.) so they are accepted — prefer plain scalars.
 
 - **Correct:** `"role": "scout"`
-- **Incorrect:** `"role": {"text": "scout"}`
+- **Also accepted (normalized):** `"role": {"value": "scout"}`, `"role": {"text": "scout"}`
+- **Forbidden:** nested `metadata`, `input_artifacts`, or full artifact content as field values
 
-If a `{"text": "..."}` wrapper is detected, the API returns `InvalidFlatPayload` error with a `correct_example`.
+Real nested payloads (metadata, input_artifacts, full artifact content) are rejected with a structured error that includes a `correct_example`.
 
 ## Artifact ID Rule
 
@@ -327,7 +328,9 @@ Common error types:
 
 | Type | Meaning | Action |
 |---|---|---|
-| `InvalidFlatPayload` | Nested `{"text": "..."}` wrapper detected | Use `correct_example` |
+| `InvalidFlatRoleCallPayload` | Nested `metadata`/`input_artifacts` detected | Use `correct_example` |
+| `ArtifactContentAsId` | Artifact content passed as artifact_id | Pass only the artifact ID |
+| `RepeatedInvalidToolCall` | Same invalid call repeated >2 times | Stop retrying, use `correct_example` exactly |
 | `MissingRequiredArtifact` | Required artifact_id not provided | Call `role_call` for the missing role |
 | `AnotherRoleRunning` | A role is already running | Use `role_wait` with existing `role_run_id` |
 | `UnknownRole` | Invalid role name | Call `role_list` |

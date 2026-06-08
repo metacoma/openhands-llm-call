@@ -2779,6 +2779,9 @@ class TestRoleCallStartReturnsRunning(TestCase):
         self.cfg_path = _write_role_config(self.state_dir)
         os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
         os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+        # Reset loop guard state to avoid cross-test pollution
+        import mcp_agent.server as server_mod
+        server_mod._invalid_call_fingerprints.clear()
 
     def tearDown(self):
         import shutil
@@ -2786,6 +2789,9 @@ class TestRoleCallStartReturnsRunning(TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
         os.environ.pop("ROLE_CONFIG_PATH", None)
+        # Reset loop guard state
+        import mcp_agent.server as server_mod
+        server_mod._invalid_call_fingerprints.clear()
 
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_returns_running_status(self, mock_start):
@@ -3404,4 +3410,76 @@ class TestBlockerFixes(TestCase):
         self.assertEqual(hint["architect_plan_artifact_id"], "art_arch_xxx")
         # Must NOT contain scout_report_artifact_id
         self.assertNotIn("scout_report_artifact_id", hint)
+
+    def test_invalid_flat_role_call_error_allows_wrappers(self):
+        """_invalid_flat_role_call_error does not say scalar wrappers are forbidden."""
+        from mcp_agent.server import _invalid_flat_role_call_error
+
+        result = _invalid_flat_role_call_error("test_field")
+        msg = result["error"]["message"]
+        # Must NOT say wrappers are forbidden
+        self.assertNotIn("Do not pass", msg)
+        self.assertNotIn("forbidden", msg.lower())
+        # Must clarify wrappers are normalized
+        self.assertIn("normaliz", msg.lower())
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_null_args_uses_defaults(self, mock_wait):
+        """role_wait with None timeout_seconds/poll_interval_seconds/return_result uses defaults."""
+        mock_wait.return_value = {"status": "completed", "role": "test"}
+
+        from mcp_agent.server import role_wait
+
+        result = role_wait(
+            role_run_id="art_test_1_scout_1",
+            timeout_seconds=None,
+            poll_interval_seconds=None,
+            return_result=None,
+        )
+
+        call_kwargs = mock_wait.call_args.kwargs
+        self.assertEqual(call_kwargs["timeout_seconds"], 1800)
+        self.assertEqual(call_kwargs["poll_interval_seconds"], 30)
+        self.assertTrue(call_kwargs["return_result"])
+
+    def test_artifact_id_art_prefix_passes_validation(self):
+        """art_... artifact_id from role_wait passes into role_call without InvalidArtifactId."""
+        from mcp_agent.server import role_call
+
+        result = role_call(
+            role="scout",
+            user_task="Test task",
+            repository="https://github.com/example/repo",
+            feature="test-feature",
+            idempotency_key="art_test_scout_1_1",
+        )
+
+        # If it fails, it should NOT be InvalidArtifactId
+        if result.get("status") == "failed":
+            self.assertNotEqual(
+                result.get("error", {}).get("type"),
+                "InvalidArtifactId",
+                "art_... artifact_id should not trigger InvalidArtifactId error",
+            )
+
+    def test_idempotency_key_wrapper_reaches_role_call_body(self):
+        """Exact failing call with idempotency_key {'value': '...'} reaches role_call body."""
+        from mcp_agent.server import role_call
+
+        result = role_call(
+            role="scout",
+            user_task="Test task",
+            repository="https://github.com/example/repo",
+            feature="test-feature",
+            idempotency_key={"value": "test-idempotency-key"},
+        )
+
+        # The unwrap_scalar should normalize {"value": "..."} -> "..."
+        # This should NOT fail with InvalidFlatRoleCallPayload
+        if result.get("status") == "failed":
+            self.assertNotEqual(
+                result.get("error", {}).get("type"),
+                "InvalidFlatRoleCallPayload",
+                "idempotency_key wrapper should be normalized, not rejected",
+            )
 
