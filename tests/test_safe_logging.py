@@ -214,8 +214,7 @@ roles:
         result = role_call(
             role={"name": "scout"},
             user_task={"text": "ping"},
-            input_artifacts=[],
-            metadata={"repository": {"text": "owner/repo"}},
+            repository={"text": "owner/repo"},
             idempotency_key={"text": "test-wrapped-key"},
         )
 

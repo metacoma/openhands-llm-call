@@ -1093,14 +1093,14 @@ def role_lifecycle_wait_impl(
                     artifacts_result[key] = _to_public_artifact_ref(
                         stored_artifacts[key], role=role_run.get("role", ""),
                     )
-        return {
+        return _sanitize_public_role_response({
             "status": "completed",
             "role_run_id": role_run.get("role_run_id", ""),
             "run_id": role_run.get("run_id", ""),
             "role": role_run.get("role", ""),
             "control_summary": control_summary or {},
             "artifacts": artifacts_result if artifacts_result else {},
-        }
+        })
 
     # If already failed, return the error
     if role_run.get("status") == "failed":
@@ -1253,14 +1253,14 @@ def role_lifecycle_wait_impl(
                     artifacts_result[key] = _to_public_artifact_ref(
                         stored_artifacts[key], role=role_run.get("role", ""),
                     )
-        return {
+        return _sanitize_public_role_response({
             "status": "completed",
             "role_run_id": role_run.get("role_run_id", ""),
             "run_id": role_run.get("run_id", ""),
             "role": role_run.get("role", ""),
             "control_summary": control_summary or {},
             "artifacts": artifacts_result if artifacts_result else {},
-        }
+        })
 
     # ------------------------------------------------------------------
     # Render and send summary prompt (same conversation)
@@ -1363,7 +1363,7 @@ def role_lifecycle_wait_impl(
             }, ensure_ascii=False),
         )
 
-        return {
+        return _sanitize_public_role_response({
             "status": "completed",
             "role_run_id": role_run_id,
             "run_id": role_run.get("run_id", ""),
@@ -1379,7 +1379,7 @@ def role_lifecycle_wait_impl(
                     "artifact_type": (role_spec.summary_artifact if role_spec else "control_summary"),
                 }, role=role),
             },
-        }
+        })
 
     summary_job_id = (
         summary_conv_response.get("task_id")
@@ -1561,7 +1561,7 @@ def role_lifecycle_wait_impl(
     # ------------------------------------------------------------------
     # Return control summary (public response - no content, no artifact_path)
     # ------------------------------------------------------------------
-    return {
+    return _sanitize_public_role_response({
         "status": "completed",
         "role_run_id": role_run_id,
         "run_id": role_run.get("run_id", ""),
@@ -1579,7 +1579,7 @@ def role_lifecycle_wait_impl(
                 "created_by": role,
             },
         },
-    }
+    })
 
 
 def role_call_impl(
