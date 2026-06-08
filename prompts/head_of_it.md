@@ -84,7 +84,7 @@ You never read `full_result` or artifact content.
 
 Pass artifact IDs in dedicated fields. The MCP server resolves artifact content server-side.
 
-**Note:** Wrapped scalar values such as `{"text": "..."}`, `{"name": "..."}`, `{"value": "..."}`, `{"id": "..."}`, and `{"artifact_id": "..."}` are **invalid** and will be **rejected**. Pass only plain string scalars for all flat fields.
+**Note:** Prefer plain scalar strings for all flat fields. The server normalizes accidental scalar wrappers (`{"text": ...}`, `{"value": ...}`, `{"default": ...}`, etc.) so they are accepted. Do **not** intentionally pass nested objects like `metadata`, `input_artifacts`, or artifact content as field values — pass only artifact IDs via the dedicated `*_artifact_id` flat fields.
 
 ## Available Roles
 

@@ -17,7 +17,7 @@ The Head of IT orchestrates specialist roles through exactly **three** public MC
 
 ### role_call uses flat scalar fields only
 
-Pass **only** plain scalar string values. Do NOT pass:
+Pass **plain scalar string values** for all flat fields. The server normalizes accidental scalar wrappers (`{"text": ...}`, `{"value": ...}`, `{"default": ...}`) so they are accepted — prefer plain scalars. Do **not** intentionally pass nested objects:
 
 - `metadata` (dict/object)
 - `input_artifacts` (list/dict)

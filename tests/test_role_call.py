@@ -3250,18 +3250,51 @@ class TestBlockerFixes(TestCase):
         import mcp_agent.server  # noqa: F401
         # If this import succeeds, the test passes.
 
-    def test_head_of_it_no_wrapped_scalar_accepted(self):
-        """head_of_it.md does not say wrapped scalar values are accepted."""
+    def test_no_bare_import_role_lifecycle_in_server(self):
+        """No bare 'import role_lifecycle' remains in mcp_agent/server.py."""
+        import re
+        with open("mcp_agent/server.py", "r") as f:
+            content = f.read()
+        bare_imports = re.findall(
+            r"^\s*import\s+role_lifecycle\s*$", content, re.MULTILINE
+        )
+        self.assertEqual(
+            bare_imports, [],
+            f"Found bare imports: {bare_imports}",
+        )
+        # All role_lifecycle imports must be relative
+        relative_imports = re.findall(
+            r"from\s+\.\s+import\s+role_lifecycle", content, re.MULTILINE
+        )
+        self.assertGreater(
+            len(relative_imports), 0,
+            "Expected at least one relative import of role_lifecycle",
+        )
+
+    def test_head_of_it_tolerant_wrapper_policy(self):
+        """head_of_it.md reflects tolerant wrapper policy, not rejection."""
         with open("prompts/head_of_it.md", "r") as f:
             content = f.read()
-        self.assertNotIn("Wrapped scalar values are accepted", content)
-        self.assertNotIn("wrapped scalar values are accepted", content.lower())
+        # Must NOT say wrappers are invalid/rejected near "wrapped scalar" context
+        self.assertNotIn("invalid", content.lower().split("wrapped scalar")[1].split("\n")[0].lower() if "wrapped scalar" in content.lower() else "")
+        self.assertNotIn("rejected", content.lower().split("wrapped scalar")[1].split("\n")[0].lower() if "wrapped scalar" in content.lower() else "")
+        # Must say server normalizes wrappers
+        self.assertIn("normaliz", content.lower())
 
     def test_readme_no_synchronous_call_claim(self):
-        """README does not contain 'executes the full two-step lifecycle synchronously'."""
+        """README does not contain forbidden synchronous-call phrases."""
         with open("README.md", "r") as f:
             content = f.read()
         self.assertNotIn("executes the full two-step lifecycle synchronously", content)
+        self.assertNotIn("Single-role synchronous call", content)
+        self.assertNotIn("blocks until the role completes", content.lower())
+
+    def test_readme_tolerant_wrapper_policy(self):
+        """README reflects tolerant wrapper policy (server normalizes wrappers)."""
+        with open("README.md", "r") as f:
+            content = f.read()
+        # Must mention normalization
+        self.assertIn("normaliz", content.lower())
 
     def test_scout_requires_empty(self):
         """scout workflow requires []."""
@@ -3331,4 +3364,44 @@ class TestBlockerFixes(TestCase):
             result["error"]["next_action"]["arguments_hint"]["role"],
             "reviewer",
         )
+
+    @patch("mcp_agent.role_lifecycle.role_call_start_impl")
+    def test_role_call_running_response_has_next_action_tool_role_wait(self, mock_impl):
+        """role_call running response has next_action.tool == 'role_wait'."""
+        mock_impl.return_value = {
+            "role_run_id": "test-run-001-scout-1",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "status": "running",
+            "message": "Role started.",
+        }
+        from mcp_agent.server import role_call
+        result = role_call(
+            role="scout",
+            user_task="Test task",
+            idempotency_key="test-scout-1",
+        )
+        self.assertEqual(result["status"], "running")
+        self.assertIn("next_action", result)
+        self.assertEqual(result["next_action"]["tool"], "role_wait")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_completed_architect_returns_only_architect_plan_hint(self, mock_wait):
+        """role_wait completed architect returns only architect_plan_artifact_id hint, not scout_report_artifact_id."""
+        mock_wait.return_value = {
+            "status": "completed",
+            "role": "architect",
+            "artifacts": {"primary": {"artifact_id": "art_arch_xxx"}},
+        }
+        from mcp_agent.server import role_wait
+        result = role_wait(role_run_id="test-arch-1")
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("next_action", result)
+        self.assertEqual(result["next_action"]["tool"], "role_call")
+        hint = result["next_action"].get("arguments_hint", {})
+        # Must contain architect_plan_artifact_id
+        self.assertIn("architect_plan_artifact_id", hint)
+        self.assertEqual(hint["architect_plan_artifact_id"], "art_arch_xxx")
+        # Must NOT contain scout_report_artifact_id
+        self.assertNotIn("scout_report_artifact_id", hint)
 
