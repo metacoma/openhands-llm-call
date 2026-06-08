@@ -184,6 +184,65 @@ def start_v1_app_conversation(
     )
 
 
+def send_message_to_existing_conversation(
+    base_url: str,
+    api_key: str,
+    conversation_id: str,
+    prompt: str,
+    *,
+    timeout: int = 60,
+) -> dict[str, Any]:
+    """Send a new user message into an existing OpenHands conversation.
+
+    Returns the response JSON from the API. Does NOT read old answers.
+
+    Parameters
+    ----------
+    base_url :
+        OpenHands base URL (e.g., http://localhost:3000).
+    api_key :
+        Bearer API key.
+    conversation_id :
+        Existing conversation ID to continue.
+    prompt :
+        New user message text.
+    timeout :
+        Request timeout in seconds.
+
+    Returns
+    -------
+    dict
+        Response JSON (may contain task_id, conversation_id, status, etc.).
+
+    Raises
+    ------
+    requests.HTTPError
+        On HTTP error response.
+    """
+    url = f"{base_url.rstrip('/')}/api/v1/app-conversations/{conversation_id}/send-message"
+
+    payload: dict[str, Any] = {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": prompt,
+            }
+        ],
+        "run": True,  # auto-start agent after message
+    }
+
+    response = request_json(
+        "POST",
+        url,
+        bearer_headers(api_key),
+        json_body=payload,
+        timeout=timeout,
+    )
+
+    return response
+
+
 def poll_v1_start_task(
     base_url: str,
     api_key: str,
