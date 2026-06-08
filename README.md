@@ -169,17 +169,17 @@ Returns a list of available roles with their contracts.
 Starts a specialist role and returns **immediately** with `role_run_id`.
 Does NOT wait for completion.
 
+**All fields are plain scalar values.** Do NOT pass `metadata` dict. Do NOT pass `input_artifacts` list.
+
 **Example — scout call (step 1):**
 
 ```json
 {
   "role": "scout",
   "user_task": "Analyze repository https://github.com/metacoma/example",
-  "input_artifacts": [],
-  "metadata": {
-    "repository": "https://github.com/metacoma/example",
-    "base_branch": "main"
-  }
+  "repository": "https://github.com/metacoma/example",
+  "feature": "feature-name",
+  "idempotency_key": "feature-scout"
 }
 ```
 
@@ -236,22 +236,16 @@ Then wait for completion (step 2):
 }
 ```
 
-**Example — architect call with artifact_id (step 1):**
+**Example — architect call with scout_report_artifact_id (step 1):**
 
 ```json
 {
   "role": "architect",
   "user_task": "Plan implementation of feature X.",
-  "input_artifacts": [
-    {
-      "artifact_id": "art_20260607-xxx_scout_1_scout_report",
-      "artifact_type": "scout_report"
-    }
-  ],
-  "metadata": {
-    "repository": "https://github.com/metacoma/example",
-    "base_branch": "main"
-  }
+  "repository": "https://github.com/metacoma/example",
+  "feature": "feature-name",
+  "scout_report_artifact_id": "art_20260607-xxx_scout_1_scout_report",
+  "idempotency_key": "feature-architect"
 }
 ```
 
@@ -261,8 +255,13 @@ Then wait for completion (step 2):
 |---|---|---|
 | `role` | Yes | The role name (e.g. `scout`, `architect`, `coder`, `reviewer`, `publisher`) |
 | `user_task` | Yes | The task description |
-| `input_artifacts` | No | List of `{"artifact_id": "...", "artifact_type": "..."}` dicts |
-| `metadata` | No | Dict with `repository`, `base_branch`, etc. |
+| `repository` | No | Repository URL (e.g. `https://github.com/...`) |
+| `feature` | No | Feature name (e.g. `ruby-grpc-client`) |
+| `scout_report_artifact_id` | Conditional | Artifact ID of scout report (`art_...`) |
+| `architect_plan_artifact_id` | Conditional | Artifact ID of architect plan (`art_...`) |
+| `coder_report_artifact_id` | Conditional | Artifact ID of coder report (`art_...`) |
+| `reviewer_report_artifact_id` | Conditional | Artifact ID of reviewer report (`art_...`) |
+| `publisher_instructions_artifact_id` | Conditional | Artifact ID of publisher instructions (`art_...`) |
 | `api_key` | No | OpenHands API key |
 | `llm_model` | No | LLM model override |
 | `url` | No | OpenHands LLM base URL override |
@@ -289,43 +288,66 @@ Head of IT via MCP tool discovery.
 ### Example full role chain
 
 ```text
-1. role_call(role="scout", user_task="...")
+1. role_call(
+     role="scout",
+     user_task="Research repo",
+     repository="https://github.com/...",
+     feature="feature-name",
+     idempotency_key="feature-scout"
+   )
    → control_summary.status = "completed"
    → artifacts.primary.artifact_id = "art_..._scout_report"
 
 2. role_call(
      role="architect",
-     user_task="...",
-     input_artifacts=[{artifact_id: "art_..._scout_report", artifact_type: "scout_report"}]
+     user_task="Plan implementation",
+     repository="https://github.com/...",
+     feature="feature-name",
+     scout_report_artifact_id="art_..._scout_report",
+     idempotency_key="feature-architect"
    )
    → control_summary.status = "completed"
    → artifacts.primary.artifact_id = "art_..._architect_plan"
 
 3. role_call(
      role="coder",
-     user_task="...",
-     input_artifacts=[
-       {artifact_id: "art_..._scout_report", artifact_type: "scout_report"},
-       {artifact_id: "art_..._architect_plan", artifact_type: "architect_plan"}
-     ]
+     user_task="Implement feature",
+     repository="https://github.com/...",
+     feature="feature-name",
+     scout_report_artifact_id="art_..._scout_report",
+     architect_plan_artifact_id="art_..._architect_plan",
+     idempotency_key="feature-coder"
    )
    → control_summary.status = "completed"
 
 4. role_call(
      role="reviewer",
-     user_task="...",
-     input_artifacts=[
-       {artifact_id: "art_..._scout_report", artifact_type: "scout_report"},
-       {artifact_id: "art_..._architect_plan", artifact_type: "architect_plan"},
-       {artifact_id: "art_..._coder_report", artifact_type: "coder_report"}
-     ]
+     user_task="Review changes",
+     repository="https://github.com/...",
+     feature="feature-name",
+     scout_report_artifact_id="art_..._scout_report",
+     architect_plan_artifact_id="art_..._architect_plan",
+     coder_report_artifact_id="art_..._coder_report",
+     idempotency_key="feature-reviewer"
    )
    → control_summary.action = "PASS" or "BLOCKER"
 
 5. If action = PASS:
-     role_call(role="publisher", ...)
+     role_call(
+       role="publisher",
+       user_task="Prepare PR instructions",
+       reviewer_report_artifact_id="art_..._reviewer_report",
+       idempotency_key="feature-publisher"
+     )
    If action = BLOCKER:
-     role_call(role="coder_fix", ...)
+     role_call(
+       role="coder_fix",
+       user_task="Fix blockers",
+       architect_plan_artifact_id="art_..._architect_plan",
+       coder_report_artifact_id="art_..._coder_report",
+       reviewer_report_artifact_id="art_..._reviewer_report",
+       idempotency_key="feature-coder-fix"
+     )
 ```
 
 ## How it works

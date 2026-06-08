@@ -1232,6 +1232,48 @@ def _unwrap_to_scalar(value: Any) -> Any:
     return value
 
 
+def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
+    """Unwrap a scalar value that may be wrapped in various MCP/LLM dict shapes.
+
+    Handles:
+    - Plain scalar → returned as-is
+    - {"text": "x"} → "x"
+    - {"value": "x"} → "x"
+    - {"default": "x"} → "x"
+    - {"id": "x"} → "x"
+    - {"artifact_id": "x"} → "x"
+    - Extra keys passed in *extra_keys* (e.g. ["role", "idempotency_key"])
+
+    If the dict has multiple keys and none match, return the original value.
+    """
+    # Plain scalar → pass through
+    if not isinstance(value, dict):
+        return value
+
+    # Single-key dict → unwrap that key's value
+    if len(value) == 1:
+        key = next(iter(value))
+        inner = value[key]
+        # Recurse for nested wrappers
+        result = unwrap_scalar(inner)
+        return result
+
+    # Multi-key dict → check known keys
+    # Priority order: text, value, default, id, artifact_id, then extra_keys
+    for key in ("text", "value", "default", "id", "artifact_id"):
+        if key in value:
+            return unwrap_scalar(value[key])
+
+    # Check extra_keys (role-specific wrappers)
+    if extra_keys:
+        for key in extra_keys:
+            if key in value:
+                return unwrap_scalar(value[key])
+
+    # Unknown multi-key dict → return as-is (caller will handle)
+    return value
+
+
 def normalize_bool(value: Any, default: bool = False) -> bool:
     """Normalize a boolean value that may be wrapped or string-encoded."""
     value = _unwrap_to_scalar(value)
@@ -2410,12 +2452,30 @@ def role_list() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Mapping from artifact type name to the flat role_call field name
+# ---------------------------------------------------------------------------
+
+_ARTIFACT_FIELD_NAME_MAP: dict[str, str] = {
+    "scout_report": "scout_report_artifact_id",
+    "architect_plan": "architect_plan_artifact_id",
+    "coder_report": "coder_report_artifact_id",
+    "reviewer_report": "reviewer_report_artifact_id",
+    "publisher_instructions": "publisher_instructions_artifact_id",
+}
+
+
 @MCP.tool()
 def role_call(
     role: Any,
     user_task: Any,
-    input_artifacts: Any = None,
-    metadata: Any = None,
+    repository: Any = "",
+    feature: Any = "",
+    scout_report_artifact_id: Any = "",
+    architect_plan_artifact_id: Any = "",
+    coder_report_artifact_id: Any = "",
+    reviewer_report_artifact_id: Any = "",
+    publisher_instructions_artifact_id: Any = "",
     api_key: Any = None,
     llm_model: Any = None,
     url: Any = None,
@@ -2432,26 +2492,35 @@ def role_call(
     wait for the final ``control_summary`` plus ``artifact_id``
     references.
 
+    **All fields are plain scalar values.** Do NOT pass nested dicts or lists.
+
     Parameters
     ----------
-    role :
+    role : str
         The role name (e.g. ``"scout"``, ``"architect"``, ``"coder"``).
-    user_task :
+    user_task : str
         The user task text. Required and must be non-empty.
-    input_artifacts :
-        List of ``{"artifact_id": "...", "artifact_type": "..."}`` dicts
-        (preferred) or a ``{artifact_type: artifact_id}`` mapping
-        (backward compat).  The MCP server resolves artifact content
-        server-side via Jinja injection.
-    metadata :
-        Optional metadata dict (e.g. ``{"repository": "..."}``).
-    api_key :
+    repository : str
+        Repository URL (e.g. ``"https://github.com/..."``).
+    feature : str
+        Feature name (e.g. ``"ruby-grpc-client"``).
+    scout_report_artifact_id : str
+        Artifact ID of the scout report (e.g. ``"art_..."``).
+    architect_plan_artifact_id : str
+        Artifact ID of the architect plan.
+    coder_report_artifact_id : str
+        Artifact ID of the coder report.
+    reviewer_report_artifact_id : str
+        Artifact ID of the reviewer report.
+    publisher_instructions_artifact_id : str
+        Artifact ID of the publisher instructions.
+    api_key : str
         OpenHands API key.
-    llm_model :
+    llm_model : str
         LLM model override.
-    url :
+    url : str
         OpenHands LLM base URL override.
-    idempotency_key :
+    idempotency_key : str
         Optional stable key to deduplicate retried calls.
 
     Returns
@@ -2486,14 +2555,25 @@ def role_call(
                 "error": {"type": "...", "message": "...", "retryable": bool}
             }
 
-    Example::
+    Example — scout::
 
         {
-            "status": "running",
-            "role_run_id": "20260607-xxx-scout-1",
-            "run_id": "20260607-xxx",
             "role": "scout",
-            "message": "Role started. Use role_wait with role_run_id to wait for completion."
+            "user_task": "Research repo",
+            "repository": "https://github.com/...",
+            "feature": "ruby-grpc-client",
+            "idempotency_key": "ruby-grpc-client-scout"
+        }
+
+    Example — architect::
+
+        {
+            "role": "architect",
+            "user_task": "Plan Ruby client",
+            "repository": "https://github.com/...",
+            "feature": "ruby-grpc-client",
+            "scout_report_artifact_id": "art_20260608-xxx_scout_report",
+            "idempotency_key": "ruby-grpc-client-architect"
         }
     """
     # ------------------------------------------------------------------
@@ -2523,81 +2603,99 @@ def role_call(
             ut_type = ut_shape.get("type", type(user_task).__name__) if isinstance(ut_shape, dict) else type(user_task).__name__
             ut_len = ut_shape.get("len", len(str(user_task))) if isinstance(ut_shape, dict) else len(str(user_task))
 
-            # Metadata shape
-            meta_shape = safe_json_shape(metadata) if metadata is not None else None
-            meta_keys = meta_shape.get("keys", []) if meta_shape and isinstance(meta_shape, dict) else []
-
-            # input_artifacts shape
-            ia_shape = safe_json_shape(input_artifacts) if input_artifacts is not None else None
-            ia_count = ia_shape.get("len", 0) if ia_shape and isinstance(ia_shape, dict) else (len(input_artifacts) if isinstance(input_artifacts, (list, dict)) else 0)
-
             # idempotency_key shape
             ik_shape = safe_json_shape(idempotency_key) if idempotency_key is not None else None
             ik_type = ik_shape.get("type", "NoneType") if ik_shape and isinstance(ik_shape, dict) else "NoneType"
 
             logger.info(
-                "role_call.input %s role_type=%s role_preview=%s user_task_type=%s user_task_len=%d metadata_keys=%s input_artifacts_count=%d idempotency_key_type=%s",
+                "role_call.input %s role_type=%s role_preview=%s user_task_type=%s user_task_len=%d idempotency_key_type=%s",
                 format_correlation(corr_id, role=str(role)[:50]),
                 role_type, safe_preview(str(role_preview_val), 100),
                 ut_type, ut_len,
-                meta_keys,
-                ia_count,
                 ik_type,
             )
 
-    # Normalize inputs
+    # ------------------------------------------------------------------
+    # Unwrap all scalar fields
+    # ------------------------------------------------------------------
     normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)
-    normalized_input_artifacts = (
-        unwrap_text(input_artifacts)
-        if input_artifacts is not None
-        else None
-    )
-    normalized_metadata = (
-        unwrap_text(metadata) if metadata is not None else None
-    )
+    normalized_repository = unwrap_scalar(repository) or ""
+    normalized_feature = unwrap_scalar(feature) or ""
+    normalized_scout_report = unwrap_scalar(scout_report_artifact_id) or ""
+    normalized_architect_plan = unwrap_scalar(architect_plan_artifact_id) or ""
+    normalized_coder_report = unwrap_scalar(coder_report_artifact_id) or ""
+    normalized_reviewer_report = unwrap_scalar(reviewer_report_artifact_id) or ""
+    normalized_publisher_instructions = unwrap_scalar(publisher_instructions_artifact_id) or ""
     normalized_api_key = unwrap_text(api_key) if api_key is not None else ""
     normalized_llm_model = unwrap_text(llm_model) if llm_model is not None else None
     normalized_url = unwrap_text(url) if url is not None else None
-    normalized_idempotency_key = unwrap_text(
-        idempotency_key
-    ) if idempotency_key is not None else None
+    normalized_idempotency_key = unwrap_scalar(idempotency_key) or ""
 
-    # Normalize input_artifacts to a plain dict
-    if isinstance(normalized_input_artifacts, dict):
-        resolved_artifacts: dict[str, str] = {}
-        for k, v in normalized_input_artifacts.items():
-            resolved_artifacts[k] = unwrap_text(v) if v is not None else ""
-        normalized_input_artifacts = resolved_artifacts
-    elif isinstance(normalized_input_artifacts, list):
-        # New format: list of {"artifact_id": "...", "artifact_type": "..."}
-        resolved_artifacts: dict[str, str] = {}
-        for entry in normalized_input_artifacts:
-            if not isinstance(entry, dict):
-                continue
-            aid = unwrap_text(entry.get("artifact_id", ""))
-            atype = unwrap_text(entry.get("artifact_type", ""))
-            if aid and atype:
-                resolved_artifacts[str(atype)] = str(aid)
-        normalized_input_artifacts = resolved_artifacts
-    elif isinstance(normalized_input_artifacts, str):
-        try:
-            normalized_input_artifacts = json.loads(normalized_input_artifacts)
-        except (json.JSONDecodeError, TypeError):
-            normalized_input_artifacts = {}
-    else:
-        normalized_input_artifacts = {}
+    # ------------------------------------------------------------------
+    # Validate artifact ID format (if provided, must start with "art_")
+    # ------------------------------------------------------------------
+    artifact_id_fields = {
+        "scout_report_artifact_id": normalized_scout_report,
+        "architect_plan_artifact_id": normalized_architect_plan,
+        "coder_report_artifact_id": normalized_coder_report,
+        "reviewer_report_artifact_id": normalized_reviewer_report,
+        "publisher_instructions_artifact_id": normalized_publisher_instructions,
+    }
 
-    # Normalize metadata — use recursive unwrapping for nested wrappers
-    if isinstance(normalized_metadata, dict):
-        normalized_metadata = _unwrap_dict_values(normalized_metadata)
-    elif isinstance(normalized_metadata, str):
-        try:
-            normalized_metadata = json.loads(normalized_metadata)
-        except (json.JSONDecodeError, TypeError):
-            normalized_metadata = {}
-    else:
-        normalized_metadata = {}
+    for field_name, artifact_id in artifact_id_fields.items():
+        if artifact_id and not str(artifact_id).startswith("art_"):
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "InvalidArtifactId",
+                    "message": f"{field_name} must be an artifact id like art_..., got {artifact_id!r}",
+                    "retryable": False,
+                },
+            }
+
+    # ------------------------------------------------------------------
+    # Detect bad nested payload (Test 9 — Option B)
+    # ------------------------------------------------------------------
+    if isinstance(role, dict) and "input_artifacts" in role:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "InvalidFlatRoleCallPayload",
+                "message": (
+                    "role_call now uses flat scalar fields. Do not pass nested "
+                    "input_artifacts or metadata. Pass artifact ids in dedicated "
+                    "fields: scout_report_artifact_id, architect_plan_artifact_id, "
+                    "coder_report_artifact_id, reviewer_report_artifact_id, "
+                    "publisher_instructions_artifact_id."
+                ),
+                "retryable": False,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Build internal input_artifacts dict from flat fields
+    # ------------------------------------------------------------------
+    internal_input_artifacts: dict[str, str] = {}
+    if normalized_scout_report:
+        internal_input_artifacts["scout_report"] = str(normalized_scout_report)
+    if normalized_architect_plan:
+        internal_input_artifacts["architect_plan"] = str(normalized_architect_plan)
+    if normalized_coder_report:
+        internal_input_artifacts["coder_report"] = str(normalized_coder_report)
+    if normalized_reviewer_report:
+        internal_input_artifacts["reviewer_report"] = str(normalized_reviewer_report)
+    if normalized_publisher_instructions:
+        internal_input_artifacts["publisher_instructions"] = str(normalized_publisher_instructions)
+
+    # ------------------------------------------------------------------
+    # Build internal metadata dict from flat fields
+    # ------------------------------------------------------------------
+    internal_metadata: dict[str, str] = {}
+    if normalized_repository:
+        internal_metadata["repository"] = str(normalized_repository)
+    if normalized_feature:
+        internal_metadata["feature"] = str(normalized_feature)
 
     # Import and call the lifecycle implementation (start-only, non-blocking)
     from . import role_lifecycle
@@ -2605,8 +2703,8 @@ def role_call(
     return role_lifecycle.role_call_start_impl(
         role=normalized_role,
         user_task=str(normalized_user_task) if normalized_user_task else "",
-        input_artifacts=normalized_input_artifacts,
-        metadata=normalized_metadata,
+        input_artifacts=internal_input_artifacts,
+        metadata=internal_metadata,
         api_key=str(normalized_api_key) if normalized_api_key else "",
         llm_model=str(normalized_llm_model) if normalized_llm_model else None,
         url=str(normalized_url) if normalized_url else None,

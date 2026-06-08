@@ -213,16 +213,65 @@ class TestNormalizeArtifactName(unittest.TestCase):
             normalize_artifact_name([1, 2])
 
 
-# Import the functions under test
-from mcp_agent.server import (
-    normalize_artifact_name,
-    normalize_bool,
-    normalize_int,
-    normalize_role,
-    normalize_role_run_id,
-    normalize_string,
-    unwrap_text,
-)
+class TestUnwrapScalar(unittest.TestCase):
+    """Tests for unwrap_scalar helper."""
+
+    def test_plain_string(self):
+        self.assertEqual(unwrap_scalar("abc"), "abc")
+
+    def test_plain_int(self):
+        self.assertEqual(unwrap_scalar(123), 123)
+
+    def test_plain_none(self):
+        self.assertIsNone(unwrap_scalar(None))
+
+    def test_text_wrapper(self):
+        self.assertEqual(unwrap_scalar({"text": "abc"}), "abc")
+
+    def test_value_wrapper(self):
+        self.assertEqual(unwrap_scalar({"value": "abc"}), "abc")
+
+    def test_default_wrapper(self):
+        self.assertEqual(unwrap_scalar({"default": "abc"}), "abc")
+
+    def test_id_wrapper(self):
+        self.assertEqual(unwrap_scalar({"id": "abc"}), "abc")
+
+    def test_artifact_id_wrapper(self):
+        self.assertEqual(unwrap_scalar({"artifact_id": "art_xxx"}), "art_xxx")
+
+    def test_role_wrapper_with_extra_keys(self):
+        self.assertEqual(
+            unwrap_scalar({"role": "architect"}, extra_keys=["role"]), "architect"
+        )
+
+    def test_idempotency_key_wrapper_with_extra_keys(self):
+        self.assertEqual(
+            unwrap_scalar({"idempotency_key": "key123"}, extra_keys=["idempotency_key"]),
+            "key123",
+        )
+
+    def test_nested_wrappers(self):
+        self.assertEqual(unwrap_scalar({"text": {"value": "abc"}}), "abc")
+
+    def test_multi_key_unknown(self):
+        """Multi-key dict with unknown keys returns as-is."""
+        result = unwrap_scalar({"foo": "bar", "baz": "qux"})
+        self.assertEqual(result, {"foo": "bar", "baz": "qux"})
+
+    def test_multi_key_with_text(self):
+        """Multi-key dict with text key unwraps text."""
+        self.assertEqual(unwrap_scalar({"text": "abc", "extra": "def"}), "abc")
+
+    def test_multi_key_with_value(self):
+        """Multi-key dict with value key unwraps value."""
+        self.assertEqual(unwrap_scalar({"value": "abc", "extra": "def"}), "abc")
+
+    def test_multi_key_with_artifact_id(self):
+        """Multi-key dict with artifact_id key unwraps artifact_id."""
+        self.assertEqual(
+            unwrap_scalar({"artifact_id": "art_xxx", "extra": "def"}), "art_xxx"
+        )
 
 
 class TestNormalizeRole(unittest.TestCase):

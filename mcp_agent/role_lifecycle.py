@@ -52,6 +52,15 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
+# Mapping from artifact type name to the flat role_call field name
+_ARTIFACT_FIELD_NAME_MAP: dict[str, str] = {
+    "scout_report": "scout_report_artifact_id",
+    "architect_plan": "architect_plan_artifact_id",
+    "coder_report": "coder_report_artifact_id",
+    "reviewer_report": "reviewer_report_artifact_id",
+    "publisher_instructions": "publisher_instructions_artifact_id",
+}
+
 
 class ConversationStartError(Exception):
     """Raised when starting an OpenHands conversation fails.
@@ -609,11 +618,18 @@ def role_call_start_impl(
         if req_artifact not in input_artifacts:
             missing.append(req_artifact)
     if missing:
+        # Build field name hint for the first missing artifact
+        field_hint = ""
+        first_missing = missing[0]
+        flat_field = _ARTIFACT_FIELD_NAME_MAP.get(first_missing)
+        if flat_field:
+            field_hint = f" Provide {flat_field}."
+
         return {
             "status": "failed",
             "error": {
                 "type": "MissingRequiredArtifact",
-                "message": f"missing required artifact: {missing[0]}",
+                "message": f"missing required artifact: {first_missing}.{field_hint}",
                 "retryable": False,
             },
         }
