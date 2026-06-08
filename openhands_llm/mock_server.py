@@ -150,6 +150,49 @@ def mock_get_events(conversation_id: str) -> FastAPIJSONResponse:
     )
 
 
+@app.post("/api/v1/conversation/{conversation_id}/messages")
+async def mock_send_message(conversation_id: str, request: Request) -> FastAPIJSONResponse:
+    """Mock sending a message to an existing conversation."""
+    conv = conversations.get(conversation_id)
+    if not conv:
+        return FastAPIJSONResponse(
+            content={"error": "Conversation not found"},
+            status_code=404,
+        )
+
+    body = await request.json() if await request.body() else {}
+
+    # Extract text from content array
+    user_text = ""
+    content = body.get("content", [])
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                user_text += item.get("text", "")
+
+    # Add user message event
+    conv["events"].append({
+        "id": f"evt-{conversation_id}-user-{len(conv['events'])}",
+        "kind": "MessageEvent",
+        "source": "user",
+        "timestamp": time.time(),
+        "llm_message": {
+            "role": "user",
+            "content": [{"type": "text", "text": user_text}],
+        },
+    })
+
+    # Schedule completion if not already completed
+    if conv.get("status") != "completed":
+        _schedule_completion(conversation_id)
+
+    return FastAPIJSONResponse(content={
+        "status": "running",
+        "conversation_id": conversation_id,
+        "task_id": f"task-{conversation_id}-{len(conv['events'])}",
+    })
+
+
 @app.get("/health")
 def mock_health() -> dict[str, str]:
     return {"status": "ok", "mode": "mock"}

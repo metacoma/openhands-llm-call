@@ -144,6 +144,7 @@ def _start_conversation_on_fastapi(
     conversation_id: Optional[str] = None,
     url: Optional[str] = None,
     max_polls: Optional[int] = None,
+    read_only_existing_conversation: bool = False,
     _correlation_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """POST /v1/call_lm with no_wait=True and return the response dict.
@@ -162,6 +163,10 @@ def _start_conversation_on_fastapi(
         OpenHands LLM base URL override.
     max_polls :
         Optional per-request max poll count.
+    read_only_existing_conversation :
+        If true, collect existing conversation answer without sending a
+        new prompt.  Default false means conversation_id + prompt sends
+        a new message.
     _correlation_id :
         Optional correlation ID for diagnostic logging.
 
@@ -185,6 +190,7 @@ def _start_conversation_on_fastapi(
         "no_wait": True,
         "poll_interval": _OPENHANDS_POLL_INTERVAL,
         "max_polls": clamped_max_polls,
+        "read_only_existing_conversation": read_only_existing_conversation,
     }
     if llm_model:
         payload["llm_model"] = llm_model
@@ -1270,17 +1276,28 @@ def role_lifecycle_wait_impl(
             "- Do not include ready_for_next_role.\n"
         ) % role
 
+    # ------------------------------------------------------------------
+    # Send summary prompt to the same OpenHands conversation
+    # ------------------------------------------------------------------
+    logger.info(
+        "role_wait.summary_prompt_send role_run_id=%s conversation_id=%s prompt_len=%d",
+        role_run_id,
+        conversation_id or "(none)",
+        len(summary_prompt),
+    )
+
     try:
         summary_conv_response = _start_conversation_on_fastapi(
             prompt=summary_prompt,
             api_key=os.getenv("OPENHANDS_API_KEY", ""),
             conversation_id=conversation_id if conversation_id else None,
+            read_only_existing_conversation=False,
         )
     except Exception:
         # Save fallback summary artifact so repeated role_wait is idempotent (Blocker 2)
         fallback_content = json.dumps(safe_fallback_summary(
             role=role,
-            summary_artifact_name=(role_spec.summary_artifact if role_spec else "control_summary"),
+            primary_artifact_name=(role_spec.output_artifact if role_spec else "control_summary"),
             is_reviewer=(role == "reviewer"),
             main_artifact_content=main_response,
         ), ensure_ascii=False)
@@ -1391,11 +1408,22 @@ def role_lifecycle_wait_impl(
             lifecycle_state="summary_repair_prompt_sent",
         )
 
+        # ------------------------------------------------------------------
+        # Send repair prompt to the same OpenHands conversation
+        # ------------------------------------------------------------------
+        logger.info(
+            "role_wait.repair_prompt_send role_run_id=%s conversation_id=%s prompt_len=%d",
+            role_run_id,
+            conversation_id or "(none)",
+            len(repair_prompt_text),
+        )
+
         try:
             repair_conv_response = _start_conversation_on_fastapi(
                 prompt=repair_prompt_text,
                 api_key=os.getenv("OPENHANDS_API_KEY", ""),
                 conversation_id=conversation_id if conversation_id else None,
+                read_only_existing_conversation=False,
             )
         except Exception:
             repair_conv_response = None
@@ -1441,7 +1469,7 @@ def role_lifecycle_wait_impl(
     if not control_summary.get("valid"):
         control_summary = safe_fallback_summary(
             role=role,
-            summary_artifact_name=(role_spec.summary_artifact if role_spec else "control_summary"),
+            primary_artifact_name=(role_spec.output_artifact if role_spec else "control_summary"),
             is_reviewer=(role == "reviewer"),
             main_artifact_content=main_response,
         )

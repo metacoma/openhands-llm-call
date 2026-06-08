@@ -45,7 +45,7 @@ class CallLMRequest(BaseModel):
     api_key: str | None = Field(default=None, description="API key override")
     conversation_id: str | None = Field(
         default=None,
-        description="Query existing conversation instead of creating a new one",
+        description="Existing conversation ID. With read_only_existing_conversation=false (default) and a non-empty prompt, sends a new message. With read_only_existing_conversation=true, collects existing answer without sending.",
     )
     poll_interval: int = Field(default=10, ge=1, le=120)
     max_polls: int = Field(default=180, ge=1, le=360)
@@ -55,14 +55,22 @@ class CallLMRequest(BaseModel):
     ignore_done_status: bool = Field(default=False)
     stop_after_first_message: bool = Field(default=False)
     no_wait: bool = Field(default=False)
+    read_only_existing_conversation: bool = Field(
+        default=False,
+        description="If true, collect existing conversation answer without sending a new prompt. Default false means conversation_id + prompt sends a new message.",
+    )
 
 
 class CallLMResponse(BaseModel):
     """Response from POST /v1/call_lm."""
 
-    answer: str
+    answer: str = ""
     conversation_id: str | None = None
-    status: str  # "completed", "no_wait", "error"
+    task_id: str | None = None
+    job_id: str | None = None
+    id: str | None = None
+    app_conversation_id: str | None = None
+    status: str  # "completed", "running", "no_wait", "error"
 
 
 class JobStatusResponse(BaseModel):
@@ -128,8 +136,12 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
     base_url = _resolve_url(req)
     api_key = _resolve_api_key(req)
 
-    # --- mode: existing conversation -----------------------------------------
-    if req.conversation_id:
+    # --- mode: existing conversation (read-only) -----------------------------
+    if req.conversation_id and req.read_only_existing_conversation:
+        logger.info(
+            "call_lm.existing_conversation_read_only conversation_id=%s",
+            req.conversation_id,
+        )
         answers = oh.collect_existing_conversation_answer(
             base_url=base_url,
             api_key=api_key,
@@ -138,6 +150,52 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
             events_max_pages=req.events_max_pages,
             final_fetch_delay=req.final_fetch_delay,
             verbose_events=False,
+        )
+        final_answer = oh.extract_final_answer(answers)
+        return {
+            "answer": final_answer,
+            "conversation_id": req.conversation_id,
+            "status": "completed",
+        }
+
+    # --- mode: send new message to existing conversation ---------------------
+    if req.conversation_id and req.prompt:
+        logger.info(
+            "call_lm.existing_conversation_send conversation_id=%s prompt_len=%d no_wait=%s",
+            req.conversation_id,
+            len(req.prompt),
+            req.no_wait,
+        )
+        response = oh.send_message_to_existing_conversation(
+            base_url=base_url,
+            api_key=api_key,
+            conversation_id=req.conversation_id,
+            prompt=req.prompt,
+            timeout=60,
+        )
+        if req.no_wait:
+            return {
+                "answer": "",
+                "conversation_id": req.conversation_id,
+                "task_id": response.get("task_id") or response.get("id") or req.conversation_id,
+                "job_id": response.get("job_id") or response.get("task_id") or response.get("id"),
+                "app_conversation_id": response.get("app_conversation_id") or response.get("conversation_id"),
+                "status": "running",
+            }
+
+        # Poll for the new answer on the existing conversation
+        answers = oh.run_and_collect_message_events(
+            base_url=base_url,
+            api_key=api_key,
+            conversation_id=req.conversation_id,
+            poll_interval=req.poll_interval,
+            max_polls=req.max_polls,
+            events_limit=req.events_limit,
+            events_max_pages=req.events_max_pages,
+            final_fetch_delay=req.final_fetch_delay,
+            verbose_events=False,
+            ignore_done_status=req.ignore_done_status,
+            stop_after_first_message=req.stop_after_first_message,
         )
         final_answer = oh.extract_final_answer(answers)
         return {
@@ -374,13 +432,20 @@ def call_lm(req: CallLMRequest) -> JSONResponse:
             status_code=502, detail=f"OpenHands API error: {exc}"
         ) from exc
 
-    return JSONResponse(
-        content={
-            "answer": result["answer"],
-            "conversation_id": result["conversation_id"],
-            "status": result["status"],
-        }
-    )
+    response_content = {
+        "answer": result["answer"],
+        "conversation_id": result["conversation_id"],
+        "status": result["status"],
+    }
+    if result.get("task_id"):
+        response_content["task_id"] = result["task_id"]
+    if result.get("job_id"):
+        response_content["job_id"] = result["job_id"]
+    if result.get("id"):
+        response_content["id"] = result["id"]
+    if result.get("app_conversation_id"):
+        response_content["app_conversation_id"] = result["app_conversation_id"]
+    return JSONResponse(content=response_content)
 
 
 def _resolve_job_url() -> str:

@@ -2289,7 +2289,7 @@ class TestReviewerFallbackRegression(unittest.TestCase):
 
         fb = safe_fallback_summary(
             role="reviewer",
-            summary_artifact_name="reviewer_summary",
+            primary_artifact_name="reviewer_summary",
             is_reviewer=True,
             main_artifact_content="",
         )
@@ -2304,7 +2304,7 @@ class TestReviewerFallbackRegression(unittest.TestCase):
 
         fb = safe_fallback_summary(
             role="architect",
-            summary_artifact_name="architect_summary",
+            primary_artifact_name="architect_summary",
             is_reviewer=False,
         )
         self.assertTrue(fb["valid"])

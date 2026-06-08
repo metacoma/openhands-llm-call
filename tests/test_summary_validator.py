@@ -271,7 +271,7 @@ class TestSafeFallbackSummary(unittest.TestCase):
 
         result = safe_fallback_summary(
             role="scout",
-            summary_artifact_name="scout_summary",
+            primary_artifact_name="scout_summary",
             is_reviewer=False,
         )
         self.assertTrue(result.get("valid"))
@@ -294,7 +294,7 @@ class TestSafeFallbackSummary(unittest.TestCase):
 
         result = safe_fallback_summary(
             role="reviewer",
-            summary_artifact_name="reviewer_summary",
+            primary_artifact_name="reviewer_summary",
             is_reviewer=True,
             main_artifact_content="No ACTION line found.",
         )
@@ -323,7 +323,7 @@ class TestSafeFallbackSummary(unittest.TestCase):
 
         result = safe_fallback_summary(
             role="reviewer",
-            summary_artifact_name="reviewer_summary",
+            primary_artifact_name="reviewer_summary",
             is_reviewer=True,
             main_artifact_content="No ACTION line found.",
         )
@@ -339,7 +339,7 @@ class TestSafeFallbackSummary(unittest.TestCase):
 
         result = safe_fallback_summary(
             role="reviewer",
-            summary_artifact_name="reviewer_summary",
+            primary_artifact_name="reviewer_summary",
             is_reviewer=True,
             main_artifact_content="ACTION: PASS\nSome text",
         )

@@ -234,7 +234,7 @@ def repair_summary(role: str, summary_artifact_name: str) -> str:
 
 def safe_fallback_summary(
     role: str,
-    summary_artifact_name: str,
+    primary_artifact_name: str,
     is_reviewer: bool = False,
     main_artifact_content: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -244,8 +244,8 @@ def safe_fallback_summary(
     ----------
     role :
         The role name.
-    summary_artifact_name :
-        The expected primary artifact name.
+    primary_artifact_name :
+        The expected primary artifact name (e.g. output_artifact from RoleSpec).
     is_reviewer :
         Whether the role is reviewer.
     main_artifact_content :
@@ -275,7 +275,7 @@ def safe_fallback_summary(
                 "Reviewer completed, but MCP could not parse or derive "
                 "PASS/BLOCKER from the summary."
             ),
-            "primary_artifact_name": summary_artifact_name,
+            "primary_artifact_name": primary_artifact_name,
             "blocking": True,
             "risk_level": "HIGH",
             "action": "BLOCKER",
@@ -291,9 +291,9 @@ def safe_fallback_summary(
         "role": role,
         "summary": (
             f"Role completed, but summary parsing failed. "
-            f"Inspect the summary artifact for details."
+            f"The primary artifact was saved. Continue routing using artifact_id."
         ),
-        "primary_artifact_name": summary_artifact_name,
+        "primary_artifact_name": primary_artifact_name,
         "blocking": False,
         "risk_level": None,
         "action": action,
