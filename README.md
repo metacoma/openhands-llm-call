@@ -315,23 +315,9 @@ Then wait for completion (step 2):
 
 > **Note:** `api_key`, `llm_model`, and `url` are internal-only. They are read from environment variables (`OPENHANDS_API_KEY`, `OPENHANDS_LLM_MODEL`, `OPENHANDS_URL`) and must **not** be passed by Head of IT.
 
-### Internal helpers (not exposed to Head of IT)
+### Legacy tools (hidden from LLM)
 
-The following functions are kept as internal helpers in ``server.py``
-without the ``@MCP.tool()`` decorator.  They are **not** visible to
-Head of IT via MCP tool discovery.
-
-| Function | Purpose |
-|---|---|
-| ``role_start_impl`` | Legacy role-start implementation (internal) |
-| ``role_wait_impl`` | Legacy server-side polling (internal) |
-| ``role_status`` | Single-shot diagnostic status check (internal) |
-| ``role_result`` | Get result of a completed role (internal) |
-| ``artifact_get`` | Read artifact content (debug only) |
-| ``_internal_role_start`` | Legacy role start (deprecated, hidden) |
-| ``_internal_role_wait`` | Legacy wait (deprecated, hidden) |
-| ``_internal_role_result`` | Legacy result (deprecated, hidden) |
-
+Legacy functions (`role_start`, `role_status`, `role_result`, `artifact_get`, `_internal_role_*`) are kept in `server.py` without the `@MCP.tool()` decorator. They are **not** visible to LLM via MCP tool discovery. See [docs/legacy_internal.md](docs/legacy_internal.md) for legacy documentation.
 
 ### Example full role chain
 

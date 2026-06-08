@@ -995,6 +995,7 @@ def role_lifecycle_wait_impl(
     role_run_id: str,
     timeout_seconds: Optional[int] = None,
     poll_interval_seconds: Optional[int] = None,
+    return_result: bool = True,
 ) -> dict[str, Any]:
     """Wait for a role run to complete (polling + summary).
 
@@ -1008,6 +1009,8 @@ def role_lifecycle_wait_impl(
         Maximum seconds to wait (default 1800).
     poll_interval_seconds :
         Seconds between status checks (default 30).
+    return_result :
+        Whether to include the full result in the response (default True).
 
     Returns
     -------
