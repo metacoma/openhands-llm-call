@@ -18,6 +18,7 @@ import requests
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 
+from . import role_lifecycle
 from .artifact_store import ArtifactStore
 from .task_store import TaskStore
 from . import role_tools as _role_tools
@@ -1807,8 +1808,6 @@ def role_wait(
     normalized_return_result = normalize_bool(return_result, default=True)
 
     # Call the new lifecycle-aware role_wait implementation
-    from . import role_lifecycle
-
     result = role_lifecycle.role_lifecycle_wait_impl(
         role_run_id=normalized_role_run_id,
         timeout_seconds=normalized_timeout,
@@ -2085,9 +2084,7 @@ def _internal_role_start(
     else:
         normalized_metadata = {}
 
-    # Import and call the lifecycle implementation
-    from . import role_lifecycle
-
+    # Call the lifecycle implementation
     return role_lifecycle.role_call_impl(
         role=normalized_role,
         user_task=str(normalized_user_task) if normalized_user_task else "",
@@ -2442,7 +2439,7 @@ def role_list() -> dict:
             r2_output = r2.get("output_artifact", "")
             if r2_output and r2_output in req:
                 requires_list.append(r2["name"])
-            elif not req and r2["name"] == "scout":
+            elif not req and r2["name"] == "scout" and r["name"] != "scout":
                 requires_list.append(r2["name"])
         workflow_steps.append({
             "step": i,
@@ -2584,7 +2581,6 @@ def _invalid_flat_role_call_error(field_name: str) -> dict:
             "type": "InvalidFlatRoleCallPayload",
             "message": (
                 f"Field '{field_name}' must be a plain scalar value, not an object. "
-                "Do not pass {{\"text\": \"...\"}} wrappers or nested payloads. "
                 "Pass artifact ids in dedicated fields: scout_report_artifact_id, "
                 "architect_plan_artifact_id, coder_report_artifact_id, "
                 "reviewer_report_artifact_id, publisher_instructions_artifact_id."
@@ -2739,9 +2735,7 @@ def role_call(
     if normalized_feature:
         internal_metadata["feature"] = str(normalized_feature)
 
-    # Import and call the lifecycle implementation (start-only, non-blocking)
-    from . import role_lifecycle
-
+    # Call the lifecycle implementation (start-only, non-blocking)
     result = role_lifecycle.role_call_start_impl(
         role=normalized_role,
         user_task=str(normalized_user_task) if normalized_user_task else "",

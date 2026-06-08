@@ -62,7 +62,7 @@ If the response returns `status: "running"` with `timeout: true`, call `role_wai
 User / Head-of-IT
   └── OpenHands chat (prompts/head_of_it.md)
         └── MCP server (mcp_agent/server.py)
-              ├── Generic OpenHands tools
+              ├── Internal helpers (not for Head-of-IT)
               │   openhands_start_task, openhands_get_task_status,
               │   openhands_get_task_result, openhands_get_task_events,
               │   openhands_cancel_task, call_llm, check_health, check_job
@@ -146,7 +146,9 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 
 ## MCP Tools
 
-### Generic OpenHands tools
+### Internal helpers (not for Head-of-IT)
+
+> **Note:** These tools are internal implementation details. The public Head-of-IT MCP API consists of exactly three tools: `role_list`, `role_call`, `role_wait`.
 
 | Tool | Purpose |
 |---|---|
@@ -428,8 +430,8 @@ role as still active.
 
 **What to do:**
 
-1. Follow the `next_action` field and call ``role_call`` for the
-   existing role (it will return the existing result if already completed).
+1. Follow the `next_action` field in the error response. For running roles,
+   this is usually `role_wait` with the existing `role_run_id`.
 2. Do NOT start another role until the previous role is confirmed terminal.
 3. If the OpenHands backend is temporarily unavailable, wait and retry.
 4. If the task has actually completed (verified externally), manually

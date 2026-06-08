@@ -305,7 +305,7 @@ All string fields must be **plain strings**, not objects:
 - **Correct:** `"role": "scout"`
 - **Incorrect:** `"role": {"text": "scout"}`
 
-If a `{"text": "..."}` wrapper is detected, the API returns `InvalidFlatPayload` error with a `correct_example`.
+Scalar wrappers like `{"text": "..."}`, `{"value": "..."}`, and `{"default": "..."}` are automatically normalized to plain scalars by the MCP server.
 
 ## Artifact ID Rule
 
@@ -327,7 +327,7 @@ Common error types:
 
 | Type | Meaning | Action |
 |---|---|---|
-| `InvalidFlatPayload` | Nested `{"text": "..."}` wrapper detected | Use `correct_example` |
+| `InvalidFlatRoleCallPayload` | Old nested role_call payload detected (contains `input_artifacts`, `metadata`, or full legacy fields) | Use `correct_example` |
 | `MissingRequiredArtifact` | Required artifact_id not provided | Call `role_call` for the missing role |
 | `AnotherRoleRunning` | A role is already running | Use `role_wait` with existing `role_run_id` |
 | `UnknownRole` | Invalid role name | Call `role_list` |
