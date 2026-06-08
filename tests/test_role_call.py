@@ -358,16 +358,22 @@ class TestRoleCallTool(TestCase):
         result = role_call(
             role="scout",
             user_task="Test task",
-            input_artifacts=[],
-            metadata={"repository": "https://github.com/test/repo"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id="",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         mock_impl.assert_called_once()
         self.assertEqual(result["status"], "running")
 
     @patch("mcp_agent.role_lifecycle.role_call_start_impl")
-    def test_call_with_list_input_artifacts(self, mock_impl):
-        """role_call accepts input_artifacts as list of objects."""
+    def test_call_with_flat_artifact_id(self, mock_impl):
+        """role_call accepts scout_report_artifact_id as flat field."""
         mock_impl.return_value = {
             "role_run_id": "test-run-009-architect-1",
             "run_id": "test-run-009",
@@ -381,10 +387,14 @@ class TestRoleCallTool(TestCase):
         result = role_call(
             role="architect",
             user_task="Plan implementation",
-            input_artifacts=[
-                {"artifact_id": "art_scout_xxx", "artifact_type": "scout_report"},
-            ],
-            metadata={"repository": "https://github.com/test/repo"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id="art_scout_xxx",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         # Verify the normalized dict was passed to role_call_start_impl
@@ -1219,13 +1229,7 @@ class TestNormalizeRoleIntegration(TestCase):
     ):
         """Test 6: role_call accepts the real observed payload shape.
 
-        Real payload from Head of IT logs:
-        {
-            "role": {"name": "scout"},
-            "user_task": {"text": "..."},
-            "metadata": {...},
-            "idempotency_key": {"text": "..."}
-        }
+        Real payload from Head of IT logs uses wrapped scalar values.
         """
         mock_start.return_value = {"task_id": "task-real-1", "conversation_id": "conv-real-1"}
         mock_poll.return_value = {
@@ -1257,10 +1261,13 @@ class TestNormalizeRoleIntegration(TestCase):
             result = role_call(
                 role={"name": "scout"},
                 user_task={"text": "Исследуй репозиторий ..."},
-                metadata={
-                    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
-                    "feature": "ruby-grpc-client",
-                },
+                repository="https://github.com/metacoma/freeplane_plugin_grpc",
+                feature="ruby-grpc-client",
+                scout_report_artifact_id="",
+                architect_plan_artifact_id="",
+                coder_report_artifact_id="",
+                reviewer_report_artifact_id="",
+                publisher_instructions_artifact_id="",
                 idempotency_key={"text": "scout-freeplane-plugin-grpc-ruby-client"},
             )
 
@@ -1280,10 +1287,10 @@ class TestNormalizeRoleIntegration(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle.render_prompt")
-    def test_wrapped_metadata_values_unwrap(
+    def test_wrapped_repository_feature_values_unwrap(
         self, mock_render, mock_poll, mock_start
     ):
-        """Test 7: wrapped metadata values normalize to plain strings."""
+        """Test 7: wrapped repository/feature values normalize to plain strings."""
         mock_start.return_value = {"task_id": "task-meta-1", "conversation_id": "conv-meta-1"}
         mock_poll.return_value = {
             "status": "completed",
@@ -1313,10 +1320,13 @@ class TestNormalizeRoleIntegration(TestCase):
             result = role_call(
                 role="scout",
                 user_task="Test task",
-                metadata={
-                    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
-                    "feature": {"text": "ruby-grpc-client"},
-                },
+                repository={"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
+                feature={"text": "ruby-grpc-client"},
+                scout_report_artifact_id="",
+                architect_plan_artifact_id="",
+                coder_report_artifact_id="",
+                reviewer_report_artifact_id="",
+                publisher_instructions_artifact_id="",
                 idempotency_key=None,
             )
 
@@ -1510,14 +1520,14 @@ class TestWrappedInputArtifacts(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle.render_prompt")
-    def test_wrapped_input_artifacts_still_works(
+    def test_wrapped_artifact_id_still_works(
         self, mock_render, mock_poll, mock_start, mock_astore_cls
     ):
-        """Test 10: wrapped input_artifacts still work.
+        """Wrapped scout_report_artifact_id still works.
 
         Since role_call is now non-blocking, it returns status: 'running'.
         The test verifies that wrapped artifact_id values are properly
-        resolved and passed to the lifecycle layer.
+        unwrapped and passed to the lifecycle layer.
         """
         # Mock artifact store so get_content_by_id returns content for fake IDs
         mock_store = MagicMock()
@@ -1541,13 +1551,14 @@ class TestWrappedInputArtifacts(TestCase):
         result = role_call(
             role="architect",
             user_task="Plan implementation",
-            input_artifacts=[
-                {
-                    "artifact_id": {"text": "art_scout"},
-                    "artifact_type": {"text": "scout_report"},
-                }
-            ],
-            metadata={"run_id": "test-run-wrapped-art"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id={"text": "art_scout"},
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         # role_call now returns running status (non-blocking)
@@ -2011,8 +2022,14 @@ class TestRoleCallStartReturnsRunning(TestCase):
         result = role_call(
             role="scout",
             user_task="Test task",
-            input_artifacts={},
-            metadata={"repository": "https://github.com/test/repo"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id="",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         self.assertEqual(result["status"], "running")

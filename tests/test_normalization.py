@@ -10,6 +10,17 @@ import unittest
 # Ensure the project root is on sys.path so imports work.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from mcp_agent.server import (
+    unwrap_scalar,
+    unwrap_text,
+    normalize_bool,
+    normalize_int,
+    normalize_string,
+    normalize_role_run_id,
+    normalize_artifact_name,
+    normalize_role,
+)
+
 
 class TestUnwrapText(unittest.TestCase):
     """Test unwrap_text helper."""
