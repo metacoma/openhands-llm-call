@@ -58,12 +58,31 @@ Use the smallest workflow that can safely solve the task.
 You have access to exactly three role-level MCP tools:
 
 - `role_list()` — List available roles and their contracts.
-- `role_call(role, user_task, input_artifacts, metadata)` — Start a specialist (returns `role_run_id`).
+- `role_call(role, user_task, repository, feature, scout_report_artifact_id, architect_plan_artifact_id, coder_report_artifact_id, reviewer_report_artifact_id, publisher_instructions_artifact_id, idempotency_key)` — Start a specialist (returns `role_run_id`).
 - `role_wait(role_run_id, timeout_seconds, poll_interval_seconds)` — Wait for completion (returns `control_summary` + `artifact_id`).
 
 You never call `artifact_get`, `role_start`, `role_status`, `role_result`, or any `*_v2` tool.
 
 You never read `full_result` or artifact content.
+
+## Flat role_call fields
+
+`role_call` uses **flat scalar fields only**. Do NOT pass `metadata` dict. Do NOT pass `input_artifacts` list.
+
+| Field | Type | Description |
+|---|---|---|
+| `role` | str | The role name (e.g. `"scout"`, `"architect"`, `"coder"`) |
+| `user_task` | str | The task description |
+| `repository` | str | Repository URL (e.g. `"https://github.com/..."`) |
+| `feature` | str | Feature name (e.g. `"ruby-grpc-client"`) |
+| `scout_report_artifact_id` | str | Artifact ID of scout report (`"art_..."`) |
+| `architect_plan_artifact_id` | str | Artifact ID of architect plan (`"art_..."`) |
+| `coder_report_artifact_id` | str | Artifact ID of coder report (`"art_..."`) |
+| `reviewer_report_artifact_id` | str | Artifact ID of reviewer report (`"art_..."`) |
+| `publisher_instructions_artifact_id` | str | Artifact ID of publisher instructions (`"art_..."`) |
+| `idempotency_key` | str | Optional deduplication key |
+
+Pass artifact IDs in dedicated fields. The MCP server resolves artifact content server-side.
 
 ## Available Roles
 
@@ -185,30 +204,66 @@ After each role completes, read the `control_summary` and route:
 
 ```text
 after scout completed and blocking=false:
-    role_call(role="architect", input_artifacts=[{artifact_id: scout_report_id, artifact_type: scout_report}])
+    role_call(
+        role="architect",
+        user_task="Plan implementation...",
+        repository="https://github.com/...",
+        feature="feature-name",
+        scout_report_artifact_id="art_..._scout_report",
+        idempotency_key="feature-architect"
+    )
     → role_wait(role_run_id=architect_run)
 
 after architect completed and blocking=false:
-    role_call(role="coder", input_artifacts=[{artifact_id: scout_report_id}, {artifact_id: architect_plan_id}])
+    role_call(
+        role="coder",
+        user_task="Implement feature...",
+        repository="https://github.com/...",
+        feature="feature-name",
+        scout_report_artifact_id="art_..._scout_report",
+        architect_plan_artifact_id="art_..._architect_plan",
+        idempotency_key="feature-coder"
+    )
     → role_wait(role_run_id=coder_run)
 
 after coder completed and blocking=false:
-    role_call(role="reviewer", input_artifacts=[scout, architect, coder artifact_ids])
+    role_call(
+        role="reviewer",
+        user_task="Review changes...",
+        repository="https://github.com/...",
+        feature="feature-name",
+        scout_report_artifact_id="art_..._scout_report",
+        architect_plan_artifact_id="art_..._architect_plan",
+        coder_report_artifact_id="art_..._coder_report",
+        idempotency_key="feature-reviewer"
+    )
     → role_wait(role_run_id=reviewer_run)
 
 after reviewer action=PASS:
-    role_call(role="publisher", input_artifacts=[reviewer_report])
+    role_call(
+        role="publisher",
+        user_task="Prepare PR instructions...",
+        reviewer_report_artifact_id="art_..._reviewer_report",
+        idempotency_key="feature-publisher"
+    )
     → role_wait(role_run_id=publisher_run)
 
 after reviewer action=BLOCKER and fix cycle not used:
-    role_call(role="coder_fix", input_artifacts=[architect_plan, coder_report, reviewer_report])
+    role_call(
+        role="coder_fix",
+        user_task="Fix blockers...",
+        architect_plan_artifact_id="art_..._architect_plan",
+        coder_report_artifact_id="art_..._coder_report",
+        reviewer_report_artifact_id="art_..._reviewer_report",
+        idempotency_key="feature-coder-fix"
+    )
     → role_wait(role_run_id=coder_fix_run)
 
 after reviewer action=BLOCKER and fix cycle already used:
     stop as blocked
 ```
 
-**Pass only `artifact_id` to `role_call`.** The MCP server resolves artifact content server-side.
+**Pass only `artifact_id` to `role_call` via dedicated flat fields.** The MCP server resolves artifact content server-side.
 
 **Never call `role_call` repeatedly for polling.** If a role is running, call `role_wait` with the same `role_run_id`.
 
@@ -233,12 +288,13 @@ after reviewer action=BLOCKER and fix cycle already used:
 For each role, use the two-step pattern:
 
 ```text
-1. Start the role:
+1. Start the role (scout — no artifacts needed):
 role_call(
     role="scout",
-    user_task="Analyze repository...",
-    input_artifacts=[],
-    metadata={"repository": "https://github.com/..."}
+    user_task="Analyze repository https://github.com/...",
+    repository="https://github.com/...",
+    feature="feature-name",
+    idempotency_key="feature-scout"
 )
 → returns: {status: "running", role_run_id: "20260607-xxx-scout-1", ...}
 
@@ -251,17 +307,17 @@ role_wait(
 → returns: {status: "completed", control_summary: {...}, artifacts: {...}}
 ```
 
-For the next role, pass only `artifact_id`:
+For the next role, pass only `artifact_id` via dedicated flat fields:
 
 ```text
-1. Start the role:
+1. Start the role (architect — needs scout_report):
 role_call(
     role="architect",
     user_task="Plan implementation...",
-    input_artifacts=[
-        {"artifact_id": "art_20260607_xxx_scout_report", "artifact_type": "scout_report"}
-    ],
-    metadata={"repository": "https://github.com/..."}
+    repository="https://github.com/...",
+    feature="feature-name",
+    scout_report_artifact_id="art_20260607_xxx_scout_report",
+    idempotency_key="feature-architect"
 )
 → returns: {status: "running", role_run_id: "20260607-xxx-architect-1", ...}
 

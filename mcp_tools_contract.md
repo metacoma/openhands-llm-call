@@ -31,6 +31,8 @@ Calls a specialist role. The MCP server resolves artifact IDs server-side and re
 
 **This is the only public tool Head of IT uses to invoke a worker role.**
 
+**All fields are plain scalar values.** Do NOT pass `metadata` dict. Do NOT pass `input_artifacts` list.
+
 ### Required input fields
 
 Every role call must include:
@@ -38,99 +40,99 @@ Every role call must include:
 - `role` — the role name
 - `user_task` — the user task text (required, non-empty)
 
-Optional:
+Optional flat fields:
 
-- `input_artifacts` — mapping of artifact names to their ID/path strings
-- `metadata` — optional metadata dict (e.g. repository, base_branch)
-- `api_key`, `llm_model`, `url`, `idempotency_key`
+- `repository` — repository URL (e.g. `https://github.com/...`)
+- `feature` — feature name (e.g. `ruby-grpc-client`)
+- `scout_report_artifact_id` — artifact ID of scout report (`art_...`)
+- `architect_plan_artifact_id` — artifact ID of architect plan (`art_...`)
+- `coder_report_artifact_id` — artifact ID of coder report (`art_...`)
+- `reviewer_report_artifact_id` — artifact ID of reviewer report (`art_...`)
+- `publisher_instructions_artifact_id` — artifact ID of publisher instructions (`art_...`)
+- `idempotency_key` — deduplication key
+
+> **Note:** `api_key`, `llm_model`, and `url` are internal-only. They are read from environment variables (`OPENHANDS_API_KEY`, `OPENHANDS_LLM_MODEL`, `OPENHANDS_URL`) and must **not** be passed by Head of IT.
 
 ### Example scout start
 
 ```json
 {
-  "role": {"text": "scout"},
-  "user_task": {"text": "Implement a Ruby gRPC client for freeplane_plugin_grpc."},
-  "metadata": {
-    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"}
-  }
+  "role": "scout",
+  "user_task": "Research repository https://github.com/metacoma/freeplane_plugin_grpc before adding Ruby gRPC client.",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "idempotency_key": "ruby-grpc-client-scout"
 }
 ```
 
-### Example architect start (with artifact_id)
+### Example architect start (with scout_report_artifact_id)
 
 ```json
 {
   "role": "architect",
-  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
-  "input_artifacts": [
-    {"artifact_id": "art_20260607_xxx_scout_report", "artifact_type": "scout_report"}
-  ],
-  "metadata": {
-    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
-    "base_branch": "main"
-  }
+  "user_task": "Design minimal implementation of Ruby gRPC client for repository https://github.com/metacoma/freeplane_plugin_grpc.",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "scout_report_artifact_id": "art_20260608-090234-8e83d5_scout_1_scout_report",
+  "idempotency_key": "ruby-grpc-client-architect"
 }
 ```
 
-### Example coder start (with artifact_id)
+### Example coder start (with scout_report_artifact_id + architect_plan_artifact_id)
 
 ```json
 {
   "role": "coder",
-  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
-  "input_artifacts": [
-    {"artifact_id": "art_scout_xxx", "artifact_type": "scout_report"},
-    {"artifact_id": "art_architect_xxx", "artifact_type": "architect_plan"}
-  ],
-  "metadata": {
-    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
-    "base_branch": "main",
-    "branch": "feature/ruby-grpc-client"
-  }
+  "user_task": "Implement Ruby gRPC client per architect plan.",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "scout_report_artifact_id": "art_..._scout_report",
+  "architect_plan_artifact_id": "art_..._architect_plan",
+  "idempotency_key": "ruby-grpc-client-coder"
 }
 ```
 
-### Example reviewer start (with artifact_id)
+### Example reviewer start (with scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id)
 
 ```json
 {
   "role": "reviewer",
-  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
-  "input_artifacts": [
-    {"artifact_id": "art_scout_xxx", "artifact_type": "scout_report"},
-    {"artifact_id": "art_architect_xxx", "artifact_type": "architect_plan"},
-    {"artifact_id": "art_coder_xxx", "artifact_type": "coder_report"}
-  ]
+  "user_task": "Review Ruby gRPC client implementation.",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "scout_report_artifact_id": "art_..._scout_report",
+  "architect_plan_artifact_id": "art_..._architect_plan",
+  "coder_report_artifact_id": "art_..._coder_report",
+  "idempotency_key": "ruby-grpc-client-reviewer"
 }
 ```
 
-### Example publisher start (with artifact_id)
+### Example publisher start (with reviewer_report_artifact_id)
 
 ```json
 {
   "role": "publisher",
-  "user_task": "Implement a Ruby gRPC client for freeplane_plugin_grpc.",
-  "input_artifacts": [
-    {"artifact_id": "art_coder_xxx", "artifact_type": "coder_report"},
-    {"artifact_id": "art_reviewer_xxx", "artifact_type": "reviewer_report"}
-  ]
+  "user_task": "Prepare PR instructions for Ruby gRPC client.",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "reviewer_report_artifact_id": "art_..._reviewer_report",
+  "idempotency_key": "ruby-grpc-client-publisher"
 }
 ```
 
-### Example coder_fix start (with artifact_id)
+### Example coder_fix start (after reviewer BLOCKER)
 
 ```json
 {
-  "role": {"text": "coder_fix"},
-  "user_task": {"text": "Fix blocking issues identified by reviewer."},
-  "input_artifacts": {
-    "architect_plan": {"text": "<ARCHITECT_PLAN_ARTIFACT_PATH_OR_ID>"},
-    "coder_report": {"text": "<CODER_REPORT_ARTIFACT_PATH_OR_ID>"},
-    "reviewer_report": {"text": "<REVIEWER_REPORT_ARTIFACT_PATH_OR_ID>"}
-  },
-  "metadata": {
-    "branch": {"text": "existing-feature-branch"}
-  }
+  "role": "coder_fix",
+  "user_task": "Fix only blockers from reviewer_report for Ruby gRPC client.",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "scout_report_artifact_id": "art_..._scout_report",
+  "architect_plan_artifact_id": "art_..._architect_plan",
+  "coder_report_artifact_id": "art_..._coder_report",
+  "reviewer_report_artifact_id": "art_..._reviewer_report",
+  "idempotency_key": "ruby-grpc-client-coder-fix-1"
 }
 ```
 
@@ -183,9 +185,11 @@ Optional:
 Other validation errors:
 
 - `"user_task is required"` — missing or empty user_task
-- `"missing required artifact: scout_report"` — required artifact not provided
+- `"missing required artifact: scout_report. Provide scout_report_artifact_id."` — required artifact not provided (message includes the flat field name)
+- `"scout_report_artifact_id must be an artifact id like art_..., got ..."` — invalid artifact ID format
 - `"artifact not found: scout_report"` — artifact reference does not resolve
 - `"rendered prompt is empty"` — template rendering produced empty output
+- `"role_call now uses flat scalar fields. Do not pass nested input_artifacts or metadata."` — old nested payload rejected
 
 ## role_start (Legacy — hidden)
 
@@ -812,11 +816,11 @@ The control summary follows this schema:
 ### Migration steps
 
 1. Replace `role_start` calls with `role_call`.
-2. Change `artifacts` parameter to `input_artifacts` as a list of `{artifact_id, artifact_type}` objects.
-3. Remove `repo`, `base_branch`, `branch` — use `metadata` instead.
+2. Replace `input_artifacts` list/dict with dedicated flat artifact ID fields.
+3. Replace `metadata` dict with `repository` and `feature` string fields.
 4. Read `control_summary` from the response instead of parsing full artifacts.
 5. Route based on control summary fields (`status`, `blocking`, `action`) not on `next_role`.
-6. Pass only `artifact_id` (not content) between roles.
+6. Pass only `artifact_id` (not content) between roles via dedicated flat fields.
 
 ### Example migration
 
@@ -834,20 +838,17 @@ The control summary follows this schema:
 }
 ```
 
-**After (canonical role_call):**
+**After (flat role_call):**
 
 ```json
 {
   "role": "architect",
   "user_task": "Plan implementation",
-  "input_artifacts": [
-    {"artifact_id": "art_20260607_xxx_scout_report", "artifact_type": "scout_report"}
-  ],
-  "metadata": {
-    "repository": "https://github.com/example/repo",
-    "base_branch": "main"
-  }
+  "repository": "https://github.com/example/repo",
+  "feature": "feature-name",
+  "scout_report_artifact_id": "art_20260607_xxx_scout_report",
+  "idempotency_key": "feature-architect"
 }
 ```
 
-**Note:** `role_call` is the canonical public API. Legacy `role_start` is hidden from MCP discovery. Head of IT should never read artifact content — only pass artifact_id and let MCP resolve it server-side.
+**Note:** `role_call` is the canonical public API. Legacy `role_start` is hidden from MCP discovery. Head of IT should never read artifact content — only pass artifact_id via dedicated flat fields and let MCP resolve it server-side.

@@ -52,6 +52,32 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
+# Keys that must never appear in public role_wait / role_result responses.
+FORBIDDEN_PUBLIC_KEYS = {"artifact_path", "content", "full_result", "result"}
+
+
+def _sanitize_public_role_response(value: Any) -> Any:
+    """Recursively strip forbidden keys from a role response dict/list."""
+    if isinstance(value, dict):
+        return {
+            k: _sanitize_public_role_response(v)
+            for k, v in value.items()
+            if k not in FORBIDDEN_PUBLIC_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_public_role_response(v) for v in value]
+    return value
+
+
+# Mapping from artifact type name to the flat role_call field name
+_ARTIFACT_FIELD_NAME_MAP: dict[str, str] = {
+    "scout_report": "scout_report_artifact_id",
+    "architect_plan": "architect_plan_artifact_id",
+    "coder_report": "coder_report_artifact_id",
+    "reviewer_report": "reviewer_report_artifact_id",
+    "publisher_instructions": "publisher_instructions_artifact_id",
+}
+
 
 class ConversationStartError(Exception):
     """Raised when starting an OpenHands conversation fails.
@@ -609,11 +635,18 @@ def role_call_start_impl(
         if req_artifact not in input_artifacts:
             missing.append(req_artifact)
     if missing:
+        # Build field name hint for the first missing artifact
+        field_hint = ""
+        first_missing = missing[0]
+        flat_field = _ARTIFACT_FIELD_NAME_MAP.get(first_missing)
+        if flat_field:
+            field_hint = f" Provide {flat_field}."
+
         return {
             "status": "failed",
             "error": {
                 "type": "MissingRequiredArtifact",
-                "message": f"missing required artifact: {missing[0]}",
+                "message": f"missing required artifact: {first_missing}.{field_hint}",
                 "retryable": False,
             },
         }
@@ -1060,14 +1093,14 @@ def role_lifecycle_wait_impl(
                     artifacts_result[key] = _to_public_artifact_ref(
                         stored_artifacts[key], role=role_run.get("role", ""),
                     )
-        return {
+        return _sanitize_public_role_response({
             "status": "completed",
             "role_run_id": role_run.get("role_run_id", ""),
             "run_id": role_run.get("run_id", ""),
             "role": role_run.get("role", ""),
             "control_summary": control_summary or {},
             "artifacts": artifacts_result if artifacts_result else {},
-        }
+        })
 
     # If already failed, return the error
     if role_run.get("status") == "failed":
@@ -1220,14 +1253,14 @@ def role_lifecycle_wait_impl(
                     artifacts_result[key] = _to_public_artifact_ref(
                         stored_artifacts[key], role=role_run.get("role", ""),
                     )
-        return {
+        return _sanitize_public_role_response({
             "status": "completed",
             "role_run_id": role_run.get("role_run_id", ""),
             "run_id": role_run.get("run_id", ""),
             "role": role_run.get("role", ""),
             "control_summary": control_summary or {},
             "artifacts": artifacts_result if artifacts_result else {},
-        }
+        })
 
     # ------------------------------------------------------------------
     # Render and send summary prompt (same conversation)
@@ -1330,7 +1363,7 @@ def role_lifecycle_wait_impl(
             }, ensure_ascii=False),
         )
 
-        return {
+        return _sanitize_public_role_response({
             "status": "completed",
             "role_run_id": role_run_id,
             "run_id": role_run.get("run_id", ""),
@@ -1346,7 +1379,7 @@ def role_lifecycle_wait_impl(
                     "artifact_type": (role_spec.summary_artifact if role_spec else "control_summary"),
                 }, role=role),
             },
-        }
+        })
 
     summary_job_id = (
         summary_conv_response.get("task_id")
@@ -1528,7 +1561,7 @@ def role_lifecycle_wait_impl(
     # ------------------------------------------------------------------
     # Return control summary (public response - no content, no artifact_path)
     # ------------------------------------------------------------------
-    return {
+    return _sanitize_public_role_response({
         "status": "completed",
         "role_run_id": role_run_id,
         "run_id": role_run.get("run_id", ""),
@@ -1546,7 +1579,7 @@ def role_lifecycle_wait_impl(
                 "created_by": role,
             },
         },
-    }
+    })
 
 
 def role_call_impl(

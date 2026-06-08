@@ -358,16 +358,22 @@ class TestRoleCallTool(TestCase):
         result = role_call(
             role="scout",
             user_task="Test task",
-            input_artifacts=[],
-            metadata={"repository": "https://github.com/test/repo"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id="",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         mock_impl.assert_called_once()
         self.assertEqual(result["status"], "running")
 
     @patch("mcp_agent.role_lifecycle.role_call_start_impl")
-    def test_call_with_list_input_artifacts(self, mock_impl):
-        """role_call accepts input_artifacts as list of objects."""
+    def test_call_with_flat_artifact_id(self, mock_impl):
+        """role_call accepts scout_report_artifact_id as flat field."""
         mock_impl.return_value = {
             "role_run_id": "test-run-009-architect-1",
             "run_id": "test-run-009",
@@ -381,10 +387,14 @@ class TestRoleCallTool(TestCase):
         result = role_call(
             role="architect",
             user_task="Plan implementation",
-            input_artifacts=[
-                {"artifact_id": "art_scout_xxx", "artifact_type": "scout_report"},
-            ],
-            metadata={"repository": "https://github.com/test/repo"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id="art_scout_xxx",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         # Verify the normalized dict was passed to role_call_start_impl
@@ -1219,13 +1229,7 @@ class TestNormalizeRoleIntegration(TestCase):
     ):
         """Test 6: role_call accepts the real observed payload shape.
 
-        Real payload from Head of IT logs:
-        {
-            "role": {"name": "scout"},
-            "user_task": {"text": "..."},
-            "metadata": {...},
-            "idempotency_key": {"text": "..."}
-        }
+        Real payload from Head of IT logs uses wrapped scalar values.
         """
         mock_start.return_value = {"task_id": "task-real-1", "conversation_id": "conv-real-1"}
         mock_poll.return_value = {
@@ -1257,10 +1261,13 @@ class TestNormalizeRoleIntegration(TestCase):
             result = role_call(
                 role={"name": "scout"},
                 user_task={"text": "Исследуй репозиторий ..."},
-                metadata={
-                    "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
-                    "feature": "ruby-grpc-client",
-                },
+                repository="https://github.com/metacoma/freeplane_plugin_grpc",
+                feature="ruby-grpc-client",
+                scout_report_artifact_id="",
+                architect_plan_artifact_id="",
+                coder_report_artifact_id="",
+                reviewer_report_artifact_id="",
+                publisher_instructions_artifact_id="",
                 idempotency_key={"text": "scout-freeplane-plugin-grpc-ruby-client"},
             )
 
@@ -1280,10 +1287,10 @@ class TestNormalizeRoleIntegration(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle.render_prompt")
-    def test_wrapped_metadata_values_unwrap(
+    def test_wrapped_repository_feature_values_unwrap(
         self, mock_render, mock_poll, mock_start
     ):
-        """Test 7: wrapped metadata values normalize to plain strings."""
+        """Test 7: wrapped repository/feature values normalize to plain strings."""
         mock_start.return_value = {"task_id": "task-meta-1", "conversation_id": "conv-meta-1"}
         mock_poll.return_value = {
             "status": "completed",
@@ -1313,10 +1320,13 @@ class TestNormalizeRoleIntegration(TestCase):
             result = role_call(
                 role="scout",
                 user_task="Test task",
-                metadata={
-                    "repository": {"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
-                    "feature": {"text": "ruby-grpc-client"},
-                },
+                repository={"text": "https://github.com/metacoma/freeplane_plugin_grpc"},
+                feature={"text": "ruby-grpc-client"},
+                scout_report_artifact_id="",
+                architect_plan_artifact_id="",
+                coder_report_artifact_id="",
+                reviewer_report_artifact_id="",
+                publisher_instructions_artifact_id="",
                 idempotency_key=None,
             )
 
@@ -1510,14 +1520,14 @@ class TestWrappedInputArtifacts(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle.render_prompt")
-    def test_wrapped_input_artifacts_still_works(
+    def test_wrapped_artifact_id_still_works(
         self, mock_render, mock_poll, mock_start, mock_astore_cls
     ):
-        """Test 10: wrapped input_artifacts still work.
+        """Wrapped scout_report_artifact_id still works.
 
         Since role_call is now non-blocking, it returns status: 'running'.
         The test verifies that wrapped artifact_id values are properly
-        resolved and passed to the lifecycle layer.
+        unwrapped and passed to the lifecycle layer.
         """
         # Mock artifact store so get_content_by_id returns content for fake IDs
         mock_store = MagicMock()
@@ -1541,13 +1551,14 @@ class TestWrappedInputArtifacts(TestCase):
         result = role_call(
             role="architect",
             user_task="Plan implementation",
-            input_artifacts=[
-                {
-                    "artifact_id": {"text": "art_scout"},
-                    "artifact_type": {"text": "scout_report"},
-                }
-            ],
-            metadata={"run_id": "test-run-wrapped-art"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id={"text": "art_scout"},
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         # role_call now returns running status (non-blocking)
@@ -1573,8 +1584,659 @@ class TestPublicToolNames(TestCase):
         self.assertNotIn("shttp_role_call", tool_names)
 
 
+# ---------------------------------------------------------------------------
+# Tests — flat role_call (Tests 2-8)
+# ---------------------------------------------------------------------------
+
+class TestScoutFlatCall(TestCase):
+    """Test 2: scout flat call."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_scout_flat_call(self, mock_start):
+        """Scout starts with flat fields, no required artifacts, returns role_run_id."""
+        mock_start.return_value = {"task_id": "task-scout-2", "conversation_id": "conv-scout-2"}
+
+        from mcp_agent.server import role_call
+
+        result = role_call(
+            role="scout",
+            user_task="Research repo",
+            repository="https://github.com/metacoma/freeplane_plugin_grpc",
+            feature="ruby-grpc-client",
+            scout_report_artifact_id="",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="ruby-grpc-client-scout",
+        )
+
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
+        self.assertEqual(result["role"], "scout")
+
+
+class TestArchitectFlatCallMapsScoutReport(TestCase):
+    """Test 3: architect flat call maps scout_report_artifact_id."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_architect_flat_call_maps_scout_report(self, mock_start):
+        """Architect flat call maps scout_report_artifact_id to internal input_artifacts."""
+        mock_start.return_value = {"task_id": "task-arch-3", "conversation_id": "conv-arch-3"}
+
+        from mcp_agent.server import role_call
+
+        # Patch role_call_start_impl to capture the input_artifacts argument
+        captured = {}
+
+        def capture_call(**kwargs):
+            captured["input_artifacts"] = kwargs.get("input_artifacts", {})
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-3",
+                "run_id": "test-run-3",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
+
+        from mcp_agent import role_lifecycle as rl
+        original_impl = rl.role_call_start_impl
+        rl.role_call_start_impl = capture_call
+
+        try:
+            result = role_call(
+                role="architect",
+                user_task="Plan Ruby client",
+                repository="https://github.com/metacoma/freeplane_plugin_grpc",
+                feature="ruby-grpc-client",
+                scout_report_artifact_id="art_scout",
+                idempotency_key="ruby-grpc-client-architect",
+            )
+
+            self.assertEqual(result["status"], "running")
+            self.assertEqual(captured["input_artifacts"], {"scout_report": "art_scout"})
+        finally:
+            rl.role_call_start_impl = original_impl
+
+
+class TestArchitectMissingScoutReport(TestCase):
+    """Test 4: architect missing scout_report_artifact_id."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_architect_missing_scout_report(self, mock_start):
+        """Architect without scout_report_artifact_id returns MissingRequiredArtifact."""
+        from mcp_agent.server import role_call
+
+        result = role_call(
+            role="architect",
+            user_task="Plan Ruby client",
+            scout_report_artifact_id="",
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingRequiredArtifact")
+        self.assertIn("scout_report", result["error"]["message"])
+        self.assertIn("Provide scout_report_artifact_id", result["error"]["message"])
+
+
+class TestCoderFlatCallMapsTwoArtifacts(TestCase):
+    """Test 5: coder flat call maps two artifacts."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_coder_flat_call_maps_two_artifacts(self, mock_start):
+        """Coder flat call maps scout_report + architect_plan."""
+        captured = {}
+
+        def capture_call(**kwargs):
+            captured["input_artifacts"] = kwargs.get("input_artifacts", {})
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-5",
+                "run_id": "test-run-5",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
+
+        from mcp_agent import role_lifecycle as rl
+        original_impl = rl.role_call_start_impl
+        rl.role_call_start_impl = capture_call
+
+        try:
+            from mcp_agent.server import role_call
+
+            result = role_call(
+                role="coder",
+                user_task="Implement Ruby client",
+                scout_report_artifact_id="art_scout",
+                architect_plan_artifact_id="art_architect",
+            )
+
+            self.assertEqual(result["status"], "running")
+            self.assertEqual(
+                captured["input_artifacts"],
+                {"scout_report": "art_scout", "architect_plan": "art_architect"},
+            )
+        finally:
+            rl.role_call_start_impl = original_impl
+
+
+class TestReviewerFlatCallMapsThreeArtifacts(TestCase):
+    """Test 6: reviewer flat call maps three artifacts."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_reviewer_flat_call_maps_three_artifacts(self, mock_start):
+        """Reviewer flat call maps scout_report + architect_plan + coder_report."""
+        captured = {}
+
+        def capture_call(**kwargs):
+            captured["input_artifacts"] = kwargs.get("input_artifacts", {})
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-6",
+                "run_id": "test-run-6",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
+
+        from mcp_agent import role_lifecycle as rl
+        original_impl = rl.role_call_start_impl
+        rl.role_call_start_impl = capture_call
+
+        try:
+            from mcp_agent.server import role_call
+
+            result = role_call(
+                role="reviewer",
+                user_task="Review Ruby client",
+                scout_report_artifact_id="art_scout",
+                architect_plan_artifact_id="art_architect",
+                coder_report_artifact_id="art_coder",
+            )
+
+            self.assertEqual(result["status"], "running")
+            self.assertEqual(
+                captured["input_artifacts"],
+                {
+                    "scout_report": "art_scout",
+                    "architect_plan": "art_architect",
+                    "coder_report": "art_coder",
+                },
+            )
+        finally:
+            rl.role_call_start_impl = original_impl
+
+
+class TestPublisherFlatCallMapsReviewerReport(TestCase):
+    """Test 7: publisher flat call maps reviewer_report."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_publisher_flat_call_maps_reviewer_report(self, mock_start):
+        """Publisher flat call maps reviewer_report."""
+        captured = {}
+
+        def capture_call(**kwargs):
+            captured["input_artifacts"] = kwargs.get("input_artifacts", {})
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-7",
+                "run_id": "test-run-7",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
+
+        from mcp_agent import role_lifecycle as rl
+        original_impl = rl.role_call_start_impl
+        rl.role_call_start_impl = capture_call
+
+        try:
+            from mcp_agent.server import role_call
+
+            result = role_call(
+                role="publisher",
+                user_task="Prepare PR instructions",
+                reviewer_report_artifact_id="art_reviewer",
+            )
+
+            self.assertEqual(result["status"], "running")
+            self.assertEqual(
+                captured["input_artifacts"],
+                {"reviewer_report": "art_reviewer"},
+            )
+        finally:
+            rl.role_call_start_impl = original_impl
+
+
+class TestWrappedScalarValues(TestCase):
+    """Test 8: wrapped scalar values."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_wrapped_scalar_values(self, mock_start):
+        """Wrapped scalar values are normalized correctly."""
+        captured = {}
+
+        def capture_call(**kwargs):
+            captured["role"] = kwargs.get("role")
+            captured["user_task"] = kwargs.get("user_task")
+            captured["idempotency_key"] = kwargs.get("idempotency_key")
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-8",
+                "run_id": "test-run-8",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
+
+        from mcp_agent import role_lifecycle as rl
+        original_impl = rl.role_call_start_impl
+        rl.role_call_start_impl = capture_call
+
+        try:
+            from mcp_agent.server import role_call
+
+            result = role_call(
+                role={"text": "architect"},
+                user_task={"text": "Plan Ruby client"},
+                scout_report_artifact_id={"text": "art_scout"},
+                idempotency_key={"idempotency_key": "ruby-grpc-client-architect"},
+            )
+
+            self.assertEqual(result["status"], "running")
+            self.assertEqual(captured["role"], "architect")
+            self.assertEqual(captured["user_task"], "Plan Ruby client")
+            self.assertEqual(captured["idempotency_key"], "ruby-grpc-client-architect")
+        finally:
+            rl.role_call_start_impl = original_impl
+
+
+class TestBadNestedPayloadRejection(TestCase):
+    """Test 9: old nested payload in ANY field is rejected with InvalidFlatRoleCallPayload."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    def _bad_payload(self):
+        return {
+            "role": "architect",
+            "user_task": "Plan Ruby client",
+            "input_artifacts": [
+                {"artifact_id": "art_xxx", "artifact_type": "scout_report"}
+            ],
+            "metadata": {"repository": "https://github.com/..."},
+            "idempotency_key": "ruby-grpc-client-architect",
+        }
+
+    def _assert_invalid_flat(self, result):
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidFlatRoleCallPayload")
+        self.assertIn("flat scalar fields", result["error"]["message"])
+
+    def test_bad_nested_in_role(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role=self._bad_payload(), user_task="Plan"))
+
+    def test_bad_nested_in_user_task(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="architect", user_task=self._bad_payload()))
+
+    def test_bad_nested_in_repository(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="architect", user_task="Plan", repository=self._bad_payload()))
+
+    def test_bad_nested_in_feature(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="architect", user_task="Plan", feature=self._bad_payload()))
+
+    def test_bad_nested_in_scout_report_artifact_id(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="architect", user_task="Plan", scout_report_artifact_id=self._bad_payload()))
+
+    def test_bad_nested_in_architect_plan_artifact_id(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="coder", user_task="Code", scout_report_artifact_id="art_scout", architect_plan_artifact_id=self._bad_payload()))
+
+    def test_bad_nested_in_coder_report_artifact_id(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="reviewer", user_task="Review", scout_report_artifact_id="art_scout", architect_plan_artifact_id="art_architect", coder_report_artifact_id=self._bad_payload()))
+
+    def test_bad_nested_in_reviewer_report_artifact_id(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="publisher", user_task="Publish", scout_report_artifact_id="art_scout", architect_plan_artifact_id="art_architect", coder_report_artifact_id="art_coder", reviewer_report_artifact_id=self._bad_payload()))
+
+    def test_bad_nested_in_publisher_instructions_artifact_id(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="publisher", user_task="Publish", scout_report_artifact_id="art_scout", architect_plan_artifact_id="art_architect", coder_report_artifact_id="art_coder", reviewer_report_artifact_id="art_reviewer", publisher_instructions_artifact_id=self._bad_payload()))
+
+    def test_bad_nested_in_idempotency_key(self):
+        from mcp_agent.server import role_call
+        self._assert_invalid_flat(role_call(role="architect", user_task="Plan", idempotency_key=self._bad_payload()))
+
+
+class TestInvalidArtifactId(TestCase):
+    """Test 8: invalid artifact id returns InvalidArtifactId."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    def test_invalid_scout_report_artifact_id(self):
+        from mcp_agent.server import role_call
+        result = role_call(
+            role="architect",
+            user_task="Plan",
+            scout_report_artifact_id="not-an-artifact",
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidArtifactId")
+        self.assertIn("scout_report_artifact_id", result["error"]["message"])
+        self.assertIn("art_", result["error"]["message"])
+
+    def test_invalid_architect_plan_artifact_id(self):
+        from mcp_agent.server import role_call
+        result = role_call(
+            role="coder",
+            user_task="Code",
+            scout_report_artifact_id="art_scout",
+            architect_plan_artifact_id="not-an-artifact",
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidArtifactId")
+        self.assertIn("architect_plan_artifact_id", result["error"]["message"])
+
+
+class TestBadNestedPayloadInArtifactField(TestCase):
+    """Test 10: old nested payload in artifact field is rejected."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    def test_bad_nested_in_scout_report_artifact_id(self):
+        from mcp_agent.server import role_call
+        bad_payload = {
+            "role": "architect",
+            "input_artifacts": [
+                {"artifact_id": "art_scout", "artifact_type": "scout_report"}
+            ],
+        }
+        result = role_call(
+            role="architect",
+            user_task="Plan",
+            scout_report_artifact_id=bad_payload,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidFlatRoleCallPayload")
+
+    def test_bad_nested_in_user_task(self):
+        from mcp_agent.server import role_call
+        bad_payload = {
+            "role": "architect",
+            "user_task": "Plan",
+            "input_artifacts": [{"artifact_id": "art_scout"}],
+            "metadata": {"repository": "..."},
+            "idempotency_key": "x",
+        }
+        result = role_call(
+            role="architect",
+            user_task=bad_payload,
+            scout_report_artifact_id="art_scout",
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidFlatRoleCallPayload")
+
+    def test_bad_nested_in_idempotency_key(self):
+        from mcp_agent.server import role_call
+        bad_payload = {
+            "role": "architect",
+            "user_task": "Plan",
+            "input_artifacts": [{"artifact_id": "art_scout"}],
+            "metadata": {"repository": "..."},
+            "idempotency_key": "x",
+        }
+        result = role_call(
+            role="architect",
+            user_task="Plan",
+            scout_report_artifact_id="art_scout",
+            idempotency_key=bad_payload,
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidFlatRoleCallPayload")
+
+
+class TestRoleWaitStillWorks(TestCase):
+    """Test 10: role_wait still works."""
+
+    def test_role_wait_is_public_tool(self):
+        """role_wait is a public MCP tool."""
+        from mcp_agent.server import MCP as server_mcp
+
+        tools = list(server_mcp._tool_manager.list_tools())
+        tool_names = [t.name for t in tools]
+
+        self.assertIn("role_wait", tool_names)
+
+    def test_no_legacy_v2_tools(self):
+        """Legacy/shttp/v2/artifact tools are NOT public."""
+        from mcp_agent.server import MCP as server_mcp
+
+        tools = list(server_mcp._tool_manager.list_tools())
+        tool_names = [t.name for t in tools]
+
+        legacy_tools = [
+            "shttp_role_call",
+            "shttp_role_list",
+            "shttp_role_start_v2",
+            "shttp_role_wait_v2",
+            "shttp_role_result_v2",
+            "role_start",
+            "role_status",
+            "role_result",
+            "artifact_get",
+        ]
+        for tool in legacy_tools:
+            self.assertNotIn(tool, tool_names,
+                           f"{tool} should NOT be a public MCP tool")
+
+
 if __name__ == "__main__":
     unittest_main()
+
+
+# ---------------------------------------------------------------------------
+# Tests — role_wait sanitized response (Test 11)
+# ---------------------------------------------------------------------------
+
+class TestRoleWaitSanitizedResponse(TestCase):
+    """Test 11: role_wait completed response is sanitized."""
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_completed_response_strips_artifact_path_content(self, mock_start):
+        from mcp_agent.server import role_call
+        from mcp_agent.role_store import RoleRunStore
+
+        # Start a role to get a role_run_id
+        mock_start.return_value = {"task_id": "task-1", "conversation_id": "conv-1"}
+        result = role_call(
+            role="scout",
+            user_task="Test",
+            repository="https://github.com/test/repo",
+            idempotency_key="test-scout-1",
+        )
+        self.assertEqual(result["status"], "running")
+        role_run_id = result["role_run_id"]
+
+        # Manually update the stored role run to simulate completed state
+        # with artifact metadata containing artifact_path and content
+        role_store = RoleRunStore()
+        role_store.update_role_run(
+            role_run_id,
+            status="completed",
+            result_summary=json.dumps({"summary": "done"}),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_id": "art_scout",
+                    "artifact_path": "/tmp/secret_path",
+                    "content": "secret_content",
+                },
+                "summary": {
+                    "artifact_id": "art_summary",
+                    "artifact_path": "/tmp/secret_summary",
+                    "content": "secret_summary_content",
+                },
+            }),
+        )
+
+        # Call role_wait
+        from mcp_agent.server import role_wait
+        wait_result = role_wait(role_run_id=role_run_id)
+
+        # Verify sanitized response
+        self.assertEqual(wait_result["status"], "completed")
+        # Must contain artifact_id
+        self.assertIn("artifacts", wait_result)
+        artifacts = wait_result.get("artifacts", {})
+        for art_key in ("primary", "summary"):
+            if art_key in artifacts:
+                art = artifacts[art_key]
+                self.assertIn("artifact_id", art)
+                # Must NOT contain forbidden keys
+                self.assertNotIn("artifact_path", art)
+                self.assertNotIn("content", art)
+
+        # Top-level must NOT contain forbidden keys
+        for key in ("artifact_path", "content", "full_result", "result"):
+            self.assertNotIn(key, wait_result)
 
 
 # ---------------------------------------------------------------------------
@@ -1607,8 +2269,14 @@ class TestRoleCallStartReturnsRunning(TestCase):
         result = role_call(
             role="scout",
             user_task="Test task",
-            input_artifacts={},
-            metadata={"repository": "https://github.com/test/repo"},
+            repository="https://github.com/test/repo",
+            feature="",
+            scout_report_artifact_id="",
+            architect_plan_artifact_id="",
+            coder_report_artifact_id="",
+            reviewer_report_artifact_id="",
+            publisher_instructions_artifact_id="",
+            idempotency_key="",
         )
 
         self.assertEqual(result["status"], "running")
