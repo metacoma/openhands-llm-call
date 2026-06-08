@@ -1465,17 +1465,17 @@ def _normalize_mcp_string(v: Any) -> str:
     return str(unwrapped)
 
 
-def _normalize_mcp_int(v: Any) -> int:
+def _normalize_mcp_int(v: Any) -> int | None:
     """Normalize an int argument that may be wrapped or string-encoded."""
     if v is None:
-        return 0  # will use default from function signature
+        return None  # Let caller use normalize_int(value, default=...) to pick default
     return normalize_int(v, default=0)
 
 
-def _normalize_mcp_bool(v: Any) -> bool:
+def _normalize_mcp_bool(v: Any) -> bool | None:
     """Normalize a bool argument that may be wrapped or string-encoded."""
     if v is None:
-        return False  # will use default from function signature
+        return None  # Let caller use normalize_bool(value, default=...) to pick default
     return normalize_bool(v, default=False)
 
 
@@ -1876,8 +1876,8 @@ def role_wait(
             },
         }
 
-    normalized_timeout = normalize_int(_timeout, default=None)
-    normalized_poll_interval = normalize_int(_poll, default=None)
+    normalized_timeout = normalize_int(_timeout, default=1800)
+    normalized_poll_interval = normalize_int(_poll, default=30)
     normalized_return_result = normalize_bool(return_result, default=True)
 
     # Call the new lifecycle-aware role_wait implementation
@@ -2255,8 +2255,8 @@ def _internal_role_wait(
 
     # If not completed, poll using legacy wait (it handles OpenHands task polling)
     # This path is rarely taken because start_v2 is synchronous
-    normalized_timeout = normalize_int(timeout_seconds, default=None)
-    normalized_poll_interval = normalize_int(poll_interval_seconds, default=None)
+    normalized_timeout = normalize_int(timeout_seconds, default=1800)
+    normalized_poll_interval = normalize_int(poll_interval_seconds, default=30)
 
     return _role_tools.role_wait_impl(
         role_run_id=normalized_role_run_id,
@@ -2516,8 +2516,6 @@ def role_list() -> dict:
             r2_output = r2.get("output_artifact", "")
             if r2_output and r2_output in req:
                 requires_list.append(r2["name"])
-            elif not req and r2["name"] == "scout":
-                requires_list.append(r2["name"])
         workflow_steps.append({
             "step": i,
             "role": r["name"],
@@ -2658,7 +2656,10 @@ def _invalid_flat_role_call_error(field_name: str) -> dict:
             "type": "InvalidFlatRoleCallPayload",
             "message": (
                 f"Field '{field_name}' must be a plain scalar value, not an object. "
-                "Do not pass {{\"text\": \"...\"}} wrappers or nested payloads. "
+                "Accidental scalar wrappers like {{\"text\": \"...\"}}, {{\"value\": \"...\"}}, "
+                "or {{\"default\": \"...\"}} are normalized by the server. "
+                "This error means a real nested payload was passed: "
+                "metadata/input_artifacts/context/artifact content/full_result/messages/tool_calls. "
                 "Pass artifact ids in dedicated fields: scout_report_artifact_id, "
                 "architect_plan_artifact_id, coder_report_artifact_id, "
                 "reviewer_report_artifact_id, publisher_instructions_artifact_id."

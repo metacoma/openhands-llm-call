@@ -75,8 +75,9 @@ class TestNormalizeMcpInt(unittest.TestCase):
     def test_string_int(self):
         self.assertEqual(_normalize_mcp_int("1800"), 1800)
 
-    def test_none_returns_zero(self):
-        self.assertEqual(_normalize_mcp_int(None), 0)
+    def test_none_returns_none(self):
+        """_normalize_mcp_int(None) returns None so callers can use normalize_int(value, default=...)."""
+        self.assertIsNone(_normalize_mcp_int(None))
 
     def test_float(self):
         self.assertEqual(_normalize_mcp_int(1800.5), 1800)
