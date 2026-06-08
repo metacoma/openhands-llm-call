@@ -1767,80 +1767,7 @@ def role_wait(
     timeout_seconds: Any = None,
     poll_interval_seconds: Any = None,
 ) -> dict:
-    """Wait for a role run to complete (polling + summary).
-
-    This is the **blocking** half of the two-step pattern:
-    ``role_call`` → ``role_wait``.
-
-    **Pass ONLY the ``role_run_id`` string returned by ``role_call``.**
-
-    Correct::
-
-        {"role_run_id":"20260607-xxx-scout-1","timeout_seconds":1800,"poll_interval_seconds":30}
-
-    Incorrect::
-
-        {"role_run_id":{"role_run_id":"20260607-xxx-scout-1","status":"running"}}
-
-    If your previous ``role_wait`` call timed out, retry
-    ``role_wait`` with the same ``role_run_id``.
-    Do **not** start the role again.
-
-    Args:
-        role_run_id: The role run ID returned by ``role_call``.
-            Accepts both plain strings and dict-wrapped values.
-        timeout_seconds: Maximum seconds to wait (default 1800).
-            Override with env var ``OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS``.
-        poll_interval_seconds: Seconds between status checks (default 30).
-            Override with env var ``OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS``.
-
-    Returns
-    -------
-    dict
-        One of:
-
-        **Completed**::
-
-            {
-                "status": "completed",
-                "role_run_id": "...",
-                "run_id": "...",
-                "role": "...",
-                "control_summary": {...},
-                "artifacts": {
-                    "primary": {"artifact_id": "...", "artifact_type": "...", "created_by": "..."},
-                    "summary": {"artifact_id": "...", "artifact_type": "...", "created_by": "..."}
-                }
-            }
-
-        **Timeout** (role still running)::
-
-            {
-                "status": "running",
-                "role_run_id": "...",
-                "run_id": "...",
-                "role": "...",
-                "timeout": true,
-                "message": "Role is still running. Call role_wait again with the same role_run_id."
-            }
-
-        **Failed**::
-
-            {
-                "status": "failed",
-                "role_run_id": "...",
-                "run_id": "...",
-                "role": "...",
-                "error": {"type": "...", "message": "...", "retryable": true}
-            }
-
-    Example::
-
-        {
-            "role_run_id": "20260607-xxx-scout-1",
-            "timeout_seconds": 1800,
-            "poll_interval_seconds": 30
-        }
+    """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result.
     """
     # Defensive parsing for nested LLM mistakes.
     # When the model passes the full role_call response as role_run_id,
@@ -2414,41 +2341,72 @@ def _internal_role_result(
 
 @MCP.tool()
 def role_list() -> dict:
-    """List available roles and their contracts for ``role_call``.
-
-    Returns a minimal ``roles`` list with the fields Head of IT needs:
-    name, readonly, requires_artifacts, output_artifact_type.
-
-    Example::
-
-        {
-            "roles": [
-                {
-                    "name": "scout",
-                    "readonly": true,
-                    "requires_artifacts": [],
-                    "output_artifact_type": "scout_report"
-                },
-                {
-                    "name": "architect",
-                    "readonly": true,
-                    "requires_artifacts": ["scout_report"],
-                    "output_artifact_type": "architect_plan"
-                }
-            ]
-        }
+    """List available specialist roles and return usage/routing hints for Head of IT. Call this first to learn flat role_call artifact fields and workflow.
     """
     roles = list_roles()
-    return {
-        "roles": [
-            {
-                "name": r["name"],
-                "readonly": r["readonly"],
-                "requires_artifacts": r.get("requires_artifacts", []),
-                "output_artifact_type": r.get("output_artifact", ""),
-            }
-            for r in roles
+
+    # Compute required_flat_fields from _ARTIFACT_FIELD_NAME_MAP
+    def _compute_required_flat_fields(requires_artifacts):
+        return [
+            _ARTIFACT_FIELD_NAME_MAP.get(art, art + "_artifact_id")
+            for art in requires_artifacts
         ]
+
+    roles_with_flat_fields = []
+    for r in roles:
+        req = r.get("requires_artifacts", [])
+        roles_with_flat_fields.append({
+            "name": r["name"],
+            "description": r.get("description", ""),
+            "readonly": r["readonly"],
+            "requires_artifacts": req,
+            "required_flat_fields": _compute_required_flat_fields(req),
+            "output_artifact_type": r.get("output_artifact", ""),
+        })
+
+    return {
+        "roles": roles_with_flat_fields,
+        "public_tools": ["role_list", "role_call", "role_wait"],
+        "workflow": [
+            "Call role_list first.",
+            "For each step, call role_call once with flat scalar fields.",
+            "Then call role_wait with returned role_run_id.",
+            "If role_wait returns running timeout, call role_wait again with same role_run_id.",
+            "When completed, pass artifacts.primary.artifact_id to next role using flat artifact_id field.",
+            "Never call role_call again for polling.",
+        ],
+        "flat_role_call_contract": {
+            "use_only_flat_scalar_fields": True,
+            "forbidden_fields": [
+                "metadata",
+                "input_artifacts",
+                "artifact_content",
+                "full_result",
+                "artifact_path",
+            ],
+            "artifact_fields": dict(_ARTIFACT_FIELD_NAME_MAP),
+        },
+        "routing_examples": {
+            "architect_after_scout": {
+                "role": "architect",
+                "scout_report_artifact_id": "<artifacts.primary.artifact_id from scout role_wait>",
+            },
+            "coder_after_architect": {
+                "role": "coder",
+                "scout_report_artifact_id": "<scout_report artifact id>",
+                "architect_plan_artifact_id": "<architect_plan artifact id>",
+            },
+            "reviewer_after_coder": {
+                "role": "reviewer",
+                "scout_report_artifact_id": "<scout_report artifact id>",
+                "architect_plan_artifact_id": "<architect_plan artifact id>",
+                "coder_report_artifact_id": "<coder_report artifact id>",
+            },
+            "publisher_after_pass": {
+                "role": "publisher",
+                "reviewer_report_artifact_id": "<reviewer_report artifact id>",
+            },
+        },
     }
 
 
@@ -2514,94 +2472,7 @@ def role_call(
     publisher_instructions_artifact_id: Any = "",
     idempotency_key: Any = None,
 ) -> dict:
-    """Start a specialist role and return quickly with ``role_run_id``.
-
-    This is the **only** public tool Head of IT uses to invoke a worker
-    role.  It starts the role and returns immediately with
-    ``status: "running"`` and ``role_run_id`` — it does **NOT** wait
-    for completion.
-
-    Use ``role_wait`` with the returned ``role_run_id`` to poll and
-    wait for the final ``control_summary`` plus ``artifact_id``
-    references.
-
-    **All fields are plain scalar values.** Do NOT pass nested dicts or lists.
-
-    Parameters
-    ----------
-    role : str
-        The role name (e.g. ``"scout"``, ``"architect"``, ``"coder"``).
-    user_task : str
-        The user task text. Required and must be non-empty.
-    repository : str
-        Repository URL (e.g. ``"https://github.com/..."``).
-    feature : str
-        Feature name (e.g. ``"ruby-grpc-client"``).
-    scout_report_artifact_id : str
-        Artifact ID of the scout report (e.g. ``"art_..."``).
-    architect_plan_artifact_id : str
-        Artifact ID of the architect plan.
-    coder_report_artifact_id : str
-        Artifact ID of the coder report.
-    reviewer_report_artifact_id : str
-        Artifact ID of the reviewer report.
-    publisher_instructions_artifact_id : str
-        Artifact ID of the publisher instructions.
-    idempotency_key : str
-        Optional stable key to deduplicate retried calls.
-
-    Returns
-    -------
-    dict
-        **Running** (new role started)::
-
-            {
-                "status": "running",
-                "role_run_id": "...",
-                "run_id": "...",
-                "role": "...",
-                "conversation_id": "...",
-                "message": "Role started. Use role_wait with role_run_id."
-            }
-
-        **Dedup hit** (existing run)::
-
-            {
-                "status": "running" | "completed" | "failed",
-                "role_run_id": "...",
-                "run_id": "...",
-                "role": "...",
-                "_idempotent": True,
-                ...
-            }
-
-        **Error** (validation failure)::
-
-            {
-                "status": "failed",
-                "error": {"type": "...", "message": "...", "retryable": bool}
-            }
-
-    Example — scout::
-
-        {
-            "role": "scout",
-            "user_task": "Research repo",
-            "repository": "https://github.com/...",
-            "feature": "ruby-grpc-client",
-            "idempotency_key": "ruby-grpc-client-scout"
-        }
-
-    Example — architect::
-
-        {
-            "role": "architect",
-            "user_task": "Plan Ruby client",
-            "repository": "https://github.com/...",
-            "feature": "ruby-grpc-client",
-            "scout_report_artifact_id": "art_20260608-xxx_scout_report",
-            "idempotency_key": "ruby-grpc-client-architect"
-        }
+    """Start one specialist role. Use flat scalar fields only: role, user_task, repository, feature, *_artifact_id, idempotency_key. Do not pass metadata, input_artifacts, nested JSON, artifact content, or full_result. After role_call returns role_run_id, call role_wait with the same role_run_id. Do not call role_call again for polling. Artifact routing: architect needs scout_report_artifact_id; coder needs scout_report_artifact_id + architect_plan_artifact_id; reviewer needs scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id; publisher needs reviewer_report_artifact_id. For detailed routing, call role_list.
     """
     # ------------------------------------------------------------------
     # Debug logging: raw MCP input shape

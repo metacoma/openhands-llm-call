@@ -7,6 +7,55 @@ OpenHands LLM Call FastAPI backend.  A Head-of-IT agent drives a pipeline of
 specialized worker roles (scout → architect → coder → reviewer → publisher)
 through MCP tool calls.
 
+## Head of IT public MCP flow
+
+The Head of IT orchestrates specialist roles through exactly **three** public MCP tools:
+
+- `role_list` — List available roles and get routing documentation
+- `role_call` — Start exactly one specialist role
+- `role_wait` — Wait for a role to complete (polling)
+
+### role_call uses flat scalar fields only
+
+Pass **only** plain scalar string values. Do NOT pass:
+
+- `metadata` (dict/object)
+- `input_artifacts` (list/dict)
+- artifact content
+
+Pass artifact ids via dedicated flat fields:
+
+- `scout_report_artifact_id` — from scout `artifacts.primary.artifact_id`
+- `architect_plan_artifact_id` — from architect `artifacts.primary.artifact_id`
+- `coder_report_artifact_id` — from coder `artifacts.primary.artifact_id`
+- `reviewer_report_artifact_id` — from reviewer `artifacts.primary.artifact_id`
+- `publisher_instructions_artifact_id` — from publisher `artifacts.primary.artifact_id`
+
+### Example: architect step
+
+```json
+{
+  "role": "architect",
+  "user_task": "Plan Ruby gRPC client",
+  "repository": "https://github.com/metacoma/freeplane_plugin_grpc",
+  "feature": "ruby-grpc-client",
+  "scout_report_artifact_id": "art_20260608-xxx_scout_report",
+  "idempotency_key": "ruby-grpc-client-architect"
+}
+```
+
+### Example: role_wait step
+
+```json
+{
+  "role_run_id": "20260608-xxx-architect-1",
+  "timeout_seconds": 1800,
+  "poll_interval_seconds": 30
+}
+```
+
+If the response returns `status: "running"` with `timeout: true`, call `role_wait` again with the **same** `role_run_id`. Never call `role_call` again for polling.
+
 ## Architecture
 
 ```
