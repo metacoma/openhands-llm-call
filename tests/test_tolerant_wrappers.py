@@ -75,10 +75,6 @@ class TestNormalizeMcpInt(unittest.TestCase):
     def test_string_int(self):
         self.assertEqual(_normalize_mcp_int("1800"), 1800)
 
-    def test_none_returns_none(self):
-        """_normalize_mcp_int(None) returns None so callers can use normalize_int(value, default=...)."""
-        self.assertIsNone(_normalize_mcp_int(None))
-
     def test_float(self):
         self.assertEqual(_normalize_mcp_int(1800.5), 1800)
 
@@ -112,9 +108,6 @@ class TestNormalizeMcpBool(unittest.TestCase):
 
     def test_string_0(self):
         self.assertFalse(_normalize_mcp_bool("0"))
-
-    def test_none_returns_false(self):
-        self.assertFalse(_normalize_mcp_bool(None))
 
 
 class TestNormalizeMcpRole(unittest.TestCase):
@@ -404,6 +397,34 @@ class TestTolerantWrapperIntegration(unittest.TestCase):
         self.assertEqual(call_kwargs["timeout_seconds"], 1800)
         self.assertEqual(call_kwargs["poll_interval_seconds"], 30)
         self.assertFalse(call_kwargs["return_result"])
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_accepts_null_uses_defaults(self, mock_impl):
+        """role_wait with explicit null params uses function-signature defaults.
+
+        When LLM passes null for optional role_wait parameters, Pydantic's
+        BeforeValidator raises PydanticUseDefault, causing Pydantic to use
+        the default from the function signature:
+          timeout_seconds=1800, poll_interval_seconds=30, return_result=True
+        """
+        mock_impl.return_value = {"status": "completed"}
+
+        from mcp_agent.server import role_wait
+
+        result = role_wait(
+            role_run_id={"value": "run-123"},
+            timeout_seconds=None,
+            poll_interval_seconds=None,
+            return_result=None,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        mock_impl.assert_called_once()
+        call_kwargs = mock_impl.call_args[1]
+        self.assertEqual(call_kwargs["role_run_id"], "run-123")
+        self.assertEqual(call_kwargs["timeout_seconds"], 1800)
+        self.assertEqual(call_kwargs["poll_interval_seconds"], 30)
+        self.assertTrue(call_kwargs["return_result"])
 
     @patch("mcp_agent.role_lifecycle.role_call_start_impl")
     def test_role_call_rejects_nested_metadata(self, mock_impl):

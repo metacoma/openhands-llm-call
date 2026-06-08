@@ -19,6 +19,7 @@ import requests
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from pydantic import BeforeValidator
+from pydantic_core import PydanticUseDefault
 
 from .artifact_store import ArtifactStore
 from .task_store import TaskStore
@@ -1465,17 +1466,25 @@ def _normalize_mcp_string(v: Any) -> str:
     return str(unwrapped)
 
 
-def _normalize_mcp_int(v: Any) -> int | None:
-    """Normalize an int argument that may be wrapped or string-encoded."""
+def _normalize_mcp_int(v: Any) -> int:
+    """Normalize an int argument that may be wrapped or string-encoded.
+
+    Raises PydanticUseDefault when v is None, so Pydantic uses the
+    function-signature default (e.g., 1800 for timeout_seconds).
+    """
     if v is None:
-        return None  # Let caller use normalize_int(value, default=...) to pick default
+        raise PydanticUseDefault()
     return normalize_int(v, default=0)
 
 
-def _normalize_mcp_bool(v: Any) -> bool | None:
-    """Normalize a bool argument that may be wrapped or string-encoded."""
+def _normalize_mcp_bool(v: Any) -> bool:
+    """Normalize a bool argument that may be wrapped or string-encoded.
+
+    Raises PydanticUseDefault when v is None, so Pydantic uses the
+    function-signature default (e.g., True for return_result).
+    """
     if v is None:
-        return None  # Let caller use normalize_bool(value, default=...) to pick default
+        raise PydanticUseDefault()
     return normalize_bool(v, default=False)
 
 
