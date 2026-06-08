@@ -714,6 +714,11 @@ def role_call_start_impl(
             }
 
         if not content.strip():
+            logger.debug(
+                "ArtifactReadError artifact_type=%s artifact_id=%s",
+                artifact_name,
+                ref_str,
+            )
             return {
                 "status": "failed",
                 "error": {
