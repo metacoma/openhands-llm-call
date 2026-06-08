@@ -27,7 +27,7 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         import mcp_agent.server as server_mod
         server_mod._store = None
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_nested_role_run_id_with_nested_args(self, mock_impl):
         """role_wait extracts role_run_id and nested args from a dict."""
         mock_impl.return_value = {"status": "completed"}
@@ -39,7 +39,6 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
                 "role_run_id": "abc-scout-1",
                 "timeout_seconds": 600,
                 "poll_interval_seconds": 15,
-                "return_result": True,
             },
         )
 
@@ -49,9 +48,8 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         self.assertEqual(call_kwargs["role_run_id"], "abc-scout-1")
         self.assertEqual(call_kwargs["timeout_seconds"], 600)
         self.assertEqual(call_kwargs["poll_interval_seconds"], 15)
-        self.assertTrue(call_kwargs["return_result"])
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_text_wrappers_for_all_args(self, mock_impl):
         """role_wait handles {\"text\": ...} wrappers for all args."""
         mock_impl.return_value = {"status": "completed"}
@@ -62,7 +60,6 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
             role_run_id={"text": "abc-scout-1"},
             timeout_seconds={"text": "600"},
             poll_interval_seconds={"text": "15"},
-            return_result={"text": "true"},
         )
 
         self.assertEqual(result["status"], "completed")
@@ -71,9 +68,8 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         self.assertEqual(call_kwargs["role_run_id"], "abc-scout-1")
         self.assertEqual(call_kwargs["timeout_seconds"], 600)
         self.assertEqual(call_kwargs["poll_interval_seconds"], 15)
-        self.assertTrue(call_kwargs["return_result"])
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_plain_string_role_run_id_still_works(self, mock_impl):
         """role_wait with plain string role_run_id still works."""
         mock_impl.return_value = {"status": "completed"}
@@ -84,7 +80,6 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
             role_run_id="abc-scout-1",
             timeout_seconds=300,
             poll_interval_seconds=10,
-            return_result=False,
         )
 
         self.assertEqual(result["status"], "completed")
@@ -92,9 +87,8 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         call_kwargs = mock_impl.call_args[1]
         self.assertEqual(call_kwargs["role_run_id"], "abc-scout-1")
         self.assertEqual(call_kwargs["timeout_seconds"], 300)
-        self.assertFalse(call_kwargs["return_result"])
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_nested_role_run_id_without_nested_args(self, mock_impl):
         """role_wait extracts role_run_id from nested dict without nested args."""
         mock_impl.return_value = {"status": "completed"}
@@ -113,7 +107,7 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         call_kwargs = mock_impl.call_args[1]
         self.assertEqual(call_kwargs["role_run_id"], "abc-scout-1")
 
-    @patch("mcp_agent.server._role_tools.role_wait_impl")
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_mixed_wrappers_and_plain(self, mock_impl):
         """role_wait handles mixed plain and wrapped args."""
         mock_impl.return_value = {"status": "completed"}
@@ -124,7 +118,6 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
             role_run_id={"text": "abc-scout-1"},
             timeout_seconds=300,
             poll_interval_seconds={"text": "10"},
-            return_result=True,
         )
 
         self.assertEqual(result["status"], "completed")

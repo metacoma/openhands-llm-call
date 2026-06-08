@@ -2,6 +2,7 @@
 """FastAPI server wrapping openhands_llm_call.py logic."""
 
 import io
+import logging
 import os
 import sys
 import contextlib
@@ -13,6 +14,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import openhands_llm_call as oh
+
+logger = logging.getLogger("openhands-llm")
 
 # ---------------------------------------------------------------------------
 # Config / defaults

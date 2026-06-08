@@ -18,7 +18,7 @@ User / Head-of-IT
               │   openhands_get_task_result, openhands_get_task_events,
               │   openhands_cancel_task, call_llm, check_health, check_job
               ├── Public role tools
-              │   role_list, role_call
+              │   role_list, role_call, role_wait
               ├── Artifact store (mcp_agent/artifact_store.py)
               ├── Role registry (config/roles.yaml)
               ├── Prompt renderer (mcp_agent/prompt_renderer.py)
@@ -115,7 +115,29 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 | Tool | Purpose |
 |---|---|
 | `role_list` | List available roles and their contracts |
-| `role_call` | Call a specialist (single tool for all role orchestration) |
+| `role_call` | Start a specialist role (returns `role_run_id`) |
+| `role_wait` | Wait for a role to complete (returns `control_summary` + `artifact_id`) |
+
+#### Two-Step Pattern
+
+The public API uses an explicit two-step pattern for role orchestration:
+
+```text
+1. role_call(role="scout", user_task="...")
+   → returns: {status: "running", role_run_id: "...", run_id: "..."}
+
+2. role_wait(role_run_id="...")
+   → returns: {status: "completed", control_summary: {...}, artifacts: {...}}
+```
+
+`role_call` starts a specialist and returns **immediately** with `role_run_id`.
+It does NOT wait for completion.
+
+`role_wait` polls the role until it completes (or times out) and returns
+`control_summary` plus `artifact_id` references — never artifact content.
+
+**Never call `role_call` repeatedly for polling.** If a role is running,
+call `role_wait` with the same `role_run_id`.
 
 #### `role_list`
 
@@ -144,11 +166,10 @@ Returns a list of available roles with their contracts.
 
 #### `role_call`
 
-The only public tool Head of IT uses to invoke a worker role. Executes the
-full two-step lifecycle (main prompt → summary prompt) synchronously and
-returns `control_summary` plus `artifact_id` references — never artifact content.
+Starts a specialist role and returns **immediately** with `role_run_id`.
+Does NOT wait for completion.
 
-**Example — scout call:**
+**Example — scout call (step 1):**
 
 ```json
 {
@@ -162,14 +183,36 @@ returns `control_summary` plus `artifact_id` references — never artifact conte
 }
 ```
 
-**Response:**
+**Response (step 1):**
+
+```json
+{
+  "status": "running",
+  "role_run_id": "20260607-xxx-scout-1",
+  "run_id": "20260607-xxx",
+  "role": "scout",
+  "message": "Role started. Use role_wait with role_run_id to wait for completion."
+}
+```
+
+Then wait for completion (step 2):
 
 ```json
 {
   "role_run_id": "20260607-xxx-scout-1",
+  "timeout_seconds": 1800,
+  "poll_interval_seconds": 30
+}
+```
+
+**Response (step 2):**
+
+```json
+{
+  "status": "completed",
+  "role_run_id": "20260607-xxx-scout-1",
   "run_id": "20260607-xxx",
   "role": "scout",
-  "status": "completed",
   "control_summary": {
     "status": "DONE",
     "role": "scout",
@@ -193,7 +236,7 @@ returns `control_summary` plus `artifact_id` references — never artifact conte
 }
 ```
 
-**Example — architect call with artifact_id:**
+**Example — architect call with artifact_id (step 1):**
 
 ```json
 {
@@ -301,7 +344,8 @@ worker role.  It executes the **full two-step lifecycle** synchronously:
 7. Return ``control_summary`` + ``artifact_id`` references only — never
    artifact content.
 
-Head of IT never calls ``role_wait``, ``role_start``, or ``artifact_get``.
+Head of IT calls ``role_call`` to start a role and ``role_wait`` to poll for completion.
+Head of IT never calls ``role_start``, ``role_status``, ``role_result``, or ``artifact_get``.
 The MCP server handles all waiting and artifact resolution internally.
 
 ### Single-threaded execution

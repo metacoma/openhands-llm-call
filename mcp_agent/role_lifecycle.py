@@ -29,10 +29,14 @@ If summary parsing fails:
 If repair also fails, complete with a safe fallback summary.
 """
 
+import hashlib
 import json
 import logging
 import os
+import time
 from typing import Any, Optional
+
+import requests
 
 from .artifact_store import ArtifactStore, _generate_artifact_id
 from .lock_manager import RoleLockManager
@@ -169,14 +173,18 @@ def _start_conversation_on_fastapi(
     import requests
 
     base = (url or _OPENHANDS_URL).rstrip("/")
+
+    # Clamp max_polls to backend's le=360 constraint (CallLMRequest).
+    computed_max_polls = _OPENHANDS_MAX_RUNTIME // _OPENHANDS_POLL_INTERVAL
+    effective_max_polls = max_polls or computed_max_polls
+    clamped_max_polls = min(effective_max_polls, 360)
+
     payload: dict[str, Any] = {
         "prompt": prompt,
         "api_key": api_key,
         "no_wait": True,
         "poll_interval": _OPENHANDS_POLL_INTERVAL,
-        "max_polls": max_polls or (
-            _OPENHANDS_MAX_RUNTIME // _OPENHANDS_POLL_INTERVAL
-        ),
+        "max_polls": clamped_max_polls,
     }
     if llm_model:
         payload["llm_model"] = llm_model
@@ -215,8 +223,8 @@ def _start_conversation_on_fastapi(
                 conv_id_present,
                 True, type(True).__name__,
                 _OPENHANDS_POLL_INTERVAL, type(_OPENHANDS_POLL_INTERVAL).__name__,
-                max_polls or (_OPENHANDS_MAX_RUNTIME // _OPENHANDS_POLL_INTERVAL),
-                type(int).__name__,
+                clamped_max_polls,
+                type(clamped_max_polls).__name__,
             )
 
     resp = requests.post(
@@ -359,7 +367,130 @@ def _poll_task_status(
     }
 
 
-def role_call_impl(
+def _get_task_status_once(
+    task_id: str,
+    *,
+    base_url: str | None = None,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    """Make a single HTTP GET to /v1/jobs/{task_id} and return the response.
+
+    Does **NOT** poll or wait.  Returns immediately with whatever status
+    the OpenHands API returns.
+
+    Parameters
+    ----------
+    task_id :
+        The OpenHands task ID.
+    base_url :
+        OpenHands LLM base URL override.
+    correlation_id :
+        Optional correlation header for tracing.
+
+    Returns
+    -------
+    dict
+        The raw API response with a private ``_normalized_status`` key
+        indicating the terminal/running state.
+    """
+    base = (base_url or _OPENHANDS_URL).rstrip("/")
+    resp = requests.get(
+        f"{base}/v1/jobs/{task_id}",
+        timeout=_OPENHANDS_REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Normalize terminal states (same logic as _poll_task_status)
+    status = data.get("status", "unknown")
+    execution_status = data.get("execution_status")
+
+    if status in ("completed", "failed", "cancelled", "timeout",
+                  "canceled", "timed_out", "error",
+                  "completed_empty_result"):
+        data["_normalized_status"] = status
+        return data
+    if execution_status in ("finished", "success"):
+        data["_normalized_status"] = "completed"
+        return data
+    if execution_status in ("failed", "error"):
+        data["_normalized_status"] = "failed"
+        return data
+    if execution_status in ("cancelled", "canceled"):
+        data["_normalized_status"] = "cancelled"
+        return data
+    if execution_status in ("timeout", "timed_out"):
+        data["_normalized_status"] = "timeout"
+        return data
+
+    # Still running
+    data["_normalized_status"] = "running"
+    return data
+
+
+def wait_job_until_terminal(
+    job_id: str,
+    deadline: float,
+    poll_interval_seconds: int = 30,
+) -> tuple[str, dict[str, Any]]:
+    """Poll a job until it reaches a terminal state or the deadline expires.
+
+    Parameters
+    ----------
+    job_id :
+        The OpenHands task/job ID to poll.
+    deadline :
+        ``time.monotonic()`` value representing the absolute deadline.
+    poll_interval_seconds :
+        Seconds between status checks.
+
+    Returns
+    -------
+    tuple[str, dict]
+        ``(status, response_data)`` where *status* is one of:
+        ``"completed"``, ``"completed_empty_result"``, ``"failed"``,
+        ``"error"``, ``"cancelled"``, ``"timeout"``.
+        *response_data* is the last response from ``_get_task_status_once``.
+    """
+    # Synthetic timeout response — used when deadline is already expired
+    # before any poll occurs, or as the final fallback after polling.
+    last_response: dict[str, Any] = {
+        "_normalized_status": "running",
+        "status": "running",
+        "timeout": True,
+        "message": "Deadline expired before job reached terminal state.",
+    }
+
+    while time.monotonic() < deadline:
+        last_response = _get_task_status_once(job_id)
+        status = last_response.get("_normalized_status", "unknown")
+
+        if status in ("completed", "completed_empty_result",
+                       "failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
+            return (status, last_response)
+
+        # Still running — wait
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(poll_interval_seconds)
+
+    # Deadline exceeded — return last known state (or synthetic timeout if never polled)
+    return ("timeout", last_response)
+
+
+def _to_public_artifact_ref(raw: dict, *, role: str) -> dict[str, Any]:
+    """Sanitize an artifact metadata dict to a public reference.
+
+    Strips internal fields like ``artifact_path`` and ``content``.
+    """
+    return {
+        "artifact_id": raw.get("artifact_id"),
+        "artifact_type": raw.get("artifact_type") or raw.get("artifact_name"),
+        "created_by": raw.get("created_by") or role,
+    }
+
+
+def role_call_start_impl(
     role: str,
     user_task: str,
     input_artifacts: Optional[dict[str, Any]] = None,
@@ -369,7 +500,10 @@ def role_call_impl(
     url: Optional[str] = None,
     idempotency_key: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Two-step role lifecycle with in-conversation summary.
+    """Start a role and return quickly with ``status: "running"``.
+
+    This is the **non-blocking** half of the two-step pattern:
+    ``role_call`` -> ``role_wait``.
 
     Parameters
     ----------
@@ -379,7 +513,6 @@ def role_call_impl(
         The user task text. Must be non-empty.
     input_artifacts :
         Mapping of artifact names to their ID/path strings.
-        The MCP server resolves these to content server-side.
     metadata :
         Optional metadata dict (e.g. ``{"repository": "..."}``).
     api_key :
@@ -394,23 +527,43 @@ def role_call_impl(
     Returns
     -------
     dict
-        Control summary with ``artifact_id`` (not ``artifact_path``),
-        or an error dict.  The public response never contains
-        ``full_result``, artifact ``content``, or ``artifact_path``.
+        One of:
 
-    Raises
-    ------
-    ValueError
-        If validation fails (e.g. unknown role, missing user_task,
-        missing required artifacts).
+        **Running** (new role started)::
+
+            {
+                "status": "running",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "conversation_id": "...",
+                "message": "Role started. Use role_wait with role_run_id."
+            }
+
+        **Dedup hit** (existing run)::
+
+            {
+                "status": "running" | "completed" | "failed",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "_idempotent": True,
+                ...
+            }
+
+        **Error** (validation failure)::
+
+            {
+                "status": "failed",
+                "error": {"type": "...", "message": "...", "retryable": bool}
+            }
     """
     if input_artifacts is None:
         input_artifacts = {}
     if metadata is None:
         metadata = {}
 
-    # Always normalize input_artifacts — handles list-of-objects, wrapped
-    # dict values like {"text": "art_xxx"}, or plain strings.
+    # Always normalize input_artifacts
     input_artifacts = resolve_input_artifacts(input_artifacts)
 
     # ------------------------------------------------------------------
@@ -467,30 +620,19 @@ def role_call_impl(
     for artifact_name, artifact_ref in input_artifacts.items():
         ref_str = str(artifact_ref) if not isinstance(artifact_ref, str) else artifact_ref
 
-        # Try to resolve the reference to actual content.
-        # The reference can be:
-        #   0. An artifact_id (starts with "art_") — resolve via get_content_by_id
-        #   1. A path like "run_id/filename.artifact" (from ArtifactStore)
-        #   2. A bare artifact name — fall back to searching by name
-        #   3. A role_run_id — look up via role_store
         content = None
 
         # --- Strategy 0: Resolve by artifact_id ---
-        # Artifact IDs generated by _generate_artifact_id start with "art_".
-        # This is the primary resolution path for the new role_call API.
         if ref_str.startswith("art_"):
             try:
                 content = artifact_store.get_content_by_id(ref_str)
             except ValueError:
-                pass  # Not found by id — fall through to other strategies
+                pass
 
-        # --- Strategy 1: Exact path resolution (path-like references) ---
-        # A reference is path-like if it contains '/' and ends with '.artifact'.
-        # This avoids false positives for logical artifact IDs.
+        # --- Strategy 1: Exact path resolution ---
         if content is None and "/" in ref_str and ref_str.endswith(".artifact"):
             try:
                 meta = artifact_store.get_by_path(ref_str)
-                # Validate artifact_name matches the input_artifacts key
                 if meta.get("artifact_name") != artifact_name:
                     return {
                         "status": "failed",
@@ -512,7 +654,6 @@ def role_call_impl(
                 }
 
         # --- Strategy 2: Fallback to logical name resolution ---
-        # If ref_str is not path-like, try to resolve by artifact_name.
         if content is None:
             try:
                 meta = artifact_store.get(
@@ -521,7 +662,7 @@ def role_call_impl(
                 if meta and not meta.get("content_empty", True):
                     content = meta["content"]
             except ValueError:
-                pass  # Invalid run_id — skip fallback
+                pass
 
         if content is None:
             return {
@@ -552,7 +693,6 @@ def role_call_impl(
         "user_task": user_task,
     }
 
-    # Add metadata
     if metadata.get("repository"):
         template_vars["repo"] = str(metadata["repository"])
     if metadata.get("base_branch"):
@@ -562,11 +702,6 @@ def role_call_impl(
     if metadata.get("context"):
         template_vars["context"] = str(metadata["context"])
 
-    # Inject artifact contents into template variables.
-    # Use artifact name directly as the Jinja2 variable name — the
-    # mapping was identity (artifact_name → same variable name) and
-    # the Jinja2 templates already expect the artifact name as the
-    # variable key, so no translation is needed.
     for artifact_name, content_ref in artifact_contents.items():
         template_vars[artifact_name] = content_ref
 
@@ -596,73 +731,20 @@ def role_call_impl(
         }
 
     # ------------------------------------------------------------------
-    # Debug logging: prompt render result
-    # ------------------------------------------------------------------
-    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
-        from .safe_logging import (
-            DEBUG_ROLE_CALL,
-            correlate_id_from_args,
-            format_correlation,
-            safe_json_shape,
-            safe_preview,
-        )
-
-        if DEBUG_ROLE_CALL:
-            # Use only idempotency_key here because role_run_id/run_id are
-            # generated later in the function (line ~701-703).  The
-            # correlation ID may differ from later log lines but is still
-            # sufficient to correlate this invocation.
-            corr_id = correlate_id_from_args(
-                idempotency_key=idempotency_key,
-            )
-
-            prompt_type = type(main_prompt).__name__
-            prompt_len = len(main_prompt) if isinstance(main_prompt, str) else 0
-            prompt_preview = safe_preview(main_prompt, 300) if isinstance(main_prompt, str) else str(main_prompt)[:300]
-
-            # Input artifact types (not content)
-            input_artifact_types = []
-            if input_artifacts and isinstance(input_artifacts, dict):
-                for k, v in input_artifacts.items():
-                    input_artifact_types.append(f"{k}={type(v).__name__}")
-
-            # Template name/path if available
-            template_name = role_spec.prompt_template or "(default)"
-
-            logger.info(
-                "role_call.prompt_rendered %s role=%s prompt_type=%s prompt_len=%d prompt_preview=%s template=%s input_artifact_types=%s",
-                format_correlation(corr_id, role=role),
-                role,
-                prompt_type, prompt_len, safe_preview(prompt_preview, 100),
-                template_name,
-                input_artifact_types,
-            )
-
-            # If prompt is not a string, log error immediately
-            if not isinstance(main_prompt, str):
-                logger.error(
-                    "role_call.prompt_invalid %s role=%s prompt_type=%s prompt_preview=%s — prompt must be str, will return controlled error",
-                    format_correlation(corr_id, role=role),
-                    role,
-                    prompt_type,
-                    str(main_prompt)[:200],
-                )
-
-    # ------------------------------------------------------------------
-    # Step 6: Idempotency check — reuse existing run if same key
+    # Step 6: Idempotency check + fallback dedupe
     # ------------------------------------------------------------------
     role_store = RoleRunStore()
     idempotency_scope = None
+    dedupe_key = None
+
     if idempotency_key:
         idempotency_scope = f"{role}:{idempotency_key}"
         existing_role_run_id = role_store.find_by_idempotency_scope(idempotency_scope)
         if existing_role_run_id is not None:
-            # Return the existing role run status instead of creating a new one.
             existing_run = role_store.get_role_run(existing_role_run_id)
             if existing_run is not None:
                 existing_status = existing_run.get("status", "unknown")
                 if existing_status == "completed":
-                    # Return the completed result
                     control_summary = None
                     if existing_run.get("result_summary"):
                         try:
@@ -679,7 +761,9 @@ def role_call_impl(
                     if stored_artifacts and isinstance(stored_artifacts, dict):
                         for key in ("primary", "summary"):
                             if key in stored_artifacts:
-                                artifacts_result[key] = stored_artifacts[key]
+                                artifacts_result[key] = _to_public_artifact_ref(
+                                    stored_artifacts[key], role=role,
+                                )
                     return {
                         "role_run_id": existing_run.get("role_run_id", ""),
                         "run_id": existing_run.get("run_id", ""),
@@ -689,7 +773,6 @@ def role_call_impl(
                         "artifacts": artifacts_result if artifacts_result else {},
                         "_idempotent": True,
                     }
-                # Still running or failed — return current status
                 return {
                     "role_run_id": existing_run.get("role_run_id", ""),
                     "run_id": existing_run.get("run_id", ""),
@@ -698,57 +781,63 @@ def role_call_impl(
                     "message": f"Idempotent key '{idempotency_key}' is already in use (status: {existing_status}).",
                     "_idempotent": True,
                 }
+    else:
+        # Fallback dedupe (no idempotency_key provided)
+        task_hash = hashlib.sha256(user_task.strip().encode()).hexdigest()[:16]
+        repo = str(metadata.get("repository", ""))
+        feature = str(metadata.get("feature", ""))
+        dedupe_key = f"{role}:{task_hash}:{repo}:{feature}"
+        existing_role_run_id = role_store.find_by_idempotency_scope(
+            f"fallback:{dedupe_key}"
+        )
+        if existing_role_run_id is not None:
+            existing_run = role_store.get_role_run(existing_role_run_id)
+            if existing_run is not None:
+                existing_status = existing_run.get("status", "unknown")
+                if existing_status == "completed":
+                    control_summary = None
+                    if existing_run.get("result_summary"):
+                        try:
+                            control_summary = json.loads(existing_run["result_summary"])
+                        except (json.JSONDecodeError, TypeError):
+                            control_summary = {"raw": existing_run["result_summary"]}
+                    stored_artifacts = None
+                    if existing_run.get("artifacts"):
+                        try:
+                            stored_artifacts = json.loads(existing_run["artifacts"])
+                        except (json.JSONDecodeError, TypeError):
+                            stored_artifacts = None
+                    artifacts_result: dict[str, Any] = {}
+                    if stored_artifacts and isinstance(stored_artifacts, dict):
+                        for key in ("primary", "summary"):
+                            if key in stored_artifacts:
+                                artifacts_result[key] = _to_public_artifact_ref(
+                                    stored_artifacts[key], role=role,
+                                )
+                    return {
+                        "role_run_id": existing_run.get("role_run_id", ""),
+                        "run_id": existing_run.get("run_id", ""),
+                        "role": role,
+                        "status": "completed",
+                        "control_summary": control_summary or {},
+                        "artifacts": artifacts_result if artifacts_result else {},
+                        "_idempotent": True,
+                    }
+                return {
+                    "role_run_id": existing_run.get("role_run_id", ""),
+                    "run_id": existing_run.get("run_id", ""),
+                    "role": role,
+                    "status": existing_status,
+                    "message": "Duplicate role run detected for this task. Use existing run.",
+                    "_idempotent": True,
+                }
 
     # ------------------------------------------------------------------
-    # Step 7: Create role run record
+    # Step 7: Create role run record with status=starting
     # ------------------------------------------------------------------
     run_id = _generate_run_id()
     attempt = role_store.get_attempt_count(run_id, role) + 1
     role_run_id = _generate_role_run_id(run_id, role, attempt)
-
-    # ------------------------------------------------------------------
-    # Debug logging: normalized values
-    # ------------------------------------------------------------------
-    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
-        from .safe_logging import (
-            DEBUG_ROLE_CALL,
-            correlate_id_from_args,
-            format_correlation,
-            safe_preview,
-        )
-
-        if DEBUG_ROLE_CALL:
-            corr_id = correlate_id_from_args(
-                role_run_id=role_run_id, run_id=run_id, idempotency_key=idempotency_key
-            )
-
-            # Determine metadata keys for logging
-            meta_keys = list(metadata.keys()) if metadata and isinstance(metadata, dict) else []
-
-            # Normalize input_artifacts keys
-            ia_keys = list(input_artifacts.keys()) if input_artifacts and isinstance(input_artifacts, dict) else []
-
-            logger.info(
-                "role_call.normalized %s role=%s user_task_type=%s user_task_len=%d metadata_keys=%s input_artifacts_normalized_keys=%s idempotency_key=%s",
-                format_correlation(corr_id, role=role),
-                role,
-                type(user_task).__name__, len(user_task),
-                meta_keys,
-                ia_keys,
-                str(idempotency_key) if idempotency_key else "(none)",
-            )
-
-            # Validate role after normalization
-            if not role or not role.strip():
-                logger.error(
-                    "role_call.normalized.correlation_id=%s role=(empty) user_task_type=%s user_task_len=%d — role is empty after normalization, will return error",
-                    corr_id,
-                    type(user_task).__name__, len(user_task),
-                )
-
-    # Save idempotency record with role_run_id (not run_id)
-    if idempotency_key:
-        role_store.save_idempotency_record(idempotency_scope, role_run_id)
 
     role_run = role_store.create_role_run(
         role=role,
@@ -761,28 +850,28 @@ def role_call_impl(
         artifact_name=role_spec.output_artifact,
         attempt=attempt,
     )
+    role_store.update_role_run(role_run_id, status="starting")
 
     # ------------------------------------------------------------------
-    # Step 7: Start OpenHands conversation (main prompt)
+    # Step 8: Start OpenHands conversation (main prompt)
     # ------------------------------------------------------------------
     try:
-        # Compute correlation_id for error logging
-        corr_id_for_error = correlate_id_from_args(
-            role_run_id=role_run_id, run_id=run_id, idempotency_key=idempotency_key
-        ) if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"} else None
-
         conv_response = _start_conversation_on_fastapi(
             prompt=main_prompt,
             api_key=api_key or os.getenv("OPENHANDS_API_KEY", ""),
             llm_model=llm_model,
             url=url,
-            _correlation_id=corr_id_for_error,
         )
     except Exception as exc:
         role_store.update_role_run(
-            role_run_id, lifecycle_state="error"
+            role_run_id,
+            status="failed",
+            lifecycle_state="failed",
+            error=json.dumps({
+                "type": "ConversationStartError",
+                "message": f"Failed to start OpenHands conversation: {exc}",
+            }, ensure_ascii=False),
         )
-        # Build a message that includes the FastAPI 422 body when available
         error_type = "ConversationStartError"
         error_msg = f"Failed to start OpenHands conversation: {exc}"
         if isinstance(exc, ConversationStartError):
@@ -799,7 +888,7 @@ def role_call_impl(
             },
         }
 
-    # Unified job_id: try multiple possible field names from OpenHands response
+    # Unified job_id
     job_id = (
         conv_response.get("task_id")
         or conv_response.get("conversation_id")
@@ -810,7 +899,9 @@ def role_call_impl(
 
     if not job_id:
         role_store.update_role_run(
-            role_run_id, lifecycle_state="error"
+            role_run_id,
+            status="failed",
+            lifecycle_state="failed",
         )
         return {
             "status": "failed",
@@ -828,33 +919,238 @@ def role_call_impl(
         or job_id
     )
 
+    # Update with running state AFTER successful start
     role_store.update_role_run(
         role_run_id,
         openhands_task_id=job_id,
+        status="running",
         lifecycle_state="main_prompt_sent",
+        conversation_id=conversation_id,
     )
 
-    # ------------------------------------------------------------------
-    # Step 8: Wait for main response
-    # ------------------------------------------------------------------
-    main_response_data = _poll_task_status(
-        job_id, url=url
-    )
-    main_status = main_response_data.get("status", "unknown")
+    # Save idempotency record AFTER successful start
+    if idempotency_key:
+        role_store.save_idempotency_record(idempotency_scope, role_run_id)
+    elif dedupe_key:
+        role_store.save_idempotency_record(f"fallback:{dedupe_key}", role_run_id)
 
-    if main_status not in ("completed", "completed_empty_result"):
-        role_store.update_role_run(
-            role_run_id,
-            status=main_status,
-            lifecycle_state="error",
-        )
+    # ------------------------------------------------------------------
+    # Return "running" response - do NOT wait
+    # ------------------------------------------------------------------
+    return {
+        "status": "running",
+        "role_run_id": role_run_id,
+        "run_id": run_id,
+        "role": role,
+        "conversation_id": conversation_id,
+        "message": "Role started. Use role_wait with role_run_id to wait for completion.",
+    }
+
+
+def role_lifecycle_wait_impl(
+    role_run_id: str,
+    timeout_seconds: Optional[int] = None,
+    poll_interval_seconds: Optional[int] = None,
+) -> dict[str, Any]:
+    """Wait for a role run to complete (polling + summary).
+
+    This is the **blocking** half of the two-step pattern.
+
+    Parameters
+    ----------
+    role_run_id :
+        The role run ID returned by ``role_call_start_impl``.
+    timeout_seconds :
+        Maximum seconds to wait (default 1800).
+    poll_interval_seconds :
+        Seconds between status checks (default 30).
+
+    Returns
+    -------
+    dict
+        One of:
+
+        **Completed**::
+
+            {
+                "status": "completed",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "control_summary": {...},
+                "artifacts": {
+                    "primary": {"artifact_id": "...", "artifact_type": "...", "created_by": "..."},
+                    "summary": {"artifact_id": "...", "artifact_type": "...", "created_by": "..."}
+                }
+            }
+
+        **Timeout**::
+
+            {
+                "status": "running",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "timeout": True,
+                "message": "Role is still running. Call role_wait again."
+            }
+
+        **Failed**::
+
+            {
+                "status": "failed",
+                "role_run_id": "...",
+                "run_id": "...",
+                "role": "...",
+                "error": {"type": "...", "message": "...", "retryable": bool}
+            }
+    """
+    # ------------------------------------------------------------------
+    # Normalize and bound arguments (Blocker 5)
+    # ------------------------------------------------------------------
+    _raw_timeout = _unwrap_text(timeout_seconds) if timeout_seconds is not None else None
+    _raw_poll = _unwrap_text(poll_interval_seconds) if poll_interval_seconds is not None else None
+
+    if _raw_timeout is None:
+        _raw_timeout = int(os.getenv("OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS", "1800"))
+    if _raw_poll is None:
+        _raw_poll = int(os.getenv("OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS", "30"))
+
+    timeout_seconds = max(1, min(int(_raw_timeout), 24 * 3600))
+    poll_interval_seconds = max(1, min(int(_raw_poll), 300))
+
+    role_store = RoleRunStore()
+    role_run = role_store.get_role_run(role_run_id)
+
+    if role_run is None:
         return {
             "status": "failed",
+            "role_run_id": role_run_id,
             "error": {
-                "type": "MainResponseError",
-                "message": f"Main response ended with status: {main_status}",
+                "type": "RoleRunNotFound",
+                "message": f"role_run_id '{role_run_id}' not found",
+                "retryable": False,
+            },
+        }
+
+    # Idempotent: if already completed with summary, return existing result
+    if role_run.get("status") == "completed" and role_run.get("result_summary"):
+        control_summary = None
+        if role_run.get("result_summary"):
+            try:
+                control_summary = json.loads(role_run["result_summary"])
+            except (json.JSONDecodeError, TypeError):
+                control_summary = {"raw": role_run["result_summary"]}
+        stored_artifacts = None
+        if role_run.get("artifacts"):
+            try:
+                stored_artifacts = json.loads(role_run["artifacts"])
+            except (json.JSONDecodeError, TypeError):
+                stored_artifacts = None
+        artifacts_result: dict[str, Any] = {}
+        if stored_artifacts and isinstance(stored_artifacts, dict):
+            for key in ("primary", "summary"):
+                if key in stored_artifacts:
+                    artifacts_result[key] = _to_public_artifact_ref(
+                        stored_artifacts[key], role=role_run.get("role", ""),
+                    )
+        return {
+            "status": "completed",
+            "role_run_id": role_run.get("role_run_id", ""),
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "control_summary": control_summary or {},
+            "artifacts": artifacts_result if artifacts_result else {},
+        }
+
+    # If already failed, return the error
+    if role_run.get("status") == "failed":
+        return {
+            "status": "failed",
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "error": {
+                "type": "RoleFailed",
+                "message": f"Role run ended with status: {role_run.get('status', 'unknown')}",
                 "retryable": True,
             },
+        }
+
+    # Get conversation_id for same-conversation summary
+    conversation_id = role_run.get("conversation_id", "") or ""
+
+    # Poll until terminal or timeout (Blocker 1: use time.monotonic)
+    deadline = time.monotonic() + timeout_seconds
+    job_id = role_run.get("openhands_task_id", "")
+
+    if not job_id:
+        return {
+            "status": "failed",
+            "role_run_id": role_run_id,
+            "error": {
+                "type": "MissingJobId",
+                "message": "No OpenHands task_id found in role run record",
+                "retryable": False,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Poll for main response (Blocker 1: use _get_task_status_once)
+    # ------------------------------------------------------------------
+    main_completed = False
+    while time.monotonic() < deadline:
+        main_response_data = _get_task_status_once(job_id)
+        main_status = main_response_data.get("_normalized_status",
+                                              main_response_data.get("status", "unknown"))
+
+        if main_status in ("completed", "completed_empty_result"):
+            main_completed = True
+            break
+        elif main_status in ("failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
+            role_store.update_role_run(
+                role_run_id,
+                status=main_status,
+                lifecycle_state="error",
+            )
+            return {
+                "status": "failed",
+                "role_run_id": role_run_id,
+                "run_id": role_run.get("run_id", ""),
+                "role": role_run.get("role", ""),
+                "error": {
+                    "type": "MainResponseError",
+                    "message": f"Main response ended with status: {main_status}",
+                    "retryable": True,
+                },
+            }
+
+        # Still running — wait
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(poll_interval_seconds)
+    else:
+        # Timeout
+        return {
+            "status": "running",
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "timeout": True,
+            "message": "Role is still running. Call role_wait again with the same role_run_id.",
+        }
+
+    # ------------------------------------------------------------------
+    # Explicit guard: do not proceed if main job never completed (Blocker 1)
+    # ------------------------------------------------------------------
+    if not main_completed:
+        return {
+            "status": "running",
+            "timeout": True,
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "message": "Main job did not complete. Role is still running.",
         }
 
     main_response = main_response_data.get("answer", "") or ""
@@ -865,19 +1161,26 @@ def role_call_impl(
     )
 
     # ------------------------------------------------------------------
-    # Step 9: Save primary artifact via ArtifactStore
+    # Save primary artifact (only if main job completed — Blocker 1)
     # ------------------------------------------------------------------
-    primary_meta = artifact_store.save(
-        run_id=run_id,
-        role_run_id=role_run_id,
-        role=role,
-        artifact_name=role_spec.output_artifact,
-        content=main_response,
-    )
+    artifact_store = ArtifactStore()
+    primary_meta = None
+    primary_artifact_path = ""
+    primary_artifact_id = ""
+
+    if main_completed:
+        primary_meta = artifact_store.save(
+            run_id=role_run.get("run_id", ""),
+            role_run_id=role_run_id,
+            role=role_run.get("role", ""),
+            artifact_name=role_run.get("artifact_name", "unknown"),
+            content=main_response,
+        )
 
     if primary_meta is None:
         return {
             "status": "failed",
+            "role_run_id": role_run_id,
             "error": {
                 "type": "ArtifactSaveError",
                 "message": "Failed to save primary artifact.",
@@ -889,40 +1192,46 @@ def role_call_impl(
     primary_artifact_id = primary_meta.get("artifact_id", "")
 
     # ------------------------------------------------------------------
-    # Step 10: Render and send summary prompt (same conversation)
+    # Check if summary was already done (idempotent role_wait)
     # ------------------------------------------------------------------
+    if role_run.get("lifecycle_state") in ("completed", "summary_artifact_saved"):
+        control_summary = None
+        if role_run.get("result_summary"):
+            try:
+                control_summary = json.loads(role_run["result_summary"])
+            except (json.JSONDecodeError, TypeError):
+                control_summary = {"raw": role_run["result_summary"]}
+        stored_artifacts = None
+        if role_run.get("artifacts"):
+            try:
+                stored_artifacts = json.loads(role_run["artifacts"])
+            except (json.JSONDecodeError, TypeError):
+                stored_artifacts = None
+        artifacts_result: dict[str, Any] = {}
+        if stored_artifacts and isinstance(stored_artifacts, dict):
+            for key in ("primary", "summary"):
+                if key in stored_artifacts:
+                    artifacts_result[key] = _to_public_artifact_ref(
+                        stored_artifacts[key], role=role_run.get("role", ""),
+                    )
+        return {
+            "status": "completed",
+            "role_run_id": role_run.get("role_run_id", ""),
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "control_summary": control_summary or {},
+            "artifacts": artifacts_result if artifacts_result else {},
+        }
+
+    # ------------------------------------------------------------------
+    # Render and send summary prompt (same conversation)
+    # ------------------------------------------------------------------
+    role = role_run.get("role", "")
+    from .roles import get_role as _get_role
     try:
-        summary_prompt = render_prompt(
-            template_path="prompts/summaries/role_summary.md",
-            variables={
-                "role": role,
-                "primary_artifact_name": role_spec.output_artifact,
-            },
-        )
-    except FileNotFoundError:
-        # Fallback: inline summary prompt
-        summary_prompt = (
-            f"Summarize your previous answer for the orchestrator.\n\n"
-            f"Return compact JSON only.\n"
-            f"Do not include Markdown.\n"
-            f"Do not include code blocks.\n"
-            f"Do not decide the next role.\n"
-            f"Do not include routing advice.\n\n"
-            f"Schema:\n"
-            f'{{"status": "completed" | "blocked", '
-            f'"role": "{role}", '
-            f'"summary": "<short factual summary>", '
-            f'"primary_artifact_name": "{role_spec.output_artifact}", '
-            f'"blocking": true | false, '
-            f'"risk_level": "LOW" | "MEDIUM" | "HIGH" | null, '
-            f'"action": "PASS" | "BLOCKER" | null, '
-            f'"blocking_summary": ["..."]}}\n\n'
-            f"Rules:\n"
-            f"- Only reviewer may set action to PASS or BLOCKER.\n"
-            f"- Non-reviewer roles must set action to null.\n"
-            f"- Do not include next_role.\n"
-            f"- Do not include ready_for_next_role.\n"
-        )
+        role_spec = _get_role(role)
+    except KeyError:
+        role_spec = None
 
     role_store.update_role_run(
         role_run_id,
@@ -930,40 +1239,95 @@ def role_call_impl(
     )
 
     try:
+        summary_prompt = render_prompt(
+            template_path="prompts/summaries/role_summary.md",
+            variables={
+                "role": role,
+                "primary_artifact_name": role_spec.output_artifact if role_spec else "unknown",
+            },
+        )
+    except FileNotFoundError:
+        summary_prompt = (
+            "Summarize your previous answer for the orchestrator.\n\n"
+            "Return compact JSON only.\n"
+            "Do not include Markdown.\n"
+            "Do not include code blocks.\n"
+            "Do not decide the next role.\n"
+            "Do not include routing advice.\n\n"
+            'Schema:\n'
+            '{"status": "completed" | "blocked", '
+            '"role": "%s", '
+            '"summary": "<short factual summary>", '
+            '"primary_artifact_name": "unknown", '
+            '"blocking": true | false, '
+            '"risk_level": "LOW" | "MEDIUM" | "HIGH" | null, '
+            '"action": "PASS" | "BLOCKER" | null, '
+            '"blocking_summary": ["..."]}\n\n'
+            "Rules:\n"
+            "- Only reviewer may set action to PASS or BLOCKER.\n"
+            "- Non-reviewer roles must set action to null.\n"
+            "- Do not include next_role.\n"
+            "- Do not include ready_for_next_role.\n"
+        ) % role
+
+    try:
         summary_conv_response = _start_conversation_on_fastapi(
             prompt=summary_prompt,
-            api_key=api_key or os.getenv("OPENHANDS_API_KEY", ""),
-            llm_model=llm_model,
-            conversation_id=conversation_id,  # Same conversation!
-            url=url,
+            api_key=os.getenv("OPENHANDS_API_KEY", ""),
+            conversation_id=conversation_id if conversation_id else None,
         )
-    except Exception as exc:
-        # Summary prompt failed — complete with fallback
-        role_store.update_role_run(
-            role_run_id,
-            lifecycle_state="completed",
-        )
-        control_summary = safe_fallback_summary(
+    except Exception:
+        # Save fallback summary artifact so repeated role_wait is idempotent (Blocker 2)
+        fallback_content = json.dumps(safe_fallback_summary(
             role=role,
-            summary_artifact_name=role_spec.summary_artifact,
+            summary_artifact_name=(role_spec.summary_artifact if role_spec else "control_summary"),
             is_reviewer=(role == "reviewer"),
             main_artifact_content=main_response,
+        ), ensure_ascii=False)
+
+        fallback_meta = artifact_store.save(
+            run_id=role_run.get("run_id", ""),
+            role_run_id=role_run_id,
+            role=role,
+            artifact_name=(role_spec.summary_artifact if role_spec else "control_summary"),
+            content=fallback_content,
         )
-        return {
-            "role_run_id": role_run_id,
-            "status": "completed",
-            "control_summary": control_summary,
-            "artifacts": {
+        fallback_artifact_id = (fallback_meta.get("artifact_id", "") if fallback_meta else "")
+
+        control_summary = json.loads(fallback_content)
+
+        role_store.update_role_run(
+            role_run_id,
+            status="completed",
+            result_summary=json.dumps(control_summary, ensure_ascii=False),
+            lifecycle_state="completed",
+            artifacts=json.dumps({
                 "primary": {
+                    "artifact_name": (role_spec.output_artifact if role_spec else "unknown"),
                     "artifact_id": primary_artifact_id,
-                    "artifact_type": role_spec.output_artifact,
-                    "created_by": role,
                 },
                 "summary": {
-                    "artifact_id": "",
-                    "artifact_type": role_spec.summary_artifact,
-                    "created_by": role,
+                    "artifact_name": (role_spec.summary_artifact if role_spec else "control_summary"),
+                    "artifact_id": fallback_artifact_id,
                 },
+            }, ensure_ascii=False),
+        )
+
+        return {
+            "status": "completed",
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role,
+            "control_summary": control_summary,
+            "artifacts": {
+                "primary": _to_public_artifact_ref({
+                    "artifact_id": primary_artifact_id,
+                    "artifact_type": (role_spec.output_artifact if role_spec else "unknown"),
+                }, role=role),
+                "summary": _to_public_artifact_ref({
+                    "artifact_id": fallback_artifact_id,
+                    "artifact_type": (role_spec.summary_artifact if role_spec else "control_summary"),
+                }, role=role),
             },
         }
 
@@ -978,12 +1342,24 @@ def role_call_impl(
         summary_job_id = conversation_id or "unknown"
 
     # ------------------------------------------------------------------
-    # Step 11: Wait for summary response
+    # Deadline for summary/repair phase
     # ------------------------------------------------------------------
-    summary_response_data = _poll_task_status(
-        summary_job_id, url=url
+    summary_deadline = deadline
+
+    # ------------------------------------------------------------------
+    # Wait for summary response using polling helper (Blocker 2)
+    # ------------------------------------------------------------------
+    summary_status, summary_response_data = wait_job_until_terminal(
+        job_id=summary_job_id,
+        deadline=summary_deadline,
+        poll_interval_seconds=poll_interval_seconds,
     )
-    summary_text = summary_response_data.get("answer", "") or ""
+
+    if summary_status in ("timeout", "timed_out", "canceled"):
+        # Deadline expired or job terminated abnormally — use fallback
+        summary_text = ""
+    else:
+        summary_text = summary_response_data.get("answer", "") or ""
 
     role_store.update_role_run(
         role_run_id,
@@ -991,18 +1367,15 @@ def role_call_impl(
     )
 
     # ------------------------------------------------------------------
-    # Step 12: Validate/parse summary
+    # Validate/parse summary
     # ------------------------------------------------------------------
     control_summary = validate_summary(
         role=role,
-        summary_artifact_name=role_spec.output_artifact,
+        summary_artifact_name=(role_spec.output_artifact if role_spec else "unknown"),
         json_str=summary_text,
     )
 
     if not control_summary.get("valid"):
-        # ------------------------------------------------------------------
-        # Step 13: Repair if parsing fails
-        # ------------------------------------------------------------------
         role_store.update_role_run(
             role_run_id,
             lifecycle_state="summary_parse_failed",
@@ -1010,7 +1383,7 @@ def role_call_impl(
 
         repair_prompt_text = repair_summary(
             role=role,
-            summary_artifact_name=role_spec.output_artifact,
+            summary_artifact_name=(role_spec.output_artifact if role_spec else "unknown"),
         )
 
         role_store.update_role_run(
@@ -1021,10 +1394,8 @@ def role_call_impl(
         try:
             repair_conv_response = _start_conversation_on_fastapi(
                 prompt=repair_prompt_text,
-                api_key=api_key or os.getenv("OPENHANDS_API_KEY", ""),
-                llm_model=llm_model,
-                conversation_id=conversation_id,  # Same conversation!
-                url=url,
+                api_key=os.getenv("OPENHANDS_API_KEY", ""),
+                conversation_id=conversation_id if conversation_id else None,
             )
         except Exception:
             repair_conv_response = None
@@ -1039,10 +1410,20 @@ def role_call_impl(
             )
             if not repair_job_id:
                 repair_job_id = conversation_id or "unknown"
-            repair_response_data = _poll_task_status(
-                repair_job_id, url=url
+
+            # ------------------------------------------------------------------
+            # Wait for repair response using polling helper (Blocker 2)
+            # ------------------------------------------------------------------
+            repair_status, repair_response_data = wait_job_until_terminal(
+                job_id=repair_job_id,
+                deadline=summary_deadline,
+                poll_interval_seconds=poll_interval_seconds,
             )
-            repair_text = repair_response_data.get("answer", "") or ""
+
+            if repair_status in ("timeout", "timed_out", "canceled"):
+                repair_text = ""
+            else:
+                repair_text = repair_response_data.get("answer", "") or ""
             role_store.update_role_run(
                 role_run_id,
                 lifecycle_state="summary_repair_response_received",
@@ -1050,40 +1431,41 @@ def role_call_impl(
 
             control_summary = validate_summary(
                 role=role,
-                summary_artifact_name=role_spec.output_artifact,
+                summary_artifact_name=(role_spec.output_artifact if role_spec else "unknown"),
                 json_str=repair_text,
             )
 
     # ------------------------------------------------------------------
-    # Step 14: If still invalid, use safe fallback
+    # If still invalid, use safe fallback
     # ------------------------------------------------------------------
     if not control_summary.get("valid"):
         control_summary = safe_fallback_summary(
             role=role,
-            summary_artifact_name=role_spec.summary_artifact,
+            summary_artifact_name=(role_spec.summary_artifact if role_spec else "control_summary"),
             is_reviewer=(role == "reviewer"),
             main_artifact_content=main_response,
         )
 
     # ------------------------------------------------------------------
-    # Step 15: Save summary artifact via ArtifactStore
+    # Save summary artifact
     # ------------------------------------------------------------------
     summary_meta = artifact_store.save(
-        run_id=run_id,
+        run_id=role_run.get("run_id", ""),
         role_run_id=role_run_id,
         role=role,
-        artifact_name=role_spec.summary_artifact,
+        artifact_name=(role_spec.summary_artifact if role_spec else "control_summary"),
         content=summary_text,
     )
 
     if summary_meta is None:
-        # Defensive: generate a synthetic artifact_id when save() fails.
-        # This should not happen in practice since save() always returns meta.
         summary_artifact_id = _generate_artifact_id(
-            run_id, role, 1, role_spec.summary_artifact
+            role_run.get("run_id", ""), role, 1,
+            (role_spec.summary_artifact if role_spec else "control_summary")
         )
+        summary_artifact_path = ""
     else:
         summary_artifact_id = summary_meta.get("artifact_id", "")
+        summary_artifact_path = summary_meta.get("artifact_path", "")
 
     role_store.update_role_run(
         role_run_id,
@@ -1091,8 +1473,11 @@ def role_call_impl(
     )
 
     # ------------------------------------------------------------------
-    # Step 16: Mark completed and persist artifact metadata
+    # Mark completed and persist artifact metadata
     # ------------------------------------------------------------------
+    output_artifact_name = (role_spec.output_artifact if role_spec else "unknown")
+    summary_artifact_name = (role_spec.summary_artifact if role_spec else "control_summary")
+
     role_store.update_role_run(
         role_run_id,
         status="completed",
@@ -1100,41 +1485,116 @@ def role_call_impl(
         lifecycle_state="completed",
         artifacts=json.dumps({
             "primary": {
-                "artifact_name": role_spec.output_artifact,
+                "artifact_name": output_artifact_name,
                 "artifact_id": primary_artifact_id,
                 "artifact_path": primary_artifact_path,
             },
             "summary": {
-                "artifact_name": role_spec.summary_artifact,
+                "artifact_name": summary_artifact_name,
                 "artifact_id": summary_artifact_id,
+                "artifact_path": summary_artifact_path,
             },
         }),
     )
 
     # ------------------------------------------------------------------
-    # Step 17: Return control summary
+    # Return control summary (public response - no content, no artifact_path)
     # ------------------------------------------------------------------
     return {
-        "role_run_id": role_run_id,
-        "run_id": run_id,
-        "role": role,
         "status": "completed",
+        "role_run_id": role_run_id,
+        "run_id": role_run.get("run_id", ""),
+        "role": role,
         "control_summary": control_summary,
         "artifacts": {
             "primary": {
                 "artifact_id": primary_artifact_id,
-                "artifact_type": role_spec.output_artifact,
+                "artifact_type": output_artifact_name,
                 "created_by": role,
             },
             "summary": {
                 "artifact_id": summary_artifact_id,
-                "artifact_type": role_spec.summary_artifact,
+                "artifact_type": summary_artifact_name,
                 "created_by": role,
             },
         },
     }
 
 
+def role_call_impl(
+    role: str,
+    user_task: str,
+    input_artifacts: Optional[dict[str, Any]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    api_key: str = "",
+    llm_model: Optional[str] = None,
+    url: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+) -> dict[str, Any]:
+    """Two-step role lifecycle with in-conversation summary.
+
+    **Deprecated**: Prefer ``role_call_start_impl`` + ``role_lifecycle_wait_impl``
+    for the non-blocking two-step pattern.
+
+    This function remains as a thin wrapper for backward compatibility:
+    it calls ``role_call_start_impl`` then ``role_lifecycle_wait_impl``
+    to preserve the existing blocking behavior for internal callers/tests.
+
+    Parameters
+    ----------
+    role :
+        The role name (e.g. ``"scout"``, ``"architect"``).
+    user_task :
+        The user task text. Must be non-empty.
+    input_artifacts :
+        Mapping of artifact names to their ID/path strings.
+    metadata :
+        Optional metadata dict (e.g. ``{"repository": "..."}``).
+    api_key :
+        OpenHands API key.
+    llm_model :
+        LLM model override.
+    url :
+        OpenHands LLM base URL override.
+    idempotency_key :
+        Optional stable key to deduplicate retried calls.
+
+    Returns
+    -------
+    dict
+        Control summary with ``artifact_id`` (not ``artifact_path``),
+        or an error dict.
+    """
+    if input_artifacts is None:
+        input_artifacts = {}
+    if metadata is None:
+        metadata = {}
+
+    # Start the role (non-blocking)
+    result = role_call_start_impl(
+        role=role,
+        user_task=user_task,
+        input_artifacts=input_artifacts,
+        metadata=metadata,
+        api_key=api_key,
+        llm_model=llm_model,
+        url=url,
+        idempotency_key=idempotency_key,
+    )
+
+    # If start returned "running", wait for completion
+    if result.get("status") == "running" and not result.get("_idempotent"):
+        role_run_id = result.get("role_run_id", "")
+        if role_run_id:
+            return role_lifecycle_wait_impl(
+                role_run_id=role_run_id,
+            )
+
+    # Dedupe hit, error, or other non-running status - return as-is
+    return result
+
+
 # Backward-compatible alias for existing callers/tests.
 # Prefer direct import of role_call_impl.
 _role_call_impl_alias = role_call_impl
+

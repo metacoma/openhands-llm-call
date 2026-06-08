@@ -85,6 +85,7 @@ class RoleRunStore:
         artifact_name: Optional[str] = None,
         attempt: int = 1,
         lock_key: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Create a new role run record and persist it.
 
@@ -93,6 +94,10 @@ class RoleRunStore:
         attempt :
             Attempt number for this role within the run.  Used to
             produce distinct artifact filenames on retry.
+        conversation_id :
+            Optional OpenHands conversation ID so that
+            ``role_wait`` can resume in the same conversation for
+            the summary prompt.
 
         Returns
         -------
@@ -121,6 +126,7 @@ class RoleRunStore:
             "attempt": attempt,
             "lock_key": lock_key,
             "lifecycle_state": "created",
+            "conversation_id": conversation_id,
         }
 
         with self._lock:

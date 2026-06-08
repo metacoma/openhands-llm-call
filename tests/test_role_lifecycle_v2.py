@@ -34,9 +34,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": summary_answer or json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "scout",
                     "summary": "Scout completed.",
                     "primary_artifact_name": "scout_report",
@@ -50,7 +50,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
         mock_poll = MagicMock(side_effect=poll_side_effect)
         return mock_start, mock_poll
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_scout_start_with_user_task_succeeds(self, mock_start, mock_poll):
         """Starting scout with only user_task succeeds."""
@@ -61,9 +61,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -86,7 +86,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
         self.assertIn("primary", result["artifacts"])
         self.assertIn("summary", result["artifacts"])
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_architect_start_with_scout_report_succeeds(self, mock_start, mock_poll):
         """Starting architect with valid scout_report succeeds."""
@@ -108,9 +108,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             "conversation_id": "conv-002",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "architect",
                 "summary": "Architect completed.",
                 "primary_artifact_name": "architect_plan",
@@ -227,7 +227,7 @@ class TestRoleLifecycleValidation(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["type"], "MissingUserTask")
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_coder_fix_role_exists(self, mock_start, mock_poll):
         """coder_fix role can be started."""
@@ -254,9 +254,9 @@ class TestRoleLifecycleValidation(unittest.TestCase):
             "conversation_id": "conv-003",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "coder_fix",
                 "summary": "Coder fix completed.",
                 "primary_artifact_name": "coder_fix_result",
@@ -297,7 +297,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_main_response_only_does_not_complete(self, mock_start, mock_poll):
         """Role run is not completed after main response only."""
@@ -317,9 +317,9 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "scout",
                     "summary": "Scout completed.",
                     "primary_artifact_name": "scout_report",
@@ -348,7 +348,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
         self.assertIsNotNone(role_run)
         self.assertEqual(role_run.get("lifecycle_state"), "completed")
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_prompt_sent_in_same_conversation(self, mock_start, mock_poll):
         """Summary prompt is sent in the same conversation as the main role prompt."""
@@ -368,9 +368,9 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "scout",
                     "summary": "Scout completed.",
                     "primary_artifact_name": "scout_report",
@@ -397,7 +397,7 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
             "Summary should be sent in the same conversation",
         )
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_role_run_completes_after_summary_saved(self, mock_start, mock_poll):
         """Role run completes only after summary response is saved."""
@@ -417,9 +417,9 @@ class TestRoleLifecycleLifecycleState(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "scout",
                     "summary": "Scout completed.",
                     "primary_artifact_name": "scout_report",
@@ -464,7 +464,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_json_parsed_and_returned(self, mock_start, mock_poll):
         """Summary JSON is parsed and returned as control summary."""
@@ -484,9 +484,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         def poll_side_effect(task_id, url=None, max_polls=None):
             if task_id == "task-main":
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -498,9 +498,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
                 }
             else:
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -525,7 +525,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             result["control_summary"]["summary"], "Scout completed."
         )
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_repair_attempted_on_parse_failure(self, mock_start, mock_poll):
         """Summary JSON repair is attempted once if parsing fails."""
@@ -548,9 +548,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             if poll_count[0] == 1:
                 # First poll (main response) — valid JSON
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -563,15 +563,15 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             elif poll_count[0] == 2:
                 # Second poll (summary response) — invalid JSON
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": "{invalid json}",
                 }
             else:
                 # Third poll (repair response) — valid JSON
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed (repaired).",
                         "primary_artifact_name": "scout_report",
@@ -595,7 +595,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         # Should have used repair
         self.assertEqual(call_count[0], 3)
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_output_does_not_allow_next_role(self, mock_start, mock_poll):
         """Summary output does not allow next_role."""
@@ -615,9 +615,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         def poll_side_effect(task_id, url=None, max_polls=None):
             if task_id == "task-main":
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -630,9 +630,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             else:
                 # Summary with next_role (forbidden)
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -658,7 +658,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         # The fallback should not have next_role
         self.assertNotIn("next_role", result["control_summary"])
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_output_does_not_allow_ready_for_next_role(self, mock_start, mock_poll):
         """Summary output does not allow ready_for_next_role."""
@@ -678,9 +678,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         def poll_side_effect(task_id, url=None, max_polls=None):
             if task_id == "task-main":
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -693,9 +693,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             else:
                 # Summary with ready_for_next_role (forbidden)
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -719,7 +719,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         self.assertTrue(result["control_summary"].get("valid"))
         self.assertNotIn("ready_for_next_role", result["control_summary"])
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_reviewer_summary_must_contain_action(self, mock_start, mock_poll):
         """Reviewer summary must contain action=PASS or action=BLOCKER."""
@@ -755,9 +755,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         def poll_side_effect(task_id, url=None, max_polls=None):
             if task_id == "task-main":
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "reviewer",
                         "summary": "Review completed.",
                         "primary_artifact_name": "reviewer_report",
@@ -770,9 +770,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             else:
                 # Reviewer summary with action=null (invalid for reviewer)
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "reviewer",
                         "summary": "Review completed.",
                         "primary_artifact_name": "reviewer_report",
@@ -803,7 +803,7 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         self.assertEqual(result["control_summary"]["action"], "BLOCKER")
         self.assertTrue(result["control_summary"].get("blocking"))
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_non_reviewer_summary_has_action_null(self, mock_start, mock_poll):
         """Non-reviewer summary must have action=null."""
@@ -823,9 +823,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
         def poll_side_effect(task_id, url=None, max_polls=None):
             if task_id == "task-main":
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -838,9 +838,9 @@ class TestSummaryValidationInLifecycle(unittest.TestCase):
             else:
                 # Scout summary with action=PASS (invalid for non-reviewer)
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "scout",
                         "summary": "Scout completed.",
                         "primary_artifact_name": "scout_report",
@@ -880,7 +880,7 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_artifact_contents_loaded_server_side(self, mock_start, mock_poll):
         """Artifact contents are loaded server-side into the main prompt."""
@@ -911,9 +911,9 @@ class TestRawArtifactContentNotRequired(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "architect",
                     "summary": "Architect completed.",
                     "primary_artifact_name": "architect_plan",
@@ -958,7 +958,7 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test__internal_role_start_unwraps_artifact_refs(self, mock_start, mock_poll):
         """_internal_role_start correctly unwraps MCP-style wrapped artifact references."""
@@ -989,9 +989,9 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "architect",
                     "summary": "Architect completed.",
                     "primary_artifact_name": "architect_plan",
@@ -1019,7 +1019,7 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
         self.assertTrue(len(captured_prompts) >= 1)
         self.assertIn("# Scout Report", captured_prompts[0])
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test__internal_role_start_unwraps_metadata(self, mock_start, mock_poll):
         """_internal_role_start correctly unwraps MCP-style wrapped metadata."""
@@ -1039,9 +1039,9 @@ class TestMCPStyleWrappedValues(unittest.TestCase):
 
         def poll_side_effect(task_id, url=None, max_polls=None):
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "scout",
                     "summary": "Scout completed.",
                     "primary_artifact_name": "scout_report",
@@ -1086,7 +1086,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_primary_artifact_saved_via_artifact_store(self, mock_start, mock_poll):
         """Scout primary artifact is saved through ArtifactStore, not legacy store."""
@@ -1098,9 +1098,9 @@ class TestV2ArtifactStorage(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1131,7 +1131,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
         self.assertIsNotNone(content)
         self.assertIn("scout_report", content)
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_artifact_saved_separately(self, mock_start, mock_poll):
         """Summary artifact is a different file from primary."""
@@ -1142,9 +1142,9 @@ class TestV2ArtifactStorage(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1168,7 +1168,7 @@ class TestV2ArtifactStorage(unittest.TestCase):
         self.assertEqual(primary_type, "scout_report")
         self.assertEqual(summary_type, "scout_summary")
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_summary_does_not_overwrite_primary(self, mock_start, mock_poll):
         """Saving summary does not overwrite primary artifact."""
@@ -1180,9 +1180,9 @@ class TestV2ArtifactStorage(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1236,7 +1236,7 @@ class TestV2EndToEndChain(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_full_v2_chain_artifact_refs_flow(self, mock_start, mock_poll):
         """Artifact refs flow through the v2 chain correctly."""
@@ -1247,9 +1247,9 @@ class TestV2EndToEndChain(unittest.TestCase):
 
         def make_scout_poll():
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "scout",
                     "summary": "Scout completed.",
                     "primary_artifact_name": "scout_report",
@@ -1262,9 +1262,9 @@ class TestV2EndToEndChain(unittest.TestCase):
 
         def make_architect_poll():
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "architect",
                     "summary": "Architect completed.",
                     "primary_artifact_name": "architect_plan",
@@ -1277,9 +1277,9 @@ class TestV2EndToEndChain(unittest.TestCase):
 
         def make_coder_poll():
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "coder",
                     "summary": "Coder completed.",
                     "primary_artifact_name": "coder_report",
@@ -1292,9 +1292,9 @@ class TestV2EndToEndChain(unittest.TestCase):
 
         def make_reviewer_poll():
             return {
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "answer": json.dumps({
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "role": "reviewer",
                     "summary": "Reviewer completed.",
                     "primary_artifact_name": "reviewer_report",
@@ -1333,7 +1333,7 @@ class TestV2EndToEndChain(unittest.TestCase):
             role_run_id="test-chain-scout-1",
             role="scout",
             artifact_name="scout_report",
-            content=json.dumps({"status": "completed", "summary": "Scout report content"}),
+            content=json.dumps({"_normalized_status": "completed", "status": "completed", "summary": "Scout report content"}),
         )
         scout_artifact_id = scout_meta["artifact_id"]
 
@@ -1342,7 +1342,7 @@ class TestV2EndToEndChain(unittest.TestCase):
             role_run_id="test-chain-architect-1",
             role="architect",
             artifact_name="architect_plan",
-            content=json.dumps({"status": "completed", "summary": "Architect plan content"}),
+            content=json.dumps({"_normalized_status": "completed", "status": "completed", "summary": "Architect plan content"}),
         )
         architect_plan_id = arch_meta["artifact_id"]
 
@@ -1351,7 +1351,7 @@ class TestV2EndToEndChain(unittest.TestCase):
             role_run_id="test-chain-coder-1",
             role="coder",
             artifact_name="coder_report",
-            content=json.dumps({"status": "completed", "summary": "Coder report content"}),
+            content=json.dumps({"_normalized_status": "completed", "status": "completed", "summary": "Coder report content"}),
         )
         coder_report_id = coder_meta["artifact_id"]
 
@@ -1447,7 +1447,7 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
         import mcp_agent.role_tools as rt_mod
         rt_mod._role_store = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_result_v2_no_undefined_run_id(self, mock_start, mock_poll):
         """result_v2 does not use undefined run_id variable."""
@@ -1461,9 +1461,9 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1516,7 +1516,7 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
         self.assertIn("primary", result_v2["artifacts"])
         self.assertIn("summary", result_v2["artifacts"])
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_result_v2_include_full_artifacts_works(self, mock_start, mock_poll):
         """result_v2 with include_full_artifacts=true loads content correctly."""
@@ -1529,9 +1529,9 @@ class TestV2ResultArtifactLoading(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1634,7 +1634,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             status="completed",
             lifecycle_state="completed",
             result_summary=json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1725,7 +1725,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             status="completed",
             lifecycle_state="completed",
             result_summary=json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1787,7 +1787,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             status="completed",
             lifecycle_state="completed",
             result_summary=json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1864,7 +1864,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             status="completed",
             lifecycle_state="completed",
             result_summary=json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "architect",
                 "summary": "Architect completed.",
                 "primary_artifact_name": "architect_plan",
@@ -1931,7 +1931,7 @@ class TestV2ResultExactArtifactPath(unittest.TestCase):
             status="completed",
             lifecycle_state="completed",
             result_summary=json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -1984,7 +1984,7 @@ class TestV2SummarySchema(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_v2_summary_rejects_next_role(self, mock_start, mock_poll):
         """v2 summary schema rejects/strips next_role."""
@@ -1996,9 +1996,9 @@ class TestV2SummarySchema(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -2021,7 +2021,7 @@ class TestV2SummarySchema(unittest.TestCase):
         control_summary = result["control_summary"]
         self.assertNotIn("next_role", control_summary)
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_reviewer_summary_requires_action_pass_or_blocker(self, mock_start, mock_poll):
         """Reviewer summary requires action=PASS or action=BLOCKER."""
@@ -2059,9 +2059,9 @@ class TestV2SummarySchema(unittest.TestCase):
             if call_count[0] == 1:
                 # First call (main prompt) — return valid summary
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "reviewer",
                         "summary": "Reviewer completed.",
                         "primary_artifact_name": "reviewer_report",
@@ -2074,9 +2074,9 @@ class TestV2SummarySchema(unittest.TestCase):
             else:
                 # Subsequent calls (summary/repair) — return valid summary
                 return {
-                    "status": "completed",
+                    "_normalized_status": "completed", "status": "completed",
                     "answer": json.dumps({
-                        "status": "completed",
+                        "_normalized_status": "completed", "status": "completed",
                         "role": "reviewer",
                         "summary": "Reviewer summary.",
                         "primary_artifact_name": "reviewer_report",
@@ -2109,7 +2109,7 @@ class TestV2SummarySchema(unittest.TestCase):
         self.assertIn("action", control_summary)
         self.assertEqual(control_summary["action"], "PASS")
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_non_reviewer_summary_requires_action_null(self, mock_start, mock_poll):
         """Non-reviewer summary requires action=null."""
@@ -2121,9 +2121,9 @@ class TestV2SummarySchema(unittest.TestCase):
             "conversation_id": "conv-001",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "scout",
                 "summary": "Scout completed.",
                 "primary_artifact_name": "scout_report",
@@ -2161,7 +2161,7 @@ class TestV2ExactPathResolution(unittest.TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
 
-    @patch("mcp_agent.role_lifecycle._poll_task_status")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_v2_resolver_reads_exact_path(self, mock_start, mock_poll):
         """Test 3: v2 input resolver reads exact path for path-like refs."""
@@ -2189,9 +2189,9 @@ class TestV2ExactPathResolution(unittest.TestCase):
             "conversation_id": "conv-1",
         }
         mock_poll.return_value = {
-            "status": "completed",
+            "_normalized_status": "completed", "status": "completed",
             "answer": json.dumps({
-                "status": "completed",
+                "_normalized_status": "completed", "status": "completed",
                 "role": "architect",
                 "summary": "done",
                 "primary_artifact_name": "architect_plan",
