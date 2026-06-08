@@ -1234,6 +1234,21 @@ def _unwrap_to_scalar(value: Any) -> Any:
     return value
 
 
+# Known scalar-wrapper keys that LLMs may use to wrap a scalar value.
+# Single-key dicts with these keys are unwrapped; unknown single-key dicts
+# are returned as-is so the caller can reject them as dangerous payloads.
+_KNOWN_SCALAR_WRAPPER_KEYS: tuple[str, ...] = (
+    "text",
+    "value",
+    "default",
+    "name",
+    "id",
+    "artifact_id",
+    "string",
+    "content",
+)
+
+
 def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
     """Unwrap a scalar value that may be wrapped in various MCP/LLM dict shapes.
 
@@ -1246,22 +1261,25 @@ def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
     - {"artifact_id": "x"} → "x"
     - Extra keys passed in *extra_keys* (e.g. ["role", "idempotency_key"])
 
-    If the dict has multiple keys and none match, return the original value.
+    Single-key dicts with unknown keys are returned as-is (caller rejects).
+    Multi-key dicts with unknown keys are also returned as-is.
     """
     # Plain scalar → pass through
     if not isinstance(value, dict):
         return value
 
-    # Single-key dict → unwrap that key's value
+    # Single-key dict → unwrap only if key is a known wrapper
     if len(value) == 1:
         key = next(iter(value))
-        inner = value[key]
-        # Recurse for nested wrappers
-        result = unwrap_scalar(inner)
-        return result
+        if key in _KNOWN_SCALAR_WRAPPER_KEYS or (extra_keys and key in extra_keys):
+            inner = value[key]
+            # Recurse for nested wrappers
+            result = unwrap_scalar(inner)
+            return result
+        # Unknown single-key dict → return as-is (caller will reject)
+        return value
 
-    # Multi-key dict → check known keys
-    # Priority order: text, value, name, default, id, artifact_id, then extra_keys
+    # Multi-key dict → check known keys in priority order
     for key in ("text", "value", "name", "default", "id", "artifact_id"):
         if key in value:
             return unwrap_scalar(value[key])
@@ -1392,7 +1410,9 @@ def normalize_role(value: Any) -> str:
                 result = normalize_role(inner)
                 return result
 
-    # Fallback: convert to string (handles numbers, bools, etc.)
+    # Fallback: convert to string (handles numbers, bools, etc.).
+    # This is a safety net — Pydantic's Literal validation will reject
+    # invalid role names that somehow reach this point.
     return str(value).strip().lower()
 
 
