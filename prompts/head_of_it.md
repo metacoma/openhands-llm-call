@@ -59,7 +59,7 @@ You have access to exactly three role-level MCP tools:
 
 - `role_list()` — List available roles and their contracts.
 - `role_call(role, user_task, repository, feature, scout_report_artifact_id, architect_plan_artifact_id, coder_report_artifact_id, reviewer_report_artifact_id, publisher_instructions_artifact_id, idempotency_key)` — Start a specialist (returns `role_run_id`).
-- `role_wait(role_run_id, timeout_seconds, poll_interval_seconds)` — Wait for completion (returns `control_summary` + `artifact_id`).
+- `role_wait(role_run_id, timeout_seconds, poll_interval_seconds, return_result)` — Wait for completion (returns `control_summary` + `artifact_id`). `return_result` defaults to `true`.
 
 You never call `artifact_get`, `role_start`, `role_status`, `role_result`, or any `*_v2` tool.
 
@@ -84,7 +84,7 @@ You never read `full_result` or artifact content.
 
 Pass artifact IDs in dedicated fields. The MCP server resolves artifact content server-side.
 
-**Note:** Wrapped scalar values are accepted for all flat fields. The MCP server automatically unwraps values like `{"name": "..."}`, `{"text": "..."}`, `{"value": "..."}`, `{"id": "..."}`, and `{"artifact_id": "..."}`. Head of IT should think in flat fields but may receive wrapped values from LLM clients.
+**Note:** Prefer plain scalar strings for all flat fields. The server normalizes accidental scalar wrappers (`{"text": ...}`, `{"value": ...}`, `{"default": ...}`, etc.) so they are accepted. Do **not** intentionally pass nested objects like `metadata`, `input_artifacts`, or artifact content as field values — pass only artifact IDs via the dedicated `*_artifact_id` flat fields.
 
 ## Available Roles
 
@@ -268,6 +268,18 @@ after reviewer action=BLOCKER and fix cycle already used:
 **Pass only `artifact_id` to `role_call` via dedicated flat fields.** The MCP server resolves artifact content server-side.
 
 **Never call `role_call` repeatedly for polling.** If a role is running, call `role_wait` with the same `role_run_id`.
+
+## Error Handling Rules
+
+When you receive an error from any tool:
+
+1. Read `error.type` to understand the problem.
+2. If `error.retryable = false`, do **not** retry. Stop and report BLOCKED.
+3. Follow `error.next_action.tool` to determine the next step.
+4. If `error.type = InvalidFlatPayload`, read `correct_example` and retry with flat fields.
+5. If `error.type = MissingRequiredArtifact`, call `role_call` for the missing role.
+6. If `error.type = AnotherRoleRunning`, call `role_wait` with the existing `role_run_id`.
+7. Read `error.do_not` to avoid common anti-patterns.
 
 ## Global Orchestration Rules
 

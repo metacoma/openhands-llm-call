@@ -495,7 +495,8 @@ def wait_job_until_terminal(
 
     while time.monotonic() < deadline:
         last_response = _get_task_status_once(job_id)
-        status = last_response.get("_normalized_status", "unknown")
+        status = last_response.get("_normalized_status",
+                                   last_response.get("status", "unknown"))
 
         if status in ("completed", "completed_empty_result",
                        "failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
@@ -995,6 +996,7 @@ def role_lifecycle_wait_impl(
     role_run_id: str,
     timeout_seconds: Optional[int] = None,
     poll_interval_seconds: Optional[int] = None,
+    return_result: bool = True,
 ) -> dict[str, Any]:
     """Wait for a role run to complete (polling + summary).
 
@@ -1008,6 +1010,8 @@ def role_lifecycle_wait_impl(
         Maximum seconds to wait (default 1800).
     poll_interval_seconds :
         Seconds between status checks (default 30).
+    return_result :
+        Whether to include the full result in the response (default True).
 
     Returns
     -------

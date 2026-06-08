@@ -17,7 +17,7 @@ The Head of IT orchestrates specialist roles through exactly **three** public MC
 
 ### role_call uses flat scalar fields only
 
-Pass **only** plain scalar string values. Do NOT pass:
+Pass **plain scalar string values** for all flat fields. The server normalizes accidental scalar wrappers (`{"text": ...}`, `{"value": ...}`, `{"default": ...}`) so they are accepted — prefer plain scalars. Do **not** intentionally pass nested objects:
 
 - `metadata` (dict/object)
 - `input_artifacts` (list/dict)
@@ -315,106 +315,61 @@ Then wait for completion (step 2):
 
 > **Note:** `api_key`, `llm_model`, and `url` are internal-only. They are read from environment variables (`OPENHANDS_API_KEY`, `OPENHANDS_LLM_MODEL`, `OPENHANDS_URL`) and must **not** be passed by Head of IT.
 
-### Internal helpers (not exposed to Head of IT)
+### Legacy tools (hidden from LLM)
 
-The following functions are kept as internal helpers in ``server.py``
-without the ``@MCP.tool()`` decorator.  They are **not** visible to
-Head of IT via MCP tool discovery.
-
-| Function | Purpose |
-|---|---|
-| ``role_start_impl`` | Legacy role-start implementation (internal) |
-| ``role_wait_impl`` | Legacy server-side polling (internal) |
-| ``role_status`` | Single-shot diagnostic status check (internal) |
-| ``role_result`` | Get result of a completed role (internal) |
-| ``artifact_get`` | Read artifact content (debug only) |
-| ``_internal_role_start`` | Legacy role start (deprecated, hidden) |
-| ``_internal_role_wait`` | Legacy wait (deprecated, hidden) |
-| ``_internal_role_result`` | Legacy result (deprecated, hidden) |
-
+Legacy functions (`role_start`, `role_status`, `role_result`, `artifact_get`, `_internal_role_*`) are kept in `server.py` without the `@MCP.tool()` decorator. They are **not** visible to LLM via MCP tool discovery. See [docs/legacy_internal.md](docs/legacy_internal.md) for legacy documentation.
 
 ### Example full role chain
 
+Each role uses the **two-step pattern**: `role_call` → `role_wait`.
+
 ```text
-1. role_call(
-     role="scout",
-     user_task="Research repo",
-     repository="https://github.com/...",
-     feature="feature-name",
-     idempotency_key="feature-scout"
-   )
-   → control_summary.status = "completed"
-   → artifacts.primary.artifact_id = "art_..._scout_report"
+1. role_call(role="scout", user_task="Research repo", repository="https://github.com/...", feature="feature-name", idempotency_key="feature-scout")
+   → {status: "running", role_run_id: "20260608-xxx-scout-1"}
 
-2. role_call(
-     role="architect",
-     user_task="Plan implementation",
-     repository="https://github.com/...",
-     feature="feature-name",
-     scout_report_artifact_id="art_..._scout_report",
-     idempotency_key="feature-architect"
-   )
-   → control_summary.status = "completed"
-   → artifacts.primary.artifact_id = "art_..._architect_plan"
+2. role_wait(role_run_id="20260608-xxx-scout-1")
+   → {status: "completed", artifacts: {primary: {artifact_id: "art_..._scout_report"}}}
 
-3. role_call(
-     role="coder",
-     user_task="Implement feature",
-     repository="https://github.com/...",
-     feature="feature-name",
-     scout_report_artifact_id="art_..._scout_report",
-     architect_plan_artifact_id="art_..._architect_plan",
-     idempotency_key="feature-coder"
-   )
-   → control_summary.status = "completed"
+3. role_call(role="architect", user_task="Plan implementation", scout_report_artifact_id="art_..._scout_report", idempotency_key="feature-architect")
+   → {status: "running", role_run_id: "20260608-xxx-architect-1"}
 
-4. role_call(
-     role="reviewer",
-     user_task="Review changes",
-     repository="https://github.com/...",
-     feature="feature-name",
-     scout_report_artifact_id="art_..._scout_report",
-     architect_plan_artifact_id="art_..._architect_plan",
-     coder_report_artifact_id="art_..._coder_report",
-     idempotency_key="feature-reviewer"
-   )
-   → control_summary.action = "PASS" or "BLOCKER"
+4. role_wait(role_run_id="20260608-xxx-architect-1")
+   → {status: "completed", artifacts: {primary: {artifact_id: "art_..._architect_plan"}}}
 
-5. If action = PASS:
-     role_call(
-       role="publisher",
-       user_task="Prepare PR instructions",
-       reviewer_report_artifact_id="art_..._reviewer_report",
-       idempotency_key="feature-publisher"
-     )
+5. role_call(role="coder", user_task="Implement feature", scout_report_artifact_id="art_..._scout_report", architect_plan_artifact_id="art_..._architect_plan", idempotency_key="feature-coder")
+   → {status: "running", role_run_id: "20260608-xxx-coder-1"}
+
+6. role_wait(role_run_id="20260608-xxx-coder-1")
+   → {status: "completed", artifacts: {primary: {artifact_id: "art_..._coder_report"}}}
+
+7. role_call(role="reviewer", user_task="Review changes", scout_report_artifact_id="art_..._scout_report", architect_plan_artifact_id="art_..._architect_plan", coder_report_artifact_id="art_..._coder_report", idempotency_key="feature-reviewer")
+   → {status: "running", role_run_id: "20260608-xxx-reviewer-1"}
+
+8. role_wait(role_run_id="20260608-xxx-reviewer-1")
+   → {status: "completed", control_summary: {action: "PASS"}}
+
+9. If action = PASS:
+     role_call(role="publisher", user_task="Prepare PR instructions", reviewer_report_artifact_id="art_..._reviewer_report", idempotency_key="feature-publisher")
+     → role_wait(...)
    If action = BLOCKER:
-     role_call(
-       role="coder_fix",
-       user_task="Fix blockers",
-       architect_plan_artifact_id="art_..._architect_plan",
-       coder_report_artifact_id="art_..._coder_report",
-       reviewer_report_artifact_id="art_..._reviewer_report",
-       idempotency_key="feature-coder-fix"
-     )
+     role_call(role="coder_fix", user_task="Fix blockers", architect_plan_artifact_id="art_..._architect_plan", coder_report_artifact_id="art_..._coder_report", reviewer_report_artifact_id="art_..._reviewer_report", idempotency_key="feature-coder-fix")
+     → role_wait(...)
 ```
 
 ## How it works
 
-### Single-role synchronous call
+The MCP server exposes three public tools for role orchestration:
 
-``role_call`` is the only public tool Head of IT uses to invoke a
-worker role.  It executes the **full two-step lifecycle** synchronously:
+- **`role_call`** — starts a specialist role and returns immediately with `status: "running"` and a `role_run_id`. It does **not** wait for completion.
+- **`role_wait`** — polls a `role_run_id` until the role reaches a terminal status (`completed` or `failed`). Returns `control_summary` and artifact references.
+- **`role_list`** — lists available roles and their artifact requirements.
 
-1. Render the main prompt (with artifact content injected via Jinja).
-2. Start an OpenHands conversation and wait for the main response.
-3. Save the primary artifact via ``ArtifactStore``.
-4. Send a summary prompt into the **same** ``conversation_id``.
-5. Wait for the summary response, validate/repair it.
-6. Save the summary artifact.
-7. Return ``control_summary`` + ``artifact_id`` references only — never
-   artifact content.
+The only valid lifecycle per role is:
 
-Head of IT calls ``role_call`` to start a role and ``role_wait`` to poll for completion.
+```text
+role_call → running (role_run_id) → role_wait → completed (artifacts)
+```
+
 Head of IT never calls ``role_start``, ``role_status``, ``role_result``, or ``artifact_get``.
 The MCP server handles all waiting and artifact resolution internally.
 
@@ -422,25 +377,20 @@ The MCP server handles all waiting and artifact resolution internally.
 
 This server assumes the underlying model may only run one role at a time.
 
-**Do not start multiple roles in parallel.**  Call ``role_call``
-sequentially — each call blocks until the role completes.
+**Do not start multiple roles in parallel.**  Each role must complete via ``role_wait`` before the next ``role_call`` begins.
 
 **Correct:**
 
 ```text
-role_call scout
-role_call architect
-role_call coder
-role_call reviewer
-role_call publisher
+role_call scout → role_wait → role_call architect → role_wait → ...
 ```
 
 **Incorrect:**
 
 ```text
 role_call scout
-role_call architect   ← do not start until scout completes
-role_call coder       ← do not start until architect completes
+role_call architect   ← do not start until scout completes via role_wait
+role_call coder       ← do not start until architect completes via role_wait
 ```
 
 ### Stale active lock prevention

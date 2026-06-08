@@ -12,7 +12,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import requests
 import uvicorn
@@ -1763,9 +1763,10 @@ def role_result(
 
 @MCP.tool()
 def role_wait(
-    role_run_id: Any,
-    timeout_seconds: Any = None,
-    poll_interval_seconds: Any = None,
+    role_run_id: str,
+    timeout_seconds: int = 1800,
+    poll_interval_seconds: int = 30,
+    return_result: bool = True,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result.
     """
@@ -1782,8 +1783,9 @@ def role_wait(
 
         if has_nested_timeout or has_nested_poll:
             # LLM passed the full role_call response as role_run_id
-            _timeout = _timeout if _timeout is not None else raw_role_arg.get("timeout_seconds")
-            _poll = _poll if _poll is not None else raw_role_arg.get("poll_interval_seconds")
+            # Nested values take precedence over defaults/parameters
+            _timeout = raw_role_arg.get("timeout_seconds") if has_nested_timeout else _timeout
+            _poll = raw_role_arg.get("poll_interval_seconds") if has_nested_poll else _poll
 
     try:
         normalized_role_run_id = normalize_role_run_id(raw_role_arg)
@@ -1802,15 +1804,80 @@ def role_wait(
 
     normalized_timeout = normalize_int(_timeout, default=None)
     normalized_poll_interval = normalize_int(_poll, default=None)
+    normalized_return_result = normalize_bool(return_result, default=True)
 
     # Call the new lifecycle-aware role_wait implementation
     from . import role_lifecycle
 
-    return role_lifecycle.role_lifecycle_wait_impl(
+    result = role_lifecycle.role_lifecycle_wait_impl(
         role_run_id=normalized_role_run_id,
         timeout_seconds=normalized_timeout,
         poll_interval_seconds=normalized_poll_interval,
+        return_result=normalized_return_result,
     )
+
+    # ------------------------------------------------------------------
+    # Enrich running response with next_action and do_not for LLM guidance
+    # ------------------------------------------------------------------
+    if result.get("status") == "running":
+        rid = result.get("role_run_id", "")
+        result["next_action"] = {
+            "tool": "role_wait",
+            "arguments": {
+                "role_run_id": rid,
+                "timeout_seconds": 1800,
+                "poll_interval_seconds": 30,
+                "return_result": True,
+            },
+        }
+        result["do_not"] = [
+            "Do not call role_call again.",
+            "Do not start another role while this role is running.",
+        ]
+
+    # ------------------------------------------------------------------
+    # Enrich completed response with next_action/arguments_hint for LLM guidance
+    # ------------------------------------------------------------------
+    if result.get("status") == "completed":
+        role_name = result.get("role", "")
+        artifacts = result.get("artifacts", {})
+        primary_artifact_id = ""
+        if isinstance(artifacts.get("primary"), dict):
+            primary_artifact_id = artifacts["primary"].get("artifact_id", "")
+
+        # Determine next role hint based on current role
+        next_role_map = {
+            "scout": "architect",
+            "architect": "coder",
+            "coder": "reviewer",
+            "reviewer": "publisher",
+            "publisher": None,
+            "coder_fix": None,
+        }
+        next_role = next_role_map.get(role_name)
+
+        if next_role:
+            hint = {"role": next_role}
+            # Only hint the artifact field corresponding to the current role's output.
+            # Mapping: current role → (next_role, artifact_hint_dict)
+            _ROLE_OUTPUT_HINT_MAP = {
+                "scout": ("architect", {"scout_report_artifact_id": primary_artifact_id}),
+                "architect": ("coder", {"architect_plan_artifact_id": primary_artifact_id}),
+                "coder": ("reviewer", {"coder_report_artifact_id": primary_artifact_id}),
+                "reviewer": ("publisher", {"reviewer_report_artifact_id": primary_artifact_id}),
+                "publisher": None,
+                "coder_fix": None,
+            }
+            hint_entry = _ROLE_OUTPUT_HINT_MAP.get(role_name)
+            if hint_entry:
+                _, artifact_hint = hint_entry
+                hint.update(artifact_hint)
+            result["next_action"] = {
+                "tool": "role_call",
+                "arguments_hint": hint,
+            }
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2364,17 +2431,74 @@ def role_list() -> dict:
             "output_artifact_type": r.get("output_artifact", ""),
         })
 
+    # Build workflow steps from roles
+    workflow_steps = []
+    for i, r in enumerate(roles, start=1):
+        req = r.get("requires_artifacts", [])
+        produces = r.get("output_artifact", "")
+        # Build requires list: find roles whose output matches this role's requirements
+        requires_list = []
+        for r2 in roles:
+            r2_output = r2.get("output_artifact", "")
+            if r2_output and r2_output in req:
+                requires_list.append(r2["name"])
+            elif not req and r2["name"] == "scout":
+                requires_list.append(r2["name"])
+        workflow_steps.append({
+            "step": i,
+            "role": r["name"],
+            "requires": requires_list,
+            "produces": produces,
+        })
+
     return {
+        "tools": {
+            "allowed": ["role_list", "role_call", "role_wait"],
+            "forbidden": [
+                "shttp_role_call",
+                "shttp_role_list",
+                "shttp_role_wait",
+                "role_start",
+                "role_status",
+                "role_result",
+                "artifact_get",
+                "*_v2",
+            ],
+        },
+        "workflow": workflow_steps,
+        "rules": [
+            "Use role_call to start a role.",
+            "Use role_wait to wait for a started role.",
+            "Never call role_call twice for polling.",
+            "Never invent artifact ids.",
+            "Pass artifact ids, not artifact contents.",
+            "Only one role may run at a time.",
+            "Use flat string fields only.",
+        ],
+        "examples": {
+            "start_scout": {
+                "tool": "role_call",
+                "arguments": {
+                    "role": "scout",
+                    "user_task": "Analyze repository ...",
+                    "repository": "https://github.com/metacoma/openhands-llm-call",
+                    "feature": "llm-proof-mcp-tools",
+                    "idempotency_key": "llm-proof-mcp-tools-scout",
+                },
+            },
+            "wait": {
+                "tool": "role_wait",
+                "arguments": {
+                    "role_run_id": "20260608-abc-scout-1",
+                    "timeout_seconds": 1800,
+                    "poll_interval_seconds": 30,
+                    "return_result": True,
+                },
+            },
+        },
+        # Keep existing fields for backward compatibility
         "roles": roles_with_flat_fields,
         "public_tools": ["role_list", "role_call", "role_wait"],
-        "workflow": [
-            "Call role_list first.",
-            "For each step, call role_call once with flat scalar fields.",
-            "Then call role_wait with returned role_run_id.",
-            "If role_wait returns running timeout, call role_wait again with same role_run_id.",
-            "When completed, pass artifacts.primary.artifact_id to next role using flat artifact_id field.",
-            "Never call role_call again for polling.",
-        ],
         "flat_role_call_contract": {
             "use_only_flat_scalar_fields": True,
             "forbidden_fields": [
@@ -2441,6 +2565,17 @@ def _looks_like_old_nested_role_call_payload(value: Any) -> bool:
     return False
 
 
+def _looks_like_text_wrapper(value: Any) -> bool:
+    """Return True if *value* is a plain ``{"text": "..."}`` wrapper.
+
+    This detects the common LLM mistake of wrapping a string field in
+    ``{"text": "..."}`` instead of passing a plain scalar.
+    """
+    if not isinstance(value, dict):
+        return False
+    return set(value.keys()) == {"text"}
+
+
 def _invalid_flat_role_call_error(field_name: str) -> dict:
     """Return InvalidFlatRoleCallPayload error dict for *field_name*."""
     return {
@@ -2448,29 +2583,36 @@ def _invalid_flat_role_call_error(field_name: str) -> dict:
         "error": {
             "type": "InvalidFlatRoleCallPayload",
             "message": (
-                "role_call now uses flat scalar fields. Do not pass nested "
-                "input_artifacts or metadata. Pass artifact ids in dedicated "
-                "fields: scout_report_artifact_id, architect_plan_artifact_id, "
-                "coder_report_artifact_id, reviewer_report_artifact_id, "
-                "publisher_instructions_artifact_id."
+                f"Field '{field_name}' must be a plain scalar value, not an object. "
+                "Do not pass {{\"text\": \"...\"}} wrappers or nested payloads. "
+                "Pass artifact ids in dedicated fields: scout_report_artifact_id, "
+                "architect_plan_artifact_id, coder_report_artifact_id, "
+                "reviewer_report_artifact_id, publisher_instructions_artifact_id."
             ),
-            "retryable": False,
+            "correct_example": {
+                "role": "scout",
+                "user_task": "Analyze repository ...",
+                "repository": "https://github.com/example/repo",
+                "feature": "feature-name",
+                "idempotency_key": "feature-scout",
+            },
+            "retryable": True,
         },
     }
 
 
 @MCP.tool()
 def role_call(
-    role: Any,
-    user_task: Any,
-    repository: Any = "",
-    feature: Any = "",
-    scout_report_artifact_id: Any = "",
-    architect_plan_artifact_id: Any = "",
-    coder_report_artifact_id: Any = "",
-    reviewer_report_artifact_id: Any = "",
-    publisher_instructions_artifact_id: Any = "",
-    idempotency_key: Any = None,
+    role: Literal["scout", "architect", "coder", "reviewer", "publisher", "coder_fix"],
+    user_task: str,
+    repository: str = "",
+    feature: str = "",
+    scout_report_artifact_id: str = "",
+    architect_plan_artifact_id: str = "",
+    coder_report_artifact_id: str = "",
+    reviewer_report_artifact_id: str = "",
+    publisher_instructions_artifact_id: str = "",
+    idempotency_key: str | None = None,
 ) -> dict:
     """Start one specialist role. Use flat scalar fields only: role, user_task, repository, feature, *_artifact_id, idempotency_key. Do not pass metadata, input_artifacts, nested JSON, artifact content, or full_result. After role_call returns role_run_id, call role_wait with the same role_run_id. Do not call role_call again for polling. Artifact routing: architect needs scout_report_artifact_id; coder needs scout_report_artifact_id + architect_plan_artifact_id; reviewer needs scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id; publisher needs reviewer_report_artifact_id. For detailed routing, call role_list.
     """
@@ -2535,7 +2677,7 @@ def role_call(
             return _invalid_flat_role_call_error(field_name)
 
     # ------------------------------------------------------------------
-    # Unwrap all scalar fields
+    # Unwrap all scalar fields (unwrap_text/unwrap_scalar handle {"text": "..."} wrappers)
     # ------------------------------------------------------------------
     normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)
@@ -2600,7 +2742,7 @@ def role_call(
     # Import and call the lifecycle implementation (start-only, non-blocking)
     from . import role_lifecycle
 
-    return role_lifecycle.role_call_start_impl(
+    result = role_lifecycle.role_call_start_impl(
         role=normalized_role,
         user_task=str(normalized_user_task) if normalized_user_task else "",
         input_artifacts=internal_input_artifacts,
@@ -2610,6 +2752,85 @@ def role_call(
         url=None,
         idempotency_key=str(normalized_idempotency_key) if normalized_idempotency_key else None,
     )
+
+    # ------------------------------------------------------------------
+    # Enrich running response with next_action and do_not for LLM guidance
+    # ------------------------------------------------------------------
+    if result.get("status") == "running":
+        rid = result.get("role_run_id", "")
+        result["next_action"] = {
+            "tool": "role_wait",
+            "arguments": {
+                "role_run_id": rid,
+                "timeout_seconds": 1800,
+                "poll_interval_seconds": 30,
+                "return_result": True,
+            },
+        }
+        result["do_not"] = [
+            "Do not call role_call again for this role_run_id.",
+            "Do not start another role until this run is terminal.",
+            "Use role_wait to wait for completion.",
+        ]
+
+    # ------------------------------------------------------------------
+    # Enrich failed response with next_action / do_not for LLM guidance
+    # ------------------------------------------------------------------
+    if result.get("status") == "failed" and "error" in result:
+        err = result["error"]
+        err_type = err.get("type", "")
+
+        if err_type == "MissingRequiredArtifact":
+            # Map missing artifact type to the role that produces it.
+            _MISSING_ARTIFACT_TO_ROLE = {
+                "scout_report": "scout",
+                "architect_plan": "architect",
+                "coder_report": "coder",
+                "reviewer_report": "reviewer",
+                "publisher_instructions": "publisher",
+            }
+            msg = err.get("message", "")
+            missing_artifact = None
+            if "missing required artifact: " in msg:
+                missing_artifact = msg.split("missing required artifact: ")[1].split(".")[0].strip()
+            producing_role = _MISSING_ARTIFACT_TO_ROLE.get(missing_artifact, "scout")
+            err["next_action"] = {
+                "tool": "role_call",
+                "arguments_hint": {
+                    "role": producing_role,
+                },
+            }
+            err["do_not"] = [
+                "Do not invent artifact ids.",
+                "Do not pass full artifact text instead of artifact_id.",
+            ]
+        elif err_type == "AnotherRoleRunning":
+            existing_rid = err.get("existing_role_run_id", "")
+            err["next_action"] = {
+                "tool": "role_wait",
+                "arguments": {
+                    "role_run_id": existing_rid,
+                    "timeout_seconds": 1800,
+                    "poll_interval_seconds": 30,
+                    "return_result": True,
+                },
+            }
+            err["do_not"] = [
+                "Do not call role_call again.",
+                "Do not create a new idempotency_key.",
+                "Do not start another role before the current one is terminal.",
+            ]
+        elif err_type == "UnknownRole":
+            err["next_action"] = {
+                "tool": "role_list",
+                "arguments": {},
+            }
+            err["do_not"] = [
+                "Do not invent role names.",
+                "Call role_list to see available roles.",
+            ]
+
+    return result
 
 
 # ---------------------------------------------------------------------------
