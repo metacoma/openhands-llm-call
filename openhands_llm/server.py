@@ -179,8 +179,8 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
             return {
                 "answer": "",
                 "conversation_id": req.conversation_id,
-                "task_id": req.conversation_id,
-                "job_id": req.conversation_id,
+                "task_id": response.get("task_id") or req.conversation_id,
+                "job_id": response.get("job_id") or req.conversation_id,
                 "status": "running",
             }
 

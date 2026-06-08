@@ -39,9 +39,9 @@ def test_conversation_id_plus_prompt_sends_message(mock_collect, mock_send):
     from openhands_llm.server import app
 
     mock_send.return_value = {
-        "status": "running",
-        "conversation_id": "conv-123",
-        "task_id": "task-conv-123-1",
+        "success": True,
+        "sandbox_status": "RUNNING",
+        "message": None,
     }
 
     with patch.dict(os.environ, {"OPENHANDS_URL": "http://testserver"}):
