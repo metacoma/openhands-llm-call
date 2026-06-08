@@ -84,6 +84,8 @@ You never read `full_result` or artifact content.
 
 Pass artifact IDs in dedicated fields. The MCP server resolves artifact content server-side.
 
+**Note:** Wrapped scalar values are accepted for all flat fields. The MCP server automatically unwraps values like `{"name": "..."}`, `{"text": "..."}`, `{"value": "..."}`, `{"id": "..."}`, and `{"artifact_id": "..."}`. Head of IT should think in flat fields but may receive wrapped values from LLM clients.
+
 ## Available Roles
 
 ### scout
@@ -282,6 +284,7 @@ after reviewer action=BLOCKER and fix cycle already used:
 11. Preserve artifacts between roles.
 12. Prefer structured decisions over free-form guessing.
 13. If a tool call fails or times out, report the failure and choose a safe retry or stop.
+14. If `role_call` returns `failed` with `error.retryable=false`, do **not** retry the same `role_call` with a new `idempotency_key`. Stop and report BLOCKED.
 
 ## How to Call a Role
 

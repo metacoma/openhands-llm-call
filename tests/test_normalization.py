@@ -284,6 +284,28 @@ class TestUnwrapScalar(unittest.TestCase):
             unwrap_scalar({"artifact_id": "art_xxx", "extra": "def"}), "art_xxx"
         )
 
+    def test_name_wrapper_single_key(self):
+        """unwrap_scalar({'name': 'art_xxx'}) == 'art_xxx'."""
+        self.assertEqual(unwrap_scalar({"name": "art_xxx"}), "art_xxx")
+
+    def test_name_wrapper_multi_key(self):
+        """unwrap_scalar({'name': 'art_xxx', 'extra': 'def'}) == 'art_xxx'."""
+        self.assertEqual(
+            unwrap_scalar({"name": "art_xxx", "extra": "def"}), "art_xxx"
+        )
+
+    def test_name_wrapper_priority_over_text(self):
+        """When both 'text' and 'name' present, 'text' takes precedence."""
+        self.assertEqual(
+            unwrap_scalar({"text": "from_text", "name": "from_name"}), "from_text"
+        )
+
+    def test_name_wrapper_priority_over_value(self):
+        """When both 'value' and 'name' present, 'value' takes precedence."""
+        self.assertEqual(
+            unwrap_scalar({"value": "from_value", "name": "from_name"}), "from_value"
+        )
+
 
 class TestNormalizeRole(unittest.TestCase):
     """Tests 2-5, 7: normalize_role helper."""

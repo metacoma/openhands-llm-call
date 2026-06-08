@@ -1968,6 +1968,44 @@ class TestWrappedScalarValues(TestCase):
         finally:
             rl.role_call_start_impl = original_impl
 
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_wrapped_name_artifact_id(self, mock_start):
+        """scout_report_artifact_id={'name': 'art_scout'} unwraps correctly."""
+        captured = {}
+
+        def capture_call(**kwargs):
+            captured["input_artifacts"] = kwargs.get("input_artifacts", {})
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-name-{kwargs.get('role', 'unknown')}-1",
+                "run_id": "test-run-name-1",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
+
+        from mcp_agent import role_lifecycle as rl
+        original_impl = rl.role_call_start_impl
+        rl.role_call_start_impl = capture_call
+
+        try:
+            from mcp_agent.server import role_call
+
+            result = role_call(
+                role={"name": "architect"},
+                user_task={"text": "Plan Ruby client"},
+                scout_report_artifact_id={"name": "art_20260608-143106-46c480_scout_1_scout_report"},
+                idempotency_key={"text": "ruby-grpc-client-architect"},
+            )
+
+            self.assertEqual(result["status"], "running")
+            self.assertIn("scout_report", captured.get("input_artifacts", {}))
+            self.assertEqual(
+                captured["input_artifacts"]["scout_report"],
+                "art_20260608-143106-46c480_scout_1_scout_report"
+            )
+        finally:
+            rl.role_call_start_impl = original_impl
+
 
 class TestBadNestedPayloadRejection(TestCase):
     """Test 9: old nested payload in ANY field is rejected with InvalidFlatRoleCallPayload."""
@@ -2081,6 +2119,19 @@ class TestInvalidArtifactId(TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error"]["type"], "InvalidArtifactId")
         self.assertIn("architect_plan_artifact_id", result["error"]["message"])
+
+    def test_invalid_wrapped_artifact_id(self):
+        """Invalid artifact ID inside {'name': ...} wrapper is caught."""
+        from mcp_agent.server import role_call
+        result = role_call(
+            role="architect",
+            user_task="Plan",
+            scout_report_artifact_id={"name": "not-an-artifact"},
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "InvalidArtifactId")
+        self.assertIn("scout_report_artifact_id", result["error"]["message"])
+        self.assertIn("art_", result["error"]["message"])
 
 
 class TestBadNestedPayloadInArtifactField(TestCase):

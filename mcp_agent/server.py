@@ -1259,8 +1259,8 @@ def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
         return result
 
     # Multi-key dict → check known keys
-    # Priority order: text, value, default, id, artifact_id, then extra_keys
-    for key in ("text", "value", "default", "id", "artifact_id"):
+    # Priority order: text, value, name, default, id, artifact_id, then extra_keys
+    for key in ("text", "value", "name", "default", "id", "artifact_id"):
         if key in value:
             return unwrap_scalar(value[key])
 
@@ -2535,39 +2535,7 @@ def role_call(
             return _invalid_flat_role_call_error(field_name)
 
     # ------------------------------------------------------------------
-    # Validate artifact ID format on RAW values (BLOCKER 6)
-    # Only validate non-dict raw values — dicts may be valid wrapped
-    # scalars like {"text": "art_scout"} or {"artifact_id": "art_scout"}.
-    # The nested-payload detector above already catches bad dicts.
-    # ------------------------------------------------------------------
-    _raw_artifact_fields = {
-        "scout_report_artifact_id": scout_report_artifact_id,
-        "architect_plan_artifact_id": architect_plan_artifact_id,
-        "coder_report_artifact_id": coder_report_artifact_id,
-        "reviewer_report_artifact_id": reviewer_report_artifact_id,
-        "publisher_instructions_artifact_id": publisher_instructions_artifact_id,
-    }
-
-    for field_name, raw_value in _raw_artifact_fields.items():
-        if raw_value is None or raw_value == "":
-            continue
-        # Skip dicts — they may be valid wrapped scalars ({"text": ...}).
-        # The nested-payload detector above already rejects bad dicts.
-        if isinstance(raw_value, dict):
-            continue
-        raw_str = str(raw_value) if raw_value is not None else ""
-        if raw_str and not raw_str.startswith("art_"):
-            return {
-                "status": "failed",
-                "error": {
-                    "type": "InvalidArtifactId",
-                    "message": f"{field_name} must be an artifact id like art_..., got {raw_value!r}",
-                    "retryable": False,
-                },
-            }
-
-    # ------------------------------------------------------------------
-    # Unwrap all scalar fields (after validation)
+    # Unwrap all scalar fields
     # ------------------------------------------------------------------
     normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)
@@ -2579,6 +2547,31 @@ def role_call(
     normalized_reviewer_report = unwrap_scalar(reviewer_report_artifact_id) or ""
     normalized_publisher_instructions = unwrap_scalar(publisher_instructions_artifact_id) or ""
     normalized_idempotency_key = unwrap_scalar(idempotency_key) or ""
+
+    # ------------------------------------------------------------------
+    # Validate artifact ID format on UNWRAPPED values
+    # ------------------------------------------------------------------
+    _unwrapped_artifact_fields = {
+        "scout_report_artifact_id": normalized_scout_report,
+        "architect_plan_artifact_id": normalized_architect_plan,
+        "coder_report_artifact_id": normalized_coder_report,
+        "reviewer_report_artifact_id": normalized_reviewer_report,
+        "publisher_instructions_artifact_id": normalized_publisher_instructions,
+    }
+
+    for field_name, unwrapped_value in _unwrapped_artifact_fields.items():
+        if unwrapped_value is None or unwrapped_value == "":
+            continue
+        raw_str = str(unwrapped_value) if unwrapped_value is not None else ""
+        if raw_str and not raw_str.startswith("art_"):
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "InvalidArtifactId",
+                    "message": f"{field_name} must be an artifact id like art_..., got {unwrapped_value!r}",
+                    "retryable": False,
+                },
+            }
 
     # ------------------------------------------------------------------
     # Build internal input_artifacts dict from flat fields
