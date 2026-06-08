@@ -1657,7 +1657,13 @@ class TestArchitectFlatCallMapsScoutReport(TestCase):
 
         def capture_call(**kwargs):
             captured["input_artifacts"] = kwargs.get("input_artifacts", {})
-            return {"task_id": "task-arch-3", "conversation_id": "conv-arch-3"}
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-3",
+                "run_id": "test-run-3",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
 
         from mcp_agent import role_lifecycle as rl
         original_impl = rl.role_call_start_impl
@@ -1735,7 +1741,13 @@ class TestCoderFlatCallMapsTwoArtifacts(TestCase):
 
         def capture_call(**kwargs):
             captured["input_artifacts"] = kwargs.get("input_artifacts", {})
-            return {"task_id": "task-coder-5", "conversation_id": "conv-coder-5"}
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-5",
+                "run_id": "test-run-5",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
 
         from mcp_agent import role_lifecycle as rl
         original_impl = rl.role_call_start_impl
@@ -1783,7 +1795,13 @@ class TestReviewerFlatCallMapsThreeArtifacts(TestCase):
 
         def capture_call(**kwargs):
             captured["input_artifacts"] = kwargs.get("input_artifacts", {})
-            return {"task_id": "task-rev-6", "conversation_id": "conv-rev-6"}
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-6",
+                "run_id": "test-run-6",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
 
         from mcp_agent import role_lifecycle as rl
         original_impl = rl.role_call_start_impl
@@ -1836,7 +1854,13 @@ class TestPublisherFlatCallMapsReviewerReport(TestCase):
 
         def capture_call(**kwargs):
             captured["input_artifacts"] = kwargs.get("input_artifacts", {})
-            return {"task_id": "task-pub-7", "conversation_id": "conv-pub-7"}
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-7",
+                "run_id": "test-run-7",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
 
         from mcp_agent import role_lifecycle as rl
         original_impl = rl.role_call_start_impl
@@ -1885,7 +1909,13 @@ class TestWrappedScalarValues(TestCase):
             captured["role"] = kwargs.get("role")
             captured["user_task"] = kwargs.get("user_task")
             captured["idempotency_key"] = kwargs.get("idempotency_key")
-            return {"task_id": "task-wrapped-8", "conversation_id": "conv-wrapped-8"}
+            return {
+                "status": "running",
+                "role_run_id": f"test-run-{kwargs.get('role', 'unknown')}-8",
+                "run_id": "test-run-8",
+                "role": str(kwargs.get("role")),
+                "message": "Role started.",
+            }
 
         from mcp_agent import role_lifecycle as rl
         original_impl = rl.role_call_start_impl

@@ -2633,6 +2633,30 @@ def role_call(
     normalized_idempotency_key = unwrap_scalar(idempotency_key) or ""
 
     # ------------------------------------------------------------------
+    # Detect bad nested payload (Test 9 — Option B)
+    # MUST run BEFORE artifact ID validation to avoid misleading errors.
+    # When a parameter like scout_report_artifact_id receives the full
+    # role_call payload as a dict, artifact ID validation would fire first
+    # and return InvalidArtifactId — the exact error the task says must NOT
+    # appear.
+    # ------------------------------------------------------------------
+    if isinstance(role, dict) and "input_artifacts" in role:
+        return {
+            "status": "failed",
+            "error": {
+                "type": "InvalidFlatRoleCallPayload",
+                "message": (
+                    "role_call now uses flat scalar fields. Do not pass nested "
+                    "input_artifacts or metadata. Pass artifact ids in dedicated "
+                    "fields: scout_report_artifact_id, architect_plan_artifact_id, "
+                    "coder_report_artifact_id, reviewer_report_artifact_id, "
+                    "publisher_instructions_artifact_id."
+                ),
+                "retryable": False,
+            },
+        }
+
+    # ------------------------------------------------------------------
     # Validate artifact ID format (if provided, must start with "art_")
     # ------------------------------------------------------------------
     artifact_id_fields = {
@@ -2653,25 +2677,6 @@ def role_call(
                     "retryable": False,
                 },
             }
-
-    # ------------------------------------------------------------------
-    # Detect bad nested payload (Test 9 — Option B)
-    # ------------------------------------------------------------------
-    if isinstance(role, dict) and "input_artifacts" in role:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "InvalidFlatRoleCallPayload",
-                "message": (
-                    "role_call now uses flat scalar fields. Do not pass nested "
-                    "input_artifacts or metadata. Pass artifact ids in dedicated "
-                    "fields: scout_report_artifact_id, architect_plan_artifact_id, "
-                    "coder_report_artifact_id, reviewer_report_artifact_id, "
-                    "publisher_instructions_artifact_id."
-                ),
-                "retryable": False,
-            },
-        }
 
     # ------------------------------------------------------------------
     # Build internal input_artifacts dict from flat fields
