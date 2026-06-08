@@ -2248,7 +2248,7 @@ class TestRoleWaitStillWorks(TestCase):
 # ---------------------------------------------------------------------------
 
 class TestNestedTextWrapperRejection(TestCase):
-    """Test that {"text": "..."} wrappers are rejected on public MCP layer."""
+    """Test that {"text": "..."} wrappers are normalized (unwrapped) on public MCP layer."""
 
     def setUp(self):
         self.state_dir = _make_tmp_state_dir()
@@ -2263,61 +2263,62 @@ class TestNestedTextWrapperRejection(TestCase):
         roles_mod._ROLES = None
         os.environ.pop("ROLE_CONFIG_PATH", None)
 
-    def test_role_call_rejects_text_wrapper_on_role_field(self):
-        """role_call rejects {"text": "..."} on the role field."""
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_role_call_unwraps_text_wrapper_on_role_field(self, mock_start):
+        """role_call unwraps {"text": "..."} on the role field."""
+        mock_start.return_value = {"task_id": "task-1", "conversation_id": "conv-1"}
         from mcp_agent.server import role_call
         result = role_call(
             role={"text": "scout"},
             user_task="Analyze repository",
         )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "InvalidFlatPayload")
-        self.assertIn("role", result["error"]["message"])
-        self.assertIn("correct_example", result["error"])
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
 
-    def test_role_call_rejects_text_wrapper_on_user_task_field(self):
-        """role_call rejects {"text": "..."} on the user_task field."""
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_role_call_unwraps_text_wrapper_on_user_task_field(self, mock_start):
+        """role_call unwraps {"text": "..."} on the user_task field."""
+        mock_start.return_value = {"task_id": "task-2", "conversation_id": "conv-2"}
         from mcp_agent.server import role_call
         result = role_call(
             role="scout",
             user_task={"text": "Analyze repository"},
         )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "InvalidFlatPayload")
-        self.assertIn("user_task", result["error"]["message"])
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
 
-    def test_role_call_rejects_text_wrapper_on_repository_field(self):
-        """role_call rejects {"text": "..."} on the repository field."""
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_role_call_unwraps_text_wrapper_on_repository_field(self, mock_start):
+        """role_call unwraps {"text": "..."} on the repository field."""
+        mock_start.return_value = {"task_id": "task-3", "conversation_id": "conv-3"}
         from mcp_agent.server import role_call
         result = role_call(
             role="scout",
             user_task="Analyze",
             repository={"text": "https://github.com/test/repo"},
         )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "InvalidFlatPayload")
-        self.assertIn("repository", result["error"]["message"])
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
 
-    def test_role_call_rejects_text_wrapper_on_idempotency_key(self):
-        """role_call rejects {"text": "..."} on the idempotency_key field."""
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_role_call_unwraps_text_wrapper_on_idempotency_key(self, mock_start):
+        """role_call unwraps {"text": "..."} on the idempotency_key field."""
+        mock_start.return_value = {"task_id": "task-4", "conversation_id": "conv-4"}
         from mcp_agent.server import role_call
         result = role_call(
             role="scout",
             user_task="Analyze",
             idempotency_key={"text": "test-key"},
         )
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "InvalidFlatPayload")
-        self.assertIn("idempotency_key", result["error"]["message"])
+        self.assertEqual(result["status"], "running")
+        self.assertIn("role_run_id", result)
 
-    def test_role_wait_rejects_text_wrapper_on_role_run_id(self):
-        """role_wait rejects {"text": "..."} on the role_run_id field."""
+    def test_role_wait_unwraps_text_wrapper_on_role_run_id(self):
+        """role_wait unwraps {"text": "..."} on the role_run_id field, then fails with RoleRunNotFound."""
         from mcp_agent.server import role_wait
         result = role_wait(role_run_id={"text": "abc"})
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "InvalidFlatPayload")
-        self.assertIn("role_run_id", result["error"]["message"])
-        self.assertIn("correct_example", result["error"])
+        self.assertEqual(result["error"]["type"], "RoleRunNotFound")
 
 
 # ---------------------------------------------------------------------------
@@ -2389,19 +2390,17 @@ class TestErrorStructureEnrichment(TestCase):
         )
 
     def test_invalid_flat_payload_error_has_correct_example(self):
-        """InvalidFlatPayload error has correct_example."""
+        """Wrapped role value is normalized and call proceeds (fails due to no server)."""
         from mcp_agent.server import role_call
         result = role_call(
             role={"text": "scout"},
             user_task="Analyze",
         )
+        # Wrapped role is now normalized, so we get a network error (no server) not InvalidFlatPayload
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "InvalidFlatPayload")
-        self.assertIn("correct_example", result["error"])
-        ce = result["error"]["correct_example"]
-        self.assertEqual(ce["role"], "scout")
-        self.assertIn("user_task", ce)
-        self.assertIn("repository", ce)
+        self.assertIn("type", result["error"])
+        self.assertIn("retryable", result["error"])
+        self.assertIn("message", result["error"])
 
     def test_all_errors_have_type_and_retryable_and_message(self):
         """All errors have type, retryable, and message."""

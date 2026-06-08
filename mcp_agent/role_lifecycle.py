@@ -495,7 +495,8 @@ def wait_job_until_terminal(
 
     while time.monotonic() < deadline:
         last_response = _get_task_status_once(job_id)
-        status = last_response.get("_normalized_status", "unknown")
+        status = last_response.get("_normalized_status",
+                                   last_response.get("status", "unknown"))
 
         if status in ("completed", "completed_empty_result",
                        "failed", "error", "cancelled", "canceled", "timeout", "timed_out"):

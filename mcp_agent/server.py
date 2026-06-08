@@ -1770,28 +1770,6 @@ def role_wait(
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result.
     """
-    # ------------------------------------------------------------------
-    # Reject {"text": "..."} wrapper on role_run_id (BLOCKER 3)
-    # ------------------------------------------------------------------
-    if _looks_like_text_wrapper(role_run_id):
-        return {
-            "status": "failed",
-            "error": {
-                "type": "InvalidFlatPayload",
-                "message": (
-                    "role_run_id must be a plain string, not an object. "
-                    "Do not pass {\"text\": \"...\"} wrappers."
-                ),
-                "correct_example": {
-                    "role_run_id": "20260608-abc-scout-1",
-                    "timeout_seconds": 1800,
-                    "poll_interval_seconds": 30,
-                    "return_result": True,
-                },
-                "retryable": True,
-            },
-        }
-
     # Defensive parsing for nested LLM mistakes.
     # When the model passes the full role_call response as role_run_id,
     # extract the nested role_run_id and any nested timeout/poll args.
@@ -1805,8 +1783,9 @@ def role_wait(
 
         if has_nested_timeout or has_nested_poll:
             # LLM passed the full role_call response as role_run_id
-            _timeout = _timeout if _timeout is not None else raw_role_arg.get("timeout_seconds")
-            _poll = _poll if _poll is not None else raw_role_arg.get("poll_interval_seconds")
+            # Nested values take precedence over defaults/parameters
+            _timeout = raw_role_arg.get("timeout_seconds") if has_nested_timeout else _timeout
+            _poll = raw_role_arg.get("poll_interval_seconds") if has_nested_poll else _poll
 
     try:
         normalized_role_run_id = normalize_role_run_id(raw_role_arg)
@@ -2698,32 +2677,7 @@ def role_call(
             return _invalid_flat_role_call_error(field_name)
 
     # ------------------------------------------------------------------
-    # Reject {"text": "..."} wrappers on ALL fields (BLOCKER 2)
-    # MUST run BEFORE unwrap.
-    # ------------------------------------------------------------------
-    for field_name, raw_value in _raw_fields.items():
-        if _looks_like_text_wrapper(raw_value):
-            return {
-                "status": "failed",
-                "error": {
-                    "type": "InvalidFlatPayload",
-                    "message": (
-                        f"Field '{field_name}' must be a plain string, not an object. "
-                        "Do not pass {{\"text\": \"...\"}} wrappers."
-                    ),
-                    "correct_example": {
-                        "role": "scout",
-                        "user_task": "Analyze repository ...",
-                        "repository": "https://github.com/example/repo",
-                        "feature": "feature-name",
-                        "idempotency_key": "feature-scout",
-                    },
-                    "retryable": True,
-                },
-            }
-
-    # ------------------------------------------------------------------
-    # Unwrap all scalar fields
+    # Unwrap all scalar fields (unwrap_text/unwrap_scalar handle {"text": "..."} wrappers)
     # ------------------------------------------------------------------
     normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)
