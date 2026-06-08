@@ -2465,6 +2465,42 @@ _ARTIFACT_FIELD_NAME_MAP: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Helpers for flat role_call validation
+# ---------------------------------------------------------------------------
+
+def _looks_like_old_nested_role_call_payload(value: Any) -> bool:
+    """Return True if *value* resembles an old nested role_call payload."""
+    if not isinstance(value, dict):
+        return False
+    keys = set(value.keys())
+    if "input_artifacts" in keys:
+        return True
+    if "metadata" in keys:
+        return True
+    if {"role", "user_task", "idempotency_key"}.issubset(keys):
+        return True
+    return False
+
+
+def _invalid_flat_role_call_error(field_name: str) -> dict:
+    """Return InvalidFlatRoleCallPayload error dict for *field_name*."""
+    return {
+        "status": "failed",
+        "error": {
+            "type": "InvalidFlatRoleCallPayload",
+            "message": (
+                "role_call now uses flat scalar fields. Do not pass nested "
+                "input_artifacts or metadata. Pass artifact ids in dedicated "
+                "fields: scout_report_artifact_id, architect_plan_artifact_id, "
+                "coder_report_artifact_id, reviewer_report_artifact_id, "
+                "publisher_instructions_artifact_id."
+            ),
+            "retryable": False,
+        },
+    }
+
+
 @MCP.tool()
 def role_call(
     role: Any,
@@ -2476,9 +2512,6 @@ def role_call(
     coder_report_artifact_id: Any = "",
     reviewer_report_artifact_id: Any = "",
     publisher_instructions_artifact_id: Any = "",
-    api_key: Any = None,
-    llm_model: Any = None,
-    url: Any = None,
     idempotency_key: Any = None,
 ) -> dict:
     """Start a specialist role and return quickly with ``role_run_id``.
@@ -2514,12 +2547,6 @@ def role_call(
         Artifact ID of the reviewer report.
     publisher_instructions_artifact_id : str
         Artifact ID of the publisher instructions.
-    api_key : str
-        OpenHands API key.
-    llm_model : str
-        LLM model override.
-    url : str
-        OpenHands LLM base URL override.
     idempotency_key : str
         Optional stable key to deduplicate retried calls.
 
@@ -2616,7 +2643,60 @@ def role_call(
             )
 
     # ------------------------------------------------------------------
-    # Unwrap all scalar fields
+    # Detect bad nested payload in ANY field (BLOCKER 1)
+    # MUST run BEFORE unwrap / artifact ID validation.
+    # ------------------------------------------------------------------
+    _raw_fields = {
+        "role": role,
+        "user_task": user_task,
+        "repository": repository,
+        "feature": feature,
+        "scout_report_artifact_id": scout_report_artifact_id,
+        "architect_plan_artifact_id": architect_plan_artifact_id,
+        "coder_report_artifact_id": coder_report_artifact_id,
+        "reviewer_report_artifact_id": reviewer_report_artifact_id,
+        "publisher_instructions_artifact_id": publisher_instructions_artifact_id,
+        "idempotency_key": idempotency_key,
+    }
+
+    for field_name, raw_value in _raw_fields.items():
+        if _looks_like_old_nested_role_call_payload(raw_value):
+            return _invalid_flat_role_call_error(field_name)
+
+    # ------------------------------------------------------------------
+    # Validate artifact ID format on RAW values (BLOCKER 6)
+    # Only validate non-dict raw values — dicts may be valid wrapped
+    # scalars like {"text": "art_scout"} or {"artifact_id": "art_scout"}.
+    # The nested-payload detector above already catches bad dicts.
+    # ------------------------------------------------------------------
+    _raw_artifact_fields = {
+        "scout_report_artifact_id": scout_report_artifact_id,
+        "architect_plan_artifact_id": architect_plan_artifact_id,
+        "coder_report_artifact_id": coder_report_artifact_id,
+        "reviewer_report_artifact_id": reviewer_report_artifact_id,
+        "publisher_instructions_artifact_id": publisher_instructions_artifact_id,
+    }
+
+    for field_name, raw_value in _raw_artifact_fields.items():
+        if raw_value is None or raw_value == "":
+            continue
+        # Skip dicts — they may be valid wrapped scalars ({"text": ...}).
+        # The nested-payload detector above already rejects bad dicts.
+        if isinstance(raw_value, dict):
+            continue
+        raw_str = str(raw_value) if raw_value is not None else ""
+        if raw_str and not raw_str.startswith("art_"):
+            return {
+                "status": "failed",
+                "error": {
+                    "type": "InvalidArtifactId",
+                    "message": f"{field_name} must be an artifact id like art_..., got {raw_value!r}",
+                    "retryable": False,
+                },
+            }
+
+    # ------------------------------------------------------------------
+    # Unwrap all scalar fields (after validation)
     # ------------------------------------------------------------------
     normalized_role = normalize_role(role)
     normalized_user_task = unwrap_text(user_task)
@@ -2627,56 +2707,7 @@ def role_call(
     normalized_coder_report = unwrap_scalar(coder_report_artifact_id) or ""
     normalized_reviewer_report = unwrap_scalar(reviewer_report_artifact_id) or ""
     normalized_publisher_instructions = unwrap_scalar(publisher_instructions_artifact_id) or ""
-    normalized_api_key = unwrap_text(api_key) if api_key is not None else ""
-    normalized_llm_model = unwrap_text(llm_model) if llm_model is not None else None
-    normalized_url = unwrap_text(url) if url is not None else None
     normalized_idempotency_key = unwrap_scalar(idempotency_key) or ""
-
-    # ------------------------------------------------------------------
-    # Detect bad nested payload (Test 9 — Option B)
-    # MUST run BEFORE artifact ID validation to avoid misleading errors.
-    # When a parameter like scout_report_artifact_id receives the full
-    # role_call payload as a dict, artifact ID validation would fire first
-    # and return InvalidArtifactId — the exact error the task says must NOT
-    # appear.
-    # ------------------------------------------------------------------
-    if isinstance(role, dict) and "input_artifacts" in role:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "InvalidFlatRoleCallPayload",
-                "message": (
-                    "role_call now uses flat scalar fields. Do not pass nested "
-                    "input_artifacts or metadata. Pass artifact ids in dedicated "
-                    "fields: scout_report_artifact_id, architect_plan_artifact_id, "
-                    "coder_report_artifact_id, reviewer_report_artifact_id, "
-                    "publisher_instructions_artifact_id."
-                ),
-                "retryable": False,
-            },
-        }
-
-    # ------------------------------------------------------------------
-    # Validate artifact ID format (if provided, must start with "art_")
-    # ------------------------------------------------------------------
-    artifact_id_fields = {
-        "scout_report_artifact_id": normalized_scout_report,
-        "architect_plan_artifact_id": normalized_architect_plan,
-        "coder_report_artifact_id": normalized_coder_report,
-        "reviewer_report_artifact_id": normalized_reviewer_report,
-        "publisher_instructions_artifact_id": normalized_publisher_instructions,
-    }
-
-    for field_name, artifact_id in artifact_id_fields.items():
-        if artifact_id and not str(artifact_id).startswith("art_"):
-            return {
-                "status": "failed",
-                "error": {
-                    "type": "InvalidArtifactId",
-                    "message": f"{field_name} must be an artifact id like art_..., got {artifact_id!r}",
-                    "retryable": False,
-                },
-            }
 
     # ------------------------------------------------------------------
     # Build internal input_artifacts dict from flat fields
@@ -2710,9 +2741,9 @@ def role_call(
         user_task=str(normalized_user_task) if normalized_user_task else "",
         input_artifacts=internal_input_artifacts,
         metadata=internal_metadata,
-        api_key=str(normalized_api_key) if normalized_api_key else "",
-        llm_model=str(normalized_llm_model) if normalized_llm_model else None,
-        url=str(normalized_url) if normalized_url else None,
+        api_key="",
+        llm_model=None,
+        url=None,
         idempotency_key=str(normalized_idempotency_key) if normalized_idempotency_key else None,
     )
 
@@ -2736,6 +2767,12 @@ def _duration_seconds(start_iso: str | None, end_iso: str | None) -> int | None:
 
 
 if __name__ == "__main__":
+    # ------------------------------------------------------------------
+    # BLOCKER 4: Startup log proving which tools are public.
+    # ------------------------------------------------------------------
+    _public_tools = [t.name for t in MCP._tool_manager.list_tools()]
+    logger.info("public_mcp_tools=%s", _public_tools)
+
     # Use explicit uvicorn startup so we can control the bind host/port.
     # FastMCP.run(transport="streamable-http") does not accept host/port
     # kwargs in the installed mcp>=1.0.0 version.

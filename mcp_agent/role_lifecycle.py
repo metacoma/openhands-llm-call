@@ -52,6 +52,23 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
+# Keys that must never appear in public role_wait / role_result responses.
+FORBIDDEN_PUBLIC_KEYS = {"artifact_path", "content", "full_result", "result"}
+
+
+def _sanitize_public_role_response(value: Any) -> Any:
+    """Recursively strip forbidden keys from a role response dict/list."""
+    if isinstance(value, dict):
+        return {
+            k: _sanitize_public_role_response(v)
+            for k, v in value.items()
+            if k not in FORBIDDEN_PUBLIC_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_public_role_response(v) for v in value]
+    return value
+
+
 # Mapping from artifact type name to the flat role_call field name
 _ARTIFACT_FIELD_NAME_MAP: dict[str, str] = {
     "scout_report": "scout_report_artifact_id",

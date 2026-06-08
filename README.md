@@ -249,7 +249,7 @@ Then wait for completion (step 2):
 }
 ```
 
-**Parameters:**
+**Parameters (flat scalar fields only):**
 
 | Parameter | Required | Description |
 |---|---|---|
@@ -262,10 +262,9 @@ Then wait for completion (step 2):
 | `coder_report_artifact_id` | Conditional | Artifact ID of coder report (`art_...`) |
 | `reviewer_report_artifact_id` | Conditional | Artifact ID of reviewer report (`art_...`) |
 | `publisher_instructions_artifact_id` | Conditional | Artifact ID of publisher instructions (`art_...`) |
-| `api_key` | No | OpenHands API key |
-| `llm_model` | No | LLM model override |
-| `url` | No | OpenHands LLM base URL override |
 | `idempotency_key` | No | Deduplication key |
+
+> **Note:** `api_key`, `llm_model`, and `url` are internal-only. They are read from environment variables (`OPENHANDS_API_KEY`, `OPENHANDS_LLM_MODEL`, `OPENHANDS_URL`) and must **not** be passed by Head of IT.
 
 ### Internal helpers (not exposed to Head of IT)
 

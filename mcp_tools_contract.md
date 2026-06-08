@@ -49,7 +49,9 @@ Optional flat fields:
 - `coder_report_artifact_id` — artifact ID of coder report (`art_...`)
 - `reviewer_report_artifact_id` — artifact ID of reviewer report (`art_...`)
 - `publisher_instructions_artifact_id` — artifact ID of publisher instructions (`art_...`)
-- `api_key`, `llm_model`, `url`, `idempotency_key`
+- `idempotency_key` — deduplication key
+
+> **Note:** `api_key`, `llm_model`, and `url` are internal-only. They are read from environment variables (`OPENHANDS_API_KEY`, `OPENHANDS_LLM_MODEL`, `OPENHANDS_URL`) and must **not** be passed by Head of IT.
 
 ### Example scout start
 
