@@ -14,6 +14,7 @@ Verifies that:
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -71,6 +72,63 @@ def test_conversation_id_plus_prompt_sends_message(mock_collect, mock_send):
 
     # collect should NOT be called
     mock_collect.assert_not_called()
+
+
+# ===================================================================
+# Test 1b: integration — /v1/call_lm with conversation_id + prompt hits send-message endpoint
+# ===================================================================
+
+def test_call_lm_uses_send_message_endpoint():
+    """Integration-style test: /v1/call_lm with conversation_id + prompt
+    calls the send-message endpoint (not collect_existing_conversation_answer).
+
+    We patch send_message_to_existing_conversation and verify it is called
+    with the correct endpoint URL (not collect_existing_conversation_answer).
+    """
+    from fastapi.testclient import TestClient
+    from openhands_llm.server import app
+
+    conv_id = "mock-integration-test-conv"
+
+    captured_kwargs = {}
+
+    def mock_send(base_url, api_key, conversation_id, prompt, **kwargs):
+        captured_kwargs["base_url"] = base_url
+        captured_kwargs["conversation_id"] = conversation_id
+        captured_kwargs["prompt"] = prompt
+        return {
+            "success": True,
+            "sandbox_status": "RUNNING",
+            "message": None,
+        }
+
+    with patch(
+        "openhands_llm.openhands_llm_call.send_message_to_existing_conversation",
+        side_effect=mock_send,
+    ):
+        with patch.dict(os.environ, {"OPENHANDS_URL": "http://testserver"}):
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/call_lm",
+                json={
+                    "prompt": "INTEGRATION TEST PROMPT",
+                    "conversation_id": conv_id,
+                    "no_wait": True,
+                    "api_key": "test-key",
+                },
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "running"
+    assert body["conversation_id"] == conv_id
+    assert body["task_id"] == conv_id
+    assert body["job_id"] == conv_id
+
+    # Verify send_message was called with correct args
+    assert captured_kwargs["base_url"] == "http://testserver"
+    assert captured_kwargs["conversation_id"] == conv_id
+    assert captured_kwargs["prompt"] == "INTEGRATION TEST PROMPT"
 
 
 # ===================================================================

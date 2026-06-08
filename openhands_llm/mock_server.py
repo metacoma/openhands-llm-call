@@ -150,7 +150,7 @@ def mock_get_events(conversation_id: str) -> FastAPIJSONResponse:
     )
 
 
-@app.post("/api/v1/conversation/{conversation_id}/messages")
+@app.post("/api/v1/app-conversations/{conversation_id}/send-message")
 async def mock_send_message(conversation_id: str, request: Request) -> FastAPIJSONResponse:
     """Mock sending a message to an existing conversation."""
     conv = conversations.get(conversation_id)
@@ -187,9 +187,9 @@ async def mock_send_message(conversation_id: str, request: Request) -> FastAPIJS
         _schedule_completion(conversation_id)
 
     return FastAPIJSONResponse(content={
-        "status": "running",
-        "conversation_id": conversation_id,
-        "task_id": f"task-{conversation_id}-{len(conv['events'])}",
+        "success": True,
+        "sandbox_status": "RUNNING",
+        "message": None,
     })
 
 

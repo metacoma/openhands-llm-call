@@ -219,7 +219,7 @@ def send_message_to_existing_conversation(
     requests.HTTPError
         On HTTP error response.
     """
-    url = f"{base_url.rstrip('/')}/api/v1/conversation/{conversation_id}/messages"
+    url = f"{base_url.rstrip('/')}/api/v1/app-conversations/{conversation_id}/send-message"
 
     payload: dict[str, Any] = {
         "role": "user",

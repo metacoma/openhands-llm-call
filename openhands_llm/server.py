@@ -160,8 +160,10 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
 
     # --- mode: send new message to existing conversation ---------------------
     if req.conversation_id and req.prompt:
+        endpoint = f"/api/v1/app-conversations/{req.conversation_id}/send-message"
         logger.info(
-            "call_lm.existing_conversation_send conversation_id=%s prompt_len=%d no_wait=%s",
+            "call_lm.existing_conversation_send endpoint=%s conversation_id=%s prompt_len=%d no_wait=%s",
+            endpoint,
             req.conversation_id,
             len(req.prompt),
             req.no_wait,
@@ -177,9 +179,8 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
             return {
                 "answer": "",
                 "conversation_id": req.conversation_id,
-                "task_id": response.get("task_id") or response.get("id") or req.conversation_id,
-                "job_id": response.get("job_id") or response.get("task_id") or response.get("id"),
-                "app_conversation_id": response.get("app_conversation_id") or response.get("conversation_id"),
+                "task_id": req.conversation_id,
+                "job_id": req.conversation_id,
                 "status": "running",
             }
 
