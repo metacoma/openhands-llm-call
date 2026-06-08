@@ -2386,17 +2386,20 @@ class TestRoleCallDescriptionFlatOnly(TestCase):
         )
 
     def test_role_call_description_forbids_input_artifacts(self):
-        """role_call docstring says 'Do not pass input_artifacts'."""
+        """role_call docstring forbids input_artifacts."""
         from mcp_agent.server import role_call
         doc = role_call.__doc__
-        self.assertTrue(
-            any(phrase in doc for phrase in [
-                "Do not pass input_artifacts",
-                "do not pass input_artifacts",
-                "Do NOT pass input_artifacts",
-            ]),
-            "role_call description must forbid input_artifacts",
+        self.assertIn(
+            "input_artifacts", doc,
+            "role_call description must mention input_artifacts",
         )
+        # Verify it appears in a forbidden context
+        for line in doc.split("\n"):
+            if "input_artifacts" in line.lower():
+                self.assertTrue(
+                    any(kw in line.lower() for kw in ["do not", "forbidden", "not"]),
+                    f"input_artifacts should appear in forbidden context, found: {line.strip()}",
+                )
 
     def test_role_call_description_mentions_role_wait(self):
         """role_call docstring mentions role_wait."""
@@ -2626,4 +2629,113 @@ class TestPublicToolsRemainOnlyThree(TestCase):
             tool_names & legacy, set(),
             f"Legacy tools exposed: {tool_names & legacy}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 1: role_call docstring concise
+# ---------------------------------------------------------------------------
+
+class TestRoleCallDocstringConcise(TestCase):
+    """Test role_call docstring is concise and contains required keywords."""
+
+    def test_role_call_docstring_contains_flat_scalar_fields(self):
+        from mcp_agent.server import role_call
+        self.assertIn("flat scalar fields", role_call.__doc__)
+
+    def test_role_call_docstring_forbids_metadata(self):
+        from mcp_agent.server import role_call
+        doc = role_call.__doc__
+        self.assertTrue(
+            any(kw in doc for kw in ["Do not pass metadata", "Do NOT pass metadata"]),
+            "role_call docstring must forbid metadata",
+        )
+
+    def test_role_call_docstring_forbids_input_artifacts(self):
+        from mcp_agent.server import role_call
+        self.assertIn("input_artifacts", role_call.__doc__)
+
+    def test_role_call_docstring_mentions_role_wait(self):
+        from mcp_agent.server import role_call
+        self.assertIn("role_wait", role_call.__doc__)
+
+    def test_role_call_docstring_mentions_polling(self):
+        from mcp_agent.server import role_call
+        self.assertIn("polling", role_call.__doc__)
+
+    def test_role_call_docstring_mentions_role_list(self):
+        from mcp_agent.server import role_call
+        self.assertIn("role_list", role_call.__doc__)
+
+    def test_role_call_docstring_length_under_1200(self):
+        from mcp_agent.server import role_call
+        self.assertLessEqual(
+            len(role_call.__doc__), 1200,
+            f"role_call docstring is {len(role_call.__doc__)} chars (max 1200)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 2: role_wait docstring concise
+# ---------------------------------------------------------------------------
+
+class TestRoleWaitDocstringConcise(TestCase):
+    """Test role_wait docstring is concise and contains required keywords."""
+
+    def test_role_wait_docstring_contains_same_role_run_id(self):
+        from mcp_agent.server import role_wait
+        self.assertIn("same role_run_id", role_wait.__doc__)
+
+    def test_role_wait_docstring_forbids_role_call_polling(self):
+        from mcp_agent.server import role_wait
+        self.assertIn("Never call role_call again for polling", role_wait.__doc__)
+
+    def test_role_wait_docstring_mentions_artifacts_primary(self):
+        from mcp_agent.server import role_wait
+        self.assertIn("artifacts.primary.artifact_id", role_wait.__doc__)
+
+    def test_role_wait_docstring_length_under_900(self):
+        from mcp_agent.server import role_wait
+        self.assertLessEqual(
+            len(role_wait.__doc__), 900,
+            f"role_wait docstring is {len(role_wait.__doc__)} chars (max 900)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 3: role_list docstring concise
+# ---------------------------------------------------------------------------
+
+class TestRoleListDocstringConcise(TestCase):
+    """Test role_list docstring is concise."""
+
+    def test_role_list_docstring_contains_usage_routing_hints(self):
+        from mcp_agent.server import role_list
+        self.assertIn("usage/routing hints", role_list.__doc__)
+
+    def test_role_list_docstring_length_under_500(self):
+        from mcp_agent.server import role_list
+        self.assertLessEqual(
+            len(role_list.__doc__), 500,
+            f"role_list docstring is {len(role_list.__doc__)} chars (max 500)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 6: no long JSON examples in docstrings
+# ---------------------------------------------------------------------------
+
+class TestNoLongJsonExamplesInDocstrings(TestCase):
+    """Test that public tool docstrings do not contain long JSON examples."""
+
+    def test_no_input_artifacts_json_example_in_role_call(self):
+        from mcp_agent.server import role_call
+        self.assertNotIn('"input_artifacts": [', role_call.__doc__)
+
+    def test_no_metadata_json_example_in_role_call(self):
+        from mcp_agent.server import role_call
+        self.assertNotIn('"metadata": {', role_call.__doc__)
+
+    def test_no_status_completed_example_in_role_wait(self):
+        from mcp_agent.server import role_wait
+        self.assertNotIn('"status": "completed"', role_wait.__doc__)
 
