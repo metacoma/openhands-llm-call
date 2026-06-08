@@ -2779,6 +2779,9 @@ class TestRoleCallStartReturnsRunning(TestCase):
         self.cfg_path = _write_role_config(self.state_dir)
         os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
         os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+        # Reset loop guard state to avoid cross-test pollution
+        import mcp_agent.server as server_mod
+        server_mod._invalid_call_fingerprints.clear()
 
     def tearDown(self):
         import shutil
@@ -2786,6 +2789,9 @@ class TestRoleCallStartReturnsRunning(TestCase):
         import mcp_agent.roles as roles_mod
         roles_mod._ROLES = None
         os.environ.pop("ROLE_CONFIG_PATH", None)
+        # Reset loop guard state
+        import mcp_agent.server as server_mod
+        server_mod._invalid_call_fingerprints.clear()
 
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     def test_returns_running_status(self, mock_start):
