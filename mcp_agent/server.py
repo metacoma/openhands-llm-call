@@ -12,7 +12,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import requests
 import uvicorn
@@ -1763,10 +1763,10 @@ def role_result(
 
 @MCP.tool()
 def role_wait(
-    role_run_id: Any,
-    timeout_seconds: Any = None,
-    poll_interval_seconds: Any = None,
-    return_result: Any = None,
+    role_run_id: str,
+    timeout_seconds: int = 1800,
+    poll_interval_seconds: int = 30,
+    return_result: bool = True,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result.
     """
@@ -1879,14 +1879,20 @@ def role_wait(
 
         if next_role:
             hint = {"role": next_role}
-            # Add artifact hint based on next role requirements
-            artifact_hints = {
-                "architect": {"scout_report_artifact_id": primary_artifact_id},
-                "coder": {"scout_report_artifact_id": primary_artifact_id, "architect_plan_artifact_id": primary_artifact_id},
-                "reviewer": {"scout_report_artifact_id": primary_artifact_id, "architect_plan_artifact_id": primary_artifact_id, "coder_report_artifact_id": primary_artifact_id},
-                "publisher": {"reviewer_report_artifact_id": primary_artifact_id},
+            # Only hint the artifact field corresponding to the current role's output.
+            # Mapping: current role → (next_role, artifact_hint_dict)
+            _ROLE_OUTPUT_HINT_MAP = {
+                "scout": ("architect", {"scout_report_artifact_id": primary_artifact_id}),
+                "architect": ("coder", {"architect_plan_artifact_id": primary_artifact_id}),
+                "coder": ("reviewer", {"coder_report_artifact_id": primary_artifact_id}),
+                "reviewer": ("publisher", {"reviewer_report_artifact_id": primary_artifact_id}),
+                "publisher": None,
+                "coder_fix": None,
             }
-            hint.update(artifact_hints.get(next_role, {}))
+            hint_entry = _ROLE_OUTPUT_HINT_MAP.get(role_name)
+            if hint_entry:
+                _, artifact_hint = hint_entry
+                hint.update(artifact_hint)
             result["next_action"] = {
                 "tool": "role_call",
                 "arguments_hint": hint,
@@ -2618,16 +2624,16 @@ def _invalid_flat_role_call_error(field_name: str) -> dict:
 
 @MCP.tool()
 def role_call(
-    role: Any,
-    user_task: Any,
-    repository: Any = "",
-    feature: Any = "",
-    scout_report_artifact_id: Any = "",
-    architect_plan_artifact_id: Any = "",
-    coder_report_artifact_id: Any = "",
-    reviewer_report_artifact_id: Any = "",
-    publisher_instructions_artifact_id: Any = "",
-    idempotency_key: Any = None,
+    role: Literal["scout", "architect", "coder", "reviewer", "publisher", "coder_fix"],
+    user_task: str,
+    repository: str = "",
+    feature: str = "",
+    scout_report_artifact_id: str = "",
+    architect_plan_artifact_id: str = "",
+    coder_report_artifact_id: str = "",
+    reviewer_report_artifact_id: str = "",
+    publisher_instructions_artifact_id: str = "",
+    idempotency_key: str | None = None,
 ) -> dict:
     """Start one specialist role. Use flat scalar fields only: role, user_task, repository, feature, *_artifact_id, idempotency_key. Do not pass metadata, input_artifacts, nested JSON, artifact content, or full_result. After role_call returns role_run_id, call role_wait with the same role_run_id. Do not call role_call again for polling. Artifact routing: architect needs scout_report_artifact_id; coder needs scout_report_artifact_id + architect_plan_artifact_id; reviewer needs scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id; publisher needs reviewer_report_artifact_id. For detailed routing, call role_list.
     """
@@ -2821,10 +2827,23 @@ def role_call(
         err_type = err.get("type", "")
 
         if err_type == "MissingRequiredArtifact":
+            # Map missing artifact type to the role that produces it.
+            _MISSING_ARTIFACT_TO_ROLE = {
+                "scout_report": "scout",
+                "architect_plan": "architect",
+                "coder_report": "coder",
+                "reviewer_report": "reviewer",
+                "publisher_instructions": "publisher",
+            }
+            msg = err.get("message", "")
+            missing_artifact = None
+            if "missing required artifact: " in msg:
+                missing_artifact = msg.split("missing required artifact: ")[1].split(".")[0].strip()
+            producing_role = _MISSING_ARTIFACT_TO_ROLE.get(missing_artifact, "scout")
             err["next_action"] = {
                 "tool": "role_call",
                 "arguments_hint": {
-                    "role": "architect",
+                    "role": producing_role,
                 },
             }
             err["do_not"] = [

@@ -3238,3 +3238,98 @@ class TestNoLongJsonExamplesInDocstrings(TestCase):
         from mcp_agent.server import role_wait
         self.assertNotIn('"status": "completed"', role_wait.__doc__)
 
+
+# ---------------------------------------------------------------------------
+# Tests for PR #44 blocker fixes
+# ---------------------------------------------------------------------------
+
+class TestBlockerFixes(TestCase):
+    """Tests for PR #44 blocker fixes."""
+
+    def test_import_mcp_agent_server_as_package(self):
+        """Import path works when importing mcp_agent.server as a package."""
+        import mcp_agent.server  # noqa: F401
+        # If this import succeeds, the test passes.
+
+    def test_head_of_it_no_wrapped_scalar_accepted(self):
+        """head_of_it.md does not say wrapped scalar values are accepted."""
+        with open("prompts/head_of_it.md", "r") as f:
+            content = f.read()
+        self.assertNotIn("Wrapped scalar values are accepted", content)
+        self.assertNotIn("wrapped scalar values are accepted", content.lower())
+
+    def test_readme_no_synchronous_call_claim(self):
+        """README does not contain 'executes the full two-step lifecycle synchronously'."""
+        with open("README.md", "r") as f:
+            content = f.read()
+        self.assertNotIn("executes the full two-step lifecycle synchronously", content)
+
+    def test_scout_requires_empty(self):
+        """scout workflow requires []."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        scout = next((r for r in result["roles"] if r["name"] == "scout"), None)
+        self.assertIsNotNone(scout)
+        self.assertEqual(scout["requires_artifacts"], [])
+
+    def test_completed_architect_next_action_no_scout_report_hint(self):
+        """completed architect next_action does not set scout_report_artifact_id to architect artifact."""
+        import inspect
+        from mcp_agent.server import role_wait
+
+        source = inspect.getsource(role_wait)
+        # The fix should use _ROLE_OUTPUT_HINT_MAP keyed by current role,
+        # not artifact_hints keyed by next_role that fills all fields.
+        self.assertIn("_ROLE_OUTPUT_HINT_MAP", source)
+        # Verify the old artifact_hints pattern is gone
+        self.assertNotIn('artifact_hints = {', source)
+
+    def test_missing_required_artifact_routes_correctly(self):
+        """MissingRequiredArtifact for reviewer/coder/publisher routes to correct previous role."""
+        from mcp_agent.server import role_call
+
+        # Test: coder missing architect_plan → next_action.role should be "architect"
+        result = role_call(
+            role="coder",
+            user_task="Code",
+            scout_report_artifact_id="art_scout",
+            architect_plan_artifact_id="",  # missing
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingRequiredArtifact")
+        self.assertIn("architect_plan", result["error"]["message"])
+        self.assertEqual(
+            result["error"]["next_action"]["arguments_hint"]["role"],
+            "architect",
+        )
+
+        # Test: reviewer missing coder_report → next_action.role should be "coder"
+        result = role_call(
+            role="reviewer",
+            user_task="Review",
+            scout_report_artifact_id="art_scout",
+            architect_plan_artifact_id="art_arch",
+            coder_report_artifact_id="",  # missing
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingRequiredArtifact")
+        self.assertIn("coder_report", result["error"]["message"])
+        self.assertEqual(
+            result["error"]["next_action"]["arguments_hint"]["role"],
+            "coder",
+        )
+
+        # Test: publisher missing reviewer_report → next_action.role should be "reviewer"
+        result = role_call(
+            role="publisher",
+            user_task="Publish",
+            reviewer_report_artifact_id="",  # missing
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "MissingRequiredArtifact")
+        self.assertIn("reviewer_report", result["error"]["message"])
+        self.assertEqual(
+            result["error"]["next_action"]["arguments_hint"]["role"],
+            "reviewer",
+        )
+

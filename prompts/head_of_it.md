@@ -84,7 +84,7 @@ You never read `full_result` or artifact content.
 
 Pass artifact IDs in dedicated fields. The MCP server resolves artifact content server-side.
 
-**Note:** Wrapped scalar values are accepted for all flat fields. The MCP server automatically unwraps values like `{"name": "..."}`, `{"text": "..."}`, `{"value": "..."}`, `{"id": "..."}`, and `{"artifact_id": "..."}`. Head of IT should think in flat fields but may receive wrapped values from LLM clients.
+**Note:** Wrapped scalar values such as `{"text": "..."}`, `{"name": "..."}`, `{"value": "..."}`, `{"id": "..."}`, and `{"artifact_id": "..."}` are **invalid** and will be **rejected**. Pass only plain string scalars for all flat fields.
 
 ## Available Roles
 
