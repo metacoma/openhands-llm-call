@@ -311,14 +311,15 @@ role_call(
 )
 → returns: {status: "running", role_run_id: "20260607-xxx-scout-1", ...}
 
-2. Wait for completion:
+2. Wait for completion (use repeated short polling):
 role_wait(
     role_run_id="20260607-xxx-scout-1",
-    timeout_seconds=1800,
-    poll_interval_seconds=30
+    timeout_seconds=60,
+    poll_interval_seconds=10
 )
 → returns: {status: "completed", control_summary: {...}, artifacts: {...}}
-```
+
+If status is "running" with timeout=true, call role_wait again with the same role_run_id.
 
 For the next role, pass only `artifact_id` via dedicated flat fields:
 
@@ -334,13 +335,15 @@ role_call(
 )
 → returns: {status: "running", role_run_id: "20260607-xxx-architect-1", ...}
 
-2. Wait for completion:
+2. Wait for completion (use repeated short polling):
 role_wait(
     role_run_id="20260607-xxx-architect-1",
-    timeout_seconds=1800,
-    poll_interval_seconds=30
+    timeout_seconds=60,
+    poll_interval_seconds=10
 )
 → returns: {status: "completed", control_summary: {...}, artifacts: {...}}
+
+If status is "running" with timeout=true, call role_wait again with the same role_run_id.
 ```
 
 The MCP server will:

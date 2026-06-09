@@ -2526,8 +2526,8 @@ class TestBlockerFixes(TestCase):
         )
 
         call_kwargs = mock_wait.call_args.kwargs
-        self.assertEqual(call_kwargs["timeout_seconds"], 1800)
-        self.assertEqual(call_kwargs["poll_interval_seconds"], 30)
+        self.assertEqual(call_kwargs["timeout_seconds"], 30)
+        self.assertEqual(call_kwargs["poll_interval_seconds"], 5)
 
     def test_artifact_id_art_prefix_passes_validation(self):
         """art_... artifact_id from role_wait passes into role_call without InvalidArtifactId."""

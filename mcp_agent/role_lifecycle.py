@@ -52,6 +52,15 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
+# Public maximum timeout for role_wait — prevents MCP tool call timeouts.
+_MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS = int(
+    os.getenv("OPENHANDS_ROLE_WAIT_MAX_PUBLIC_TIMEOUT_SECONDS", "240")
+)
+
+# Poll interval bounds (seconds).
+_MIN_POLL_INTERVAL = 5
+_MAX_POLL_INTERVAL = 60
+
 # Keys that must never appear in public role_wait responses.
 FORBIDDEN_PUBLIC_KEYS = {"artifact_path", "content", "full_result", "result"}
 
@@ -502,10 +511,11 @@ def wait_job_until_terminal(
                        "failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
             return (status, last_response)
 
-        # Still running — wait
-        if time.monotonic() >= deadline:
+        # Still running — wait (bounded to remaining time)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
-        time.sleep(poll_interval_seconds)
+        time.sleep(min(poll_interval_seconds, remaining))
 
     # Deadline exceeded — return last known state (or synthetic timeout if never polled)
     return ("timeout", last_response)
@@ -1109,12 +1119,15 @@ def role_lifecycle_wait_impl(
     _raw_poll = _unwrap_text(poll_interval_seconds) if poll_interval_seconds is not None else None
 
     if _raw_timeout is None:
-        _raw_timeout = int(os.getenv("OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS", "1800"))
+        _raw_timeout = int(os.getenv("OPENHANDS_ROLE_WAIT_TIMEOUT_SECONDS", "30"))
     if _raw_poll is None:
-        _raw_poll = int(os.getenv("OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS", "30"))
+        _raw_poll = int(os.getenv("OPENHANDS_ROLE_WAIT_POLL_INTERVAL_SECONDS", "5"))
 
-    timeout_seconds = max(1, min(int(_raw_timeout), 24 * 3600))
-    poll_interval_seconds = max(1, min(int(_raw_poll), 300))
+    # Clamp timeout to public max to avoid MCP tool call timeouts
+    effective_timeout = min(int(_raw_timeout), _MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS)
+    timeout_seconds = max(1, effective_timeout)
+    # Clamp poll interval: min 5s, max 60s
+    poll_interval_seconds = max(_MIN_POLL_INTERVAL, min(int(_raw_poll), _MAX_POLL_INTERVAL))
 
     role_store = RoleRunStore()
     role_run = role_store.get_role_run(role_run_id)
@@ -1222,13 +1235,14 @@ def role_lifecycle_wait_impl(
                 },
             }
 
-        # Still running — wait
-        if time.monotonic() >= deadline:
+        # Still running — wait (bounded to remaining time)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
-        time.sleep(poll_interval_seconds)
+        time.sleep(min(poll_interval_seconds, remaining))
     else:
         # Timeout
-        return {
+        resp: dict[str, Any] = {
             "status": "running",
             "role_run_id": role_run_id,
             "run_id": role_run.get("run_id", ""),
@@ -1236,6 +1250,15 @@ def role_lifecycle_wait_impl(
             "timeout": True,
             "message": "Role is still running. Call role_wait again with the same role_run_id.",
         }
+        # Include effective timeout when clamping occurred
+        if int(_raw_timeout) > _MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS:
+            resp["effective_timeout_seconds"] = _MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS
+            resp["wait"] = {
+                "requested_timeout_seconds": int(_raw_timeout),
+                "effective_timeout_seconds": _MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS,
+                "poll_interval_seconds": poll_interval_seconds,
+            }
+        return resp
 
     # ------------------------------------------------------------------
     # Explicit guard: do not proceed if main job never completed (Blocker 1)

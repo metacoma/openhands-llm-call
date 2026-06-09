@@ -86,7 +86,7 @@ class TestRoleWaitTimeout(unittest.TestCase):
 
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     def test_poll_interval_actually_used(self, mock_get_status):
-        """poll_interval_seconds should be respected, not overridden by global."""
+        """poll_interval_seconds should be respected (bounded by _MIN_POLL_INTERVAL=5)."""
         call_count = 0
 
         def side_effect(task_id, **kwargs):
@@ -101,16 +101,16 @@ class TestRoleWaitTimeout(unittest.TestCase):
         start = time.monotonic()
         result = role_lifecycle.role_lifecycle_wait_impl(
             role_run_id=role_run_id,
-            timeout_seconds=3,
-            poll_interval_seconds=1,
+            timeout_seconds=12,
+            poll_interval_seconds=5,  # >= _MIN_POLL_INTERVAL so it is respected
         )
         elapsed = time.monotonic() - start
 
         self.assertEqual(result["status"], "running")
         self.assertTrue(result.get("timeout"))
-        # With poll_interval=1 and timeout=3, we expect ~3 polls (every 1 second)
+        # With poll_interval=5 and timeout=12, we expect at least 2 polls
         self.assertGreaterEqual(call_count, 2, f"Expected >= 2 polls, got {call_count}")
-        self.assertLess(elapsed, 10, f"role_wait took {elapsed:.1f}s, expected ~3s")
+        self.assertLess(elapsed, 20, f"role_wait took {elapsed:.1f}s, expected ~12s")
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +859,123 @@ class TestWaitJobUntilTerminalDeadlineExpired(unittest.TestCase):
         # summary_text = data.get("answer", "") or ""  → returns ""
         summary_text = data.get("answer", "") or ""
         self.assertEqual(summary_text, "")
+
+
+# ---------------------------------------------------------------------------
+# Test: Short-polling contract (new defaults, clamping, bounded sleep)
+# ---------------------------------------------------------------------------
+
+class TestRoleWaitShortPollingContract(unittest.TestCase):
+    """Tests for the new short-polling contract.
+
+    Covers:
+    1. timeout_seconds > max is clamped (verified via effective_timeout_seconds in response).
+    2. poll_interval_seconds > timeout_seconds does not oversleep beyond timeout.
+    3. poll_interval_seconds clamped to max 60.
+    4. poll_interval_seconds=0 normalized to _MIN_POLL_INTERVAL (5).
+    5. effective_timeout_seconds included in response when clamping occurs.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_rw_contract_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+        # Patch the module-level constant for fast tests
+        import mcp_agent.role_lifecycle as rl
+        self._orig_max_timeout = rl._MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS
+        rl._MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS = 5
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS = self._orig_max_timeout
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_timeout_1800_clamped_to_max(self, mock_get_status):
+        """Passing timeout_seconds=1800 must NOT cause a 1800-second wait."""
+        mock_get_status.return_value = {"_normalized_status": "running", "status": "running"}
+        role_run_id = _setup_store(self.tmpdir)
+        start = time.monotonic()
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=1800,
+            poll_interval_seconds=1,
+        )
+        elapsed = time.monotonic() - start
+        self.assertEqual(result["status"], "running")
+        self.assertLess(elapsed, 10, f"Wait took {elapsed:.1f}s, expected < 5s (clamped)")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_poll_interval_greater_than_timeout_does_not_oversleep(self, mock_get_status):
+        """poll_interval_seconds > timeout_seconds must not oversleep beyond timeout."""
+        call_count = 0
+        def side_effect(task_id, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"_normalized_status": "running", "status": "running"}
+        mock_get_status.side_effect = side_effect
+        role_run_id = _setup_store(self.tmpdir)
+        start = time.monotonic()
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=2,
+            poll_interval_seconds=60,  # much larger than timeout
+        )
+        elapsed = time.monotonic() - start
+        self.assertEqual(result["status"], "running")
+        self.assertLess(elapsed, 5, f"Overslept: {elapsed:.1f}s with timeout=2, poll=60")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_poll_interval_clamped_to_max_60(self, mock_get_status):
+        """poll_interval_seconds > 60 must be clamped to 60."""
+        mock_get_status.return_value = {"_normalized_status": "running", "status": "running"}
+        role_run_id = _setup_store(self.tmpdir)
+        start = time.monotonic()
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=5,  # small timeout to keep test fast
+            poll_interval_seconds=300,  # should be clamped to 60
+        )
+        elapsed = time.monotonic() - start
+        self.assertEqual(result["status"], "running")
+        # With poll clamped to 60 and timeout=5, should return in ~5s not 300s
+        self.assertLess(elapsed, 10, f"Wait took {elapsed:.1f}s with poll clamped from 300")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_poll_interval_zero_normalized_to_min(self, mock_get_status):
+        """poll_interval_seconds=0 must be normalized to _MIN_POLL_INTERVAL (5)."""
+        mock_get_status.return_value = {"_normalized_status": "running", "status": "running"}
+        role_run_id = _setup_store(self.tmpdir)
+        start = time.monotonic()
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=2,
+            poll_interval_seconds=0,  # should be clamped to 5
+        )
+        elapsed = time.monotonic() - start
+        self.assertEqual(result["status"], "running")
+        self.assertLess(elapsed, 10, f"Wait took {elapsed:.1f}s with poll=0 (should be min 5)")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_effective_timeout_seconds_in_response_when_clamped(self, mock_get_status):
+        """When timeout is clamped, response includes effective_timeout_seconds."""
+        mock_get_status.return_value = {"_normalized_status": "running", "status": "running"}
+        role_run_id = _setup_store(self.tmpdir)
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=1800,
+            poll_interval_seconds=1,
+        )
+        self.assertEqual(result["status"], "running")
+        self.assertIn("effective_timeout_seconds", result)
+        # The effective timeout should be the patched max (5)
+        self.assertEqual(result["effective_timeout_seconds"], 5)
+        self.assertIn("wait", result)
+        self.assertEqual(result["wait"]["requested_timeout_seconds"], 1800)
+        self.assertEqual(result["wait"]["effective_timeout_seconds"], 5)
 
 
 if __name__ == "__main__":

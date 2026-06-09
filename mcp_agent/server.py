@@ -265,8 +265,8 @@ def _build_another_role_running_error(
             "tool": "role_wait",
             "arguments": {
                 "role_run_id": active_id,
-                "timeout_seconds": 1800,
-                "poll_interval_seconds": 15,
+                "timeout_seconds": 60,
+                "poll_interval_seconds": 10,
             },
         },
     }
@@ -495,8 +495,8 @@ def role_list() -> dict:
                 "tool": "role_wait",
                 "arguments": {
                     "role_run_id": "20260608-abc-scout-1",
-                    "timeout_seconds": 1800,
-                    "poll_interval_seconds": 30,
+                    "timeout_seconds": 60,
+                    "poll_interval_seconds": 10,
                 },
             },
         },
@@ -717,9 +717,10 @@ def role_call(
             "tool": "role_wait",
             "arguments": {
                 "role_run_id": rid,
-                "timeout_seconds": 1800,
-                "poll_interval_seconds": 30,
+                "timeout_seconds": 60,
+                "poll_interval_seconds": 10,
             },
+            "hint": "Use repeated short polling. Call role_wait again with the same role_run_id until status=completed.",
         }
         result["do_not"] = [
             "Do not call role_call again for this role_run_id.",
@@ -763,9 +764,10 @@ def role_call(
                 "tool": "role_wait",
                 "arguments": {
                     "role_run_id": existing_rid,
-                    "timeout_seconds": 1800,
-                    "poll_interval_seconds": 30,
+                    "timeout_seconds": 60,
+                    "poll_interval_seconds": 10,
                 },
+                "hint": "Use repeated short polling. Call role_wait again with the same role_run_id until status=completed.",
             }
             err["do_not"] = [
                 "Do not call role_call again.",
@@ -788,8 +790,8 @@ def role_call(
 @MCP.tool()
 def role_wait(
     role_run_id: McpString,
-    timeout_seconds: McpInt = 1800,
-    poll_interval_seconds: McpInt = 30,
+    timeout_seconds: McpInt = 30,
+    poll_interval_seconds: McpInt = 5,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. role_wait returns only status, control_summary, and artifact id references."""
     # Defensive parsing for nested LLM mistakes.
@@ -820,8 +822,8 @@ def role_wait(
             },
         }
 
-    normalized_timeout = normalize_int(_timeout, default=1800)
-    normalized_poll_interval = normalize_int(_poll, default=30)
+    normalized_timeout = normalize_int(_timeout, default=30)
+    normalized_poll_interval = normalize_int(_poll, default=5)
 
     # Call the new lifecycle-aware role_wait implementation
     from . import role_lifecycle
@@ -841,9 +843,10 @@ def role_wait(
             "tool": "role_wait",
             "arguments": {
                 "role_run_id": rid,
-                "timeout_seconds": 1800,
-                "poll_interval_seconds": 30,
+                "timeout_seconds": 60,
+                "poll_interval_seconds": 10,
             },
+            "hint": "Use repeated short polling. Call role_wait again with the same role_run_id until status=completed.",
         }
         result["do_not"] = [
             "Do not call role_call again.",

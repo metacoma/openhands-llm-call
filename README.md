@@ -49,12 +49,39 @@ Pass artifact ids via dedicated flat fields:
 ```json
 {
   "role_run_id": "20260608-xxx-architect-1",
-  "timeout_seconds": 1800,
-  "poll_interval_seconds": 30
+  "timeout_seconds": 60,
+  "poll_interval_seconds": 10
 }
 ```
 
 If the response returns `status: "running"` with `timeout: true`, call `role_wait` again with the **same** `role_run_id`. Never call `role_call` again for polling.
+
+#### Repeated short polling for long-running roles
+
+For long-running roles, **do not** call `role_wait` once with a huge timeout.
+Call `role_wait` repeatedly with `timeout_seconds` around 30–60 and `poll_interval_seconds` around 5–10.
+
+A `running`/`timeout` response means the role is still alive; call `role_wait` again with the same `role_run_id`.
+
+**Example flow:**
+
+1. Start the role:
+
+```json
+{"role": "coder", "user_task": "..."}
+```
+
+2. Wait with short polling:
+
+```json
+{"role_run_id": "...", "timeout_seconds": 60, "poll_interval_seconds": 10}
+```
+
+3. Repeat step 2 until you receive:
+
+```json
+{"status": "completed", "artifacts": {"primary": {"artifact_id": "..."}}}
+```
 
 ## Architecture
 
@@ -230,8 +257,8 @@ Then wait for completion (step 2):
 ```json
 {
   "role_run_id": "20260607-xxx-scout-1",
-  "timeout_seconds": 1800,
-  "poll_interval_seconds": 30
+  "timeout_seconds": 60,
+  "poll_interval_seconds": 10
 }
 ```
 
