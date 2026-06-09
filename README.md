@@ -482,7 +482,6 @@ Tests are in `tests/`:
 | `test_role_tools.py` | role_wait integration, prompt template markers |
 | `test_role_lifecycle.py` | role_call_start_impl, role_lifecycle_wait_impl |
 | `test_role_call.py` | role_call validation, artifact ID resolution, loop guard |
-| `test_role_lifecycle_v2.py` | role_call lifecycle with mocked OpenHands |
 | `test_role_lifecycle_wait.py` | role_wait wrapped args, terminal statuses |
 | `test_role_store.py` | RoleRunStore create/get/update/save_artifact |
 | `test_roles.py` | load_roles, get_role, list_roles, validation |
