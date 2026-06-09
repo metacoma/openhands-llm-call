@@ -95,7 +95,6 @@ User / Head-of-IT
 | `OPENHANDS_API_KEY` | *(empty)* | API key forwarded to the backend |
 | `OPENHANDS_MAX_RUNTIME_SECONDS` | `7200` | Default max runtime (seconds) for tasks |
 | `OPENHANDS_POLL_INTERVAL_SECONDS` | `10` | Polling interval (seconds) |
-| `OPENHANDS_STATE_DIR` | `/tmp/openhands-llm-call-state` | Directory for generic task persistence |
 
 ### Role configuration
 
@@ -480,7 +479,7 @@ Tests are in `tests/`:
 
 | File | Coverage |
 |---|---|
-| `test_role_tools.py` | parse_action, parse_risk, make_summary, role_list_impl, role_wait_impl |
+| `test_role_tools.py` | parse_action, parse_risk, make_summary, role_list_impl |
 | `test_role_lifecycle.py` | role_call_start_impl, role_lifecycle_wait_impl |
 | `test_role_call.py` | role_call validation, artifact ID resolution, loop guard |
 | `test_role_lifecycle_v2.py` | role_call lifecycle with mocked OpenHands |

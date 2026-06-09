@@ -416,10 +416,10 @@ class TestRoleWaitTool(unittest.TestCase):
         self.assertEqual(result["status"], "cancelled")
 
     @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
-    def test_role_wait_return_result_false(
+    def test_role_wait_no_full_result(
         self, mock_lifecycle_wait
     ):
-        """role_wait returns control_summary without full_result."""
+        """role_wait response does not contain full_result."""
         from mcp_agent.server import role_wait
 
         mock_lifecycle_wait.return_value = {

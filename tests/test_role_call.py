@@ -2539,93 +2539,6 @@ class TestRoleListStructure(TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests — role_wait return_result parameter
-# ---------------------------------------------------------------------------
-
-class TestRoleWaitReturnResult(TestCase):
-    """Test role_wait accepts return_result parameter."""
-
-    def setUp(self):
-        self.state_dir = _make_tmp_state_dir()
-        self.cfg_path = _write_role_config(self.state_dir)
-        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
-        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.state_dir, ignore_errors=True)
-        import mcp_agent.roles as roles_mod
-        roles_mod._ROLES = None
-        os.environ.pop("ROLE_CONFIG_PATH", None)
-
-    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
-    def test_role_wait_accepts_return_result_true(self, mock_wait_impl):
-        """role_wait accepts return_result=true."""
-        mock_wait_impl.return_value = {
-            "status": "completed",
-            "role": "scout",
-            "role_run_id": "test-run-1",
-        }
-
-        from mcp_agent.server import role_wait
-
-        wait_result = role_wait(
-            role_run_id="test-run-1",
-            timeout_seconds=1800,
-            poll_interval_seconds=30,
-            return_result=True,
-        )
-        # Verify return_result=True was passed through
-        call_kwargs = mock_wait_impl.call_args
-        self.assertEqual(call_kwargs[1]["return_result"], True)
-        self.assertIn("status", wait_result)
-
-    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
-    def test_role_wait_accepts_return_result_false(self, mock_wait_impl):
-        """role_wait accepts return_result=false."""
-        mock_wait_impl.return_value = {
-            "status": "completed",
-            "role": "scout",
-            "role_run_id": "test-run-2",
-        }
-
-        from mcp_agent.server import role_wait
-
-        wait_result = role_wait(
-            role_run_id="test-run-2",
-            timeout_seconds=1800,
-            poll_interval_seconds=30,
-            return_result=False,
-        )
-        # Verify return_result=False was passed through
-        call_kwargs = mock_wait_impl.call_args
-        self.assertEqual(call_kwargs[1]["return_result"], False)
-        self.assertIn("status", wait_result)
-
-    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
-    def test_role_wait_default_return_result_is_true(self, mock_wait_impl):
-        """role_wait default return_result is true (no error when omitted)."""
-        mock_wait_impl.return_value = {
-            "status": "completed",
-            "role": "scout",
-            "role_run_id": "test-run-3",
-        }
-
-        from mcp_agent.server import role_wait
-
-        # Omit return_result — should default to True
-        wait_result = role_wait(
-            role_run_id="test-run-3",
-            timeout_seconds=1800,
-            poll_interval_seconds=30,
-        )
-        # Verify default True was passed through
-        call_kwargs = mock_wait_impl.call_args
-        self.assertEqual(call_kwargs[1]["return_result"], True)
-        self.assertIn("status", wait_result)
-
-
-# ---------------------------------------------------------------------------
 # Tests — coder without architect_plan_artifact_id fails clearly
 # ---------------------------------------------------------------------------
 
@@ -3429,7 +3342,7 @@ class TestBlockerFixes(TestCase):
 
     @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_role_wait_null_args_uses_defaults(self, mock_wait):
-        """role_wait with None timeout_seconds/poll_interval_seconds/return_result uses defaults."""
+        """role_wait with None timeout_seconds/poll_interval_seconds uses defaults."""
         mock_wait.return_value = {"status": "completed", "role": "test"}
 
         from mcp_agent.server import role_wait
@@ -3438,13 +3351,11 @@ class TestBlockerFixes(TestCase):
             role_run_id="art_test_1_scout_1",
             timeout_seconds=None,
             poll_interval_seconds=None,
-            return_result=None,
         )
 
         call_kwargs = mock_wait.call_args.kwargs
         self.assertEqual(call_kwargs["timeout_seconds"], 1800)
         self.assertEqual(call_kwargs["poll_interval_seconds"], 30)
-        self.assertTrue(call_kwargs["return_result"])
 
     def test_artifact_id_art_prefix_passes_validation(self):
         """art_... artifact_id from role_wait passes into role_call without InvalidArtifactId."""

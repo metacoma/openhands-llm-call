@@ -19,58 +19,6 @@ logger = logging.getLogger("openhands-mcp")
 
 
 # ---------------------------------------------------------------------------
-# Empty-result response helper (Issue 2: eliminate duplication)
-# ---------------------------------------------------------------------------
-
-
-def _build_empty_result_response(
-    role_run_id: str,
-    role_run: Optional[dict],
-    last_status: str,
-) -> dict:
-    """Build a canonical empty-result response dict.
-
-    Centralises the empty-result shape so that changes to the schema
-    only need to be made in one place.
-    """
-    diagnostics = {
-        "conversation_id": role_run.get("conversation_id") if role_run else None,
-        "task_id": role_run["openhands_task_id"] if role_run else None,
-        "last_status": last_status,
-        "answer_empty": True,
-        "final_answer_retry_seconds": int(
-            os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_SECONDS", "60")
-        ),
-    }
-    return {
-        "role_run_id": role_run_id,
-        "run_id": role_run["run_id"] if role_run else None,
-        "role": role_run["role"] if role_run else None,
-        "status": "completed_empty_result",
-        "has_result": False,
-        "full_result": "",
-        "result_summary": "",
-        "artifact_name": role_run.get("artifact_name") if role_run else None,
-        "artifact_path": None,
-        "artifact_saved": False,
-        "action": None,
-        "risk": None,
-        "error": {
-            "type": "EmptyRoleResult",
-            "message": (
-                "Role completed but did not return a final LLM answer."
-            ),
-            "retryable": True,
-            "suggested_next_action": (
-                "Retry this role once with a stricter final-answer prompt."
-            ),
-        },
-        "diagnostics": diagnostics,
-        "timeout_minutes": role_run.get("timeout_minutes") if role_run else None,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Action/Risk parsing helpers
 # ---------------------------------------------------------------------------
 
@@ -414,18 +362,6 @@ _DEFAULT_ROLE_WAIT_POLL_INTERVAL = int(
 )
 _MIN_POLL_INTERVAL = 5
 _MAX_POLL_INTERVAL = 120
-
-
-def role_wait_impl(
-    role_run_id: str,
-    timeout_seconds: int | None = None,
-    poll_interval_seconds: int | None = None,
-    return_result: bool = True,
-) -> dict:
-    """LEGACY — removed from public API. Kept only for backward compat."""
-    raise NotImplementedError(
-        "role_wait_impl is removed; use role_lifecycle_wait_impl instead."
-    )
 
 
 def artifact_list_impl(run_id: str) -> dict:

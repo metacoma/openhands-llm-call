@@ -80,7 +80,7 @@ class TestStaleActiveRoleLockPrevention(unittest.TestCase):
         self.assertEqual(updated["status"], "completed")
 
     # ------------------------------------------------------------------
-    # Test 2: role_wait(return_result=False) persists completed
+    # Test 2: role_wait persists completed
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------

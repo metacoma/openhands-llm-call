@@ -267,7 +267,6 @@ def _build_another_role_running_error(
                 "role_run_id": active_id,
                 "timeout_seconds": 1800,
                 "poll_interval_seconds": 15,
-                "return_result": True,
             },
         },
     }
@@ -498,7 +497,6 @@ def role_list() -> dict:
                     "role_run_id": "20260608-abc-scout-1",
                     "timeout_seconds": 1800,
                     "poll_interval_seconds": 30,
-                    "return_result": True,
                 },
             },
         },
@@ -703,7 +701,6 @@ def role_call(
                 "role_run_id": rid,
                 "timeout_seconds": 1800,
                 "poll_interval_seconds": 30,
-                "return_result": True,
             },
         }
         result["do_not"] = [
@@ -750,7 +747,6 @@ def role_call(
                     "role_run_id": existing_rid,
                     "timeout_seconds": 1800,
                     "poll_interval_seconds": 30,
-                    "return_result": True,
                 },
             }
             err["do_not"] = [
@@ -776,7 +772,6 @@ def role_wait(
     role_run_id: McpString,
     timeout_seconds: McpInt = 1800,
     poll_interval_seconds: McpInt = 30,
-    return_result: McpBool = True,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result."""
     # Defensive parsing for nested LLM mistakes.
@@ -809,7 +804,6 @@ def role_wait(
 
     normalized_timeout = normalize_int(_timeout, default=1800)
     normalized_poll_interval = normalize_int(_poll, default=30)
-    normalized_return_result = normalize_bool(return_result, default=True)
 
     # Call the new lifecycle-aware role_wait implementation
     from . import role_lifecycle
@@ -818,7 +812,6 @@ def role_wait(
         role_run_id=normalized_role_run_id,
         timeout_seconds=normalized_timeout,
         poll_interval_seconds=normalized_poll_interval,
-        return_result=normalized_return_result,
     )
 
     # ------------------------------------------------------------------
@@ -832,7 +825,6 @@ def role_wait(
                 "role_run_id": rid,
                 "timeout_seconds": 1800,
                 "poll_interval_seconds": 30,
-                "return_result": True,
             },
         }
         result["do_not"] = [
