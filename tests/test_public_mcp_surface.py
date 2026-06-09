@@ -74,6 +74,47 @@ class TestNegativeAssertions(unittest.TestCase):
             f"Found production matches for deleted functions:\n{result.stdout}",
         )
 
+    def test_readme_no_shttp_role_wait(self):
+        """README.md does not contain shttp_role_wait/shttp_role_call/shttp_role_result."""
+        readme_path = os.path.join(os.path.dirname(__file__), "..", "README.md")
+        content = Path(readme_path).read_text(encoding="utf-8")
+        self.assertNotIn("shttp_role_wait", content)
+        self.assertNotIn("shttp_role_call", content)
+        self.assertNotIn("shttp_role_result", content)
+
+    def test_head_of_it_prompt_no_shttp_role_wait(self):
+        """prompts/head_of_it.md does not contain shttp_role_wait/shttp_role_call."""
+        prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
+        content = Path(os.path.join(prompts_dir, "head_of_it.md")).read_text(encoding="utf-8")
+        self.assertNotIn("shttp_role_wait", content)
+        self.assertNotIn("shttp_role_call", content)
+
+    def test_server_no_shttp_role_wait(self):
+        """server.py does not contain shttp_role_wait/shttp_role_call in public-facing content."""
+        server_path = os.path.join(os.path.dirname(__file__), "..", "mcp_agent", "server.py")
+        content = Path(server_path).read_text(encoding="utf-8")
+        self.assertNotIn("shttp_role_wait", content)
+        self.assertNotIn("shttp_role_call", content)
+        self.assertNotIn("shttp_role_result", content)
+
+    def test_role_lifecycle_no_shttp_role_wait(self):
+        """role_lifecycle.py does not contain shttp_role_wait/shttp_role_call."""
+        lifecycle_path = os.path.join(
+            os.path.dirname(__file__), "..", "mcp_agent", "role_lifecycle.py"
+        )
+        content = Path(lifecycle_path).read_text(encoding="utf-8")
+        self.assertNotIn("shttp_role_wait", content)
+        self.assertNotIn("shttp_role_call", content)
+
+    def test_role_tools_no_shttp_role_wait(self):
+        """role_tools.py does not contain shttp_role_wait/shttp_role_call."""
+        tools_path = os.path.join(
+            os.path.dirname(__file__), "..", "mcp_agent", "role_tools.py"
+        )
+        content = Path(tools_path).read_text(encoding="utf-8")
+        self.assertNotIn("shttp_role_wait", content)
+        self.assertNotIn("shttp_role_call", content)
+
 
 if __name__ == "__main__":
     unittest.main()
