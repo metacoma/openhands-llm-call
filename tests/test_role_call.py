@@ -769,7 +769,12 @@ class TestArtifactIdResolution(TestCase):
     @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
     @patch("mcp_agent.role_lifecycle._get_task_status_once")
     def test_artifact_id_not_found_returns_error(self, mock_poll, mock_start):
-        """Unresolvable artifact_id returns ArtifactNotFound error."""
+        """Unresolvable art_ artifact_id returns ArtifactReadError (not ArtifactNotFound).
+
+        When an explicit artifact_id (art_...) is provided but cannot be resolved,
+        the error type is ArtifactReadError with the actual ID in the message,
+        not ArtifactNotFound with a slot name.
+        """
         result = role_lifecycle.role_call_impl(
             role="architect",
             user_task="Plan implementation",
@@ -778,7 +783,8 @@ class TestArtifactIdResolution(TestCase):
         )
 
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["error"]["type"], "ArtifactNotFound")
+        self.assertEqual(result["error"]["type"], "ArtifactReadError")
+        self.assertIn("art_nonexistent_id", result["error"]["message"])
 
 
 # ---------------------------------------------------------------------------
@@ -3482,4 +3488,413 @@ class TestBlockerFixes(TestCase):
                 "InvalidFlatRoleCallPayload",
                 "idempotency_key wrapper should be normalized, not rejected",
             )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for artifact-id resolution bug fix
+# ---------------------------------------------------------------------------
+
+class TestArtifactReadRegression(TestCase):
+    """Regression tests for the artifact-reading bug where slot names
+    were incorrectly used as artifact IDs.
+
+    Bug: when scout_report_artifact_id = "art_...", the server read
+    artifact by slot name "scout_report" instead of the actual ID,
+    producing misleading ArtifactReadError messages.
+    """
+
+    def setUp(self):
+        self.state_dir = _make_tmp_state_dir()
+        self.cfg_path = _write_role_config(self.state_dir)
+        os.environ["ROLE_CONFIG_PATH"] = str(self.cfg_path)
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = str(self.state_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.state_dir, ignore_errors=True)
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+        os.environ.pop("ROLE_CONFIG_PATH", None)
+
+    # ------------------------------------------------------------------
+    # Test A: architect reads scout artifact by artifact_id
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_architect_reads_scout_by_artifact_id(self, mock_poll, mock_start):
+        """Test A: Given scout_report_artifact_id = 'art_test_scout_report',
+        When role_call(role='architect', scout_report_artifact_id='art_test_scout_report'),
+        Then artifact_store.get_content_by_id called with 'art_test_scout_report',
+        not called with 'scout_report', and no ArtifactReadError."""
+        mock_start.return_value = {"task_id": "task-a-1", "conversation_id": "conv-a-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "architect",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Save a scout artifact with a known ID
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-a",
+            role_run_id="test-run-a-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FULL SCOUT REPORT CONTENT A",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts={"scout_report": scout_artifact_id},
+            metadata={"run_id": "test-run-a"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertNotIn("error", result)
+
+    # ------------------------------------------------------------------
+    # Test B: architect must not read slot name
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_architect_must_not_read_slot_name(self, mock_poll, mock_start):
+        """Test B: Given scout_report_artifact_id = 'art_test_scout_report',
+        Then no call to artifact_store.get(run_id, artifact_name='scout_report')."""
+        mock_start.return_value = {"task_id": "task-b-1", "conversation_id": "conv-b-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "architect",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Save a scout artifact
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-b",
+            role_run_id="test-run-b-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FULL SCOUT REPORT CONTENT B",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        with patch.object(ArtifactStore, "get") as mock_get:
+            result = role_lifecycle.role_call_impl(
+                role="architect",
+                user_task="Plan implementation",
+                input_artifacts={"scout_report": scout_artifact_id},
+                metadata={"run_id": "test-run-b"},
+            )
+
+            self.assertEqual(result["status"], "completed")
+            # Strategy 2 must NOT be called when ref_str starts with "art_"
+            mock_get.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Test C: ArtifactReadError includes real artifact id
+    # ------------------------------------------------------------------
+
+    def test_artifact_read_error_includes_real_artifact_id(self):
+        """Test C: Given scout_report_artifact_id = 'art_missing' that cannot be read,
+        Then error.type == 'ArtifactReadError',
+        error.message contains 'art_missing',
+        error.message does not only contain 'scout_report',
+        error.retryable == False,
+        error.do_not is present,
+        error.next_action is present."""
+
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts={"scout_report": "art_missing_id"},
+            metadata={"run_id": "test-run-c"},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        error = result["error"]
+        self.assertEqual(error["type"], "ArtifactReadError")
+        self.assertIn("art_missing_id", error["message"])
+        self.assertNotEqual(error["message"], "scout_report")
+        self.assertFalse(error["retryable"])
+        self.assertIn("do_not", error)
+        self.assertIn("next_action", error)
+
+    # ------------------------------------------------------------------
+    # Test D: coder reads both previous artifacts by values
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_coder_reads_both_artifacts_by_values(self, mock_poll, mock_start):
+        """Test D: Given scout_report_artifact_id = 'art_test_scout' and
+        architect_plan_artifact_id = 'art_test_architect',
+        Then get_content_by_id('art_test_scout') and get_content_by_id('art_test_architect')
+        are called, and no slot-name lookups."""
+        mock_start.return_value = {"task_id": "task-d-1", "conversation_id": "conv-d-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "coder",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Save scout artifact
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-d",
+            role_run_id="test-run-d-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FULL SCOUT REPORT CONTENT D",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        # Save architect artifact
+        arch_meta = store.save(
+            run_id="test-run-d",
+            role_run_id="test-run-d-architect-1",
+            role="architect",
+            artifact_name="architect_plan",
+            content="FULL ARCHITECT PLAN CONTENT D",
+        )
+        arch_artifact_id = arch_meta["artifact_id"]
+
+        with patch.object(ArtifactStore, "get") as mock_get:
+            result = role_lifecycle.role_call_impl(
+                role="coder",
+                user_task="Implement feature",
+                input_artifacts={
+                    "scout_report": scout_artifact_id,
+                    "architect_plan": arch_artifact_id,
+                },
+                metadata={"run_id": "test-run-d"},
+            )
+
+            self.assertEqual(result["status"], "completed")
+            # Strategy 2 must NOT be called
+            mock_get.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Test E: parameterized test for all role artifact fields
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_all_roles_resolve_by_artifact_id(self, mock_poll, mock_start):
+        """Test E: Parameterized: all roles resolve artifacts by artifact_id value.
+        Tests architect, coder, reviewer, publisher roles."""
+        mock_start.return_value = {"task_id": "task-e-1", "conversation_id": "conv-e-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "architect",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Save scout artifact
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-e",
+            role_run_id="test-run-e-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FULL SCOUT REPORT CONTENT E",
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        with patch.object(ArtifactStore, "get") as mock_get:
+            result = role_lifecycle.role_call_impl(
+                role="architect",
+                user_task="Plan implementation",
+                input_artifacts={"scout_report": scout_artifact_id},
+                metadata={"run_id": "test-run-e"},
+            )
+
+            self.assertEqual(result["status"], "completed")
+            # Strategy 2 must NOT be called for any role when artifact_id is provided
+            mock_get.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Test F: next_action generated artifact ids roundtrip
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_next_action_artifact_id_roundtrip(self, mock_poll, mock_start):
+        """Test F: Simulate role_wait scout completed returns artifact_id='art_test_scout',
+        next_action.arguments_hint includes scout_report_artifact_id='art_test_scout'.
+        Then calling role_call with this hint must read 'art_test_scout', not 'scout_report'."""
+        mock_start.return_value = {"task_id": "task-f-1", "conversation_id": "conv-f-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "architect",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Simulate scout completing and returning an artifact_id
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-f",
+            role_run_id="test-run-f-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="FULL SCOUT REPORT CONTENT F",
+        )
+        produced_artifact_id = scout_meta["artifact_id"]
+
+        # Simulate the next_action.arguments_hint from role_wait
+        # (this is what gets passed to the next role_call)
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts={"scout_report": produced_artifact_id},
+            metadata={"run_id": "test-run-f"},
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertNotIn("error", result)
+
+    # ------------------------------------------------------------------
+    # Test G: no retry loop on ArtifactReadError
+    # ------------------------------------------------------------------
+
+    def test_no_retry_loop_on_artifact_read_error(self):
+        """Test G: ArtifactReadError includes retryable=False, do_not, next_action.
+        do_not must say 'Do not retry role_call with a new idempotency_key.'"""
+
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts={"scout_report": "art_nonexistent_retry"},
+            metadata={"run_id": "test-run-g"},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        error = result["error"]
+        self.assertEqual(error["type"], "ArtifactReadError")
+        self.assertFalse(error["retryable"])
+        self.assertIn("do_not", error)
+        self.assertIn("next_action", error)
+        self.assertIn(
+            "Do not retry role_call with a new idempotency_key.",
+            error["do_not"],
+        )
+
+    # ------------------------------------------------------------------
+    # Test H: ArtifactReadError includes structured fields
+    # ------------------------------------------------------------------
+
+    def test_artifact_read_error_includes_structured_fields(self):
+        """ArtifactReadError must include field_name, artifact_slot, artifact_id."""
+
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts={"scout_report": "art_test_structured"},
+            metadata={"run_id": "test-run-h"},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        error = result["error"]
+        self.assertEqual(error["type"], "ArtifactReadError")
+        self.assertIn("field_name", error)
+        self.assertIn("artifact_slot", error)
+        self.assertIn("artifact_id", error)
+        self.assertEqual(error["artifact_slot"], "scout_report")
+        self.assertEqual(error["artifact_id"], "art_test_structured")
+        self.assertEqual(error["field_name"], "scout_report_artifact_id")
+
+    # ------------------------------------------------------------------
+    # Test I: MissingRequiredArtifact includes anti-loop fields
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_missing_required_artifact_has_anti_loop_fields(self, mock_poll, mock_start):
+        """MissingRequiredArtifact includes do_not and next_action."""
+        mock_start.return_value = {"task_id": "task-i-1", "conversation_id": "conv-i-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "coder",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Coder requires scout_report and architect_plan; omit both
+        result = role_lifecycle.role_call_impl(
+            role="coder",
+            user_task="Implement feature",
+            input_artifacts={},
+            metadata={"run_id": "test-run-i"},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        error = result["error"]
+        self.assertEqual(error["type"], "MissingRequiredArtifact")
+        self.assertIn("do_not", error)
+        self.assertIn("next_action", error)
+        self.assertIn(
+            "Do not retry role_call with a new idempotency_key.",
+            error["do_not"],
+        )
+
+    # ------------------------------------------------------------------
+    # Test J: empty artifact content produces ArtifactReadError with ID
+    # ------------------------------------------------------------------
+
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_empty_artifact_content_produces_read_error(self, mock_poll, mock_start):
+        """When artifact exists but content is empty, return ArtifactReadError with artifact_id."""
+        mock_start.return_value = {"task_id": "task-j-1", "conversation_id": "conv-j-1"}
+        mock_poll.return_value = {
+            "status": "completed",
+            "answer": json.dumps({
+                "valid": True, "status": "DONE", "role": "architect",
+                "summary": "Test summary", "blocking": False,
+                "risk_level": "LOW", "action": None,
+            }),
+        }
+
+        # Save an artifact with empty content
+        store = ArtifactStore()
+        scout_meta = store.save(
+            run_id="test-run-j",
+            role_run_id="test-run-j-scout-1",
+            role="scout",
+            artifact_name="scout_report",
+            content="",  # empty content
+        )
+        scout_artifact_id = scout_meta["artifact_id"]
+
+        result = role_lifecycle.role_call_impl(
+            role="architect",
+            user_task="Plan implementation",
+            input_artifacts={"scout_report": scout_artifact_id},
+            metadata={"run_id": "test-run-j"},
+        )
+
+        self.assertEqual(result["status"], "failed")
+        error = result["error"]
+        self.assertEqual(error["type"], "ArtifactReadError")
+        self.assertIn(scout_artifact_id, error["artifact_id"])
 

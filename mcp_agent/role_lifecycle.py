@@ -643,12 +643,22 @@ def role_call_start_impl(
         if flat_field:
             field_hint = f" Provide {flat_field}."
 
+        field_name = _ARTIFACT_FIELD_NAME_MAP.get(first_missing, first_missing + "_artifact_id")
         return {
             "status": "failed",
             "error": {
                 "type": "MissingRequiredArtifact",
+                "field_name": field_name,
                 "message": f"missing required artifact: {first_missing}.{field_hint}",
                 "retryable": False,
+                "do_not": [
+                    "Do not retry role_call with a new idempotency_key.",
+                    "Do not invent artifact ids.",
+                ],
+                "next_action": {
+                    "tool": "role_list",
+                    "arguments": {},
+                },
             },
         }
 
@@ -694,7 +704,9 @@ def role_call_start_impl(
                 }
 
         # --- Strategy 2: Fallback to logical name resolution ---
-        if content is None:
+        # Only apply Strategy 2 when ref_str does NOT start with "art_"
+        # (i.e., the caller did not provide an explicit artifact_id).
+        if content is None and not ref_str.startswith("art_"):
             try:
                 meta = artifact_store.get(
                     metadata.get("run_id", ""), artifact_name=artifact_name
@@ -705,6 +717,31 @@ def role_call_start_impl(
                 pass
 
         if content is None:
+            # Determine error type based on whether an explicit artifact_id was provided
+            if ref_str.startswith("art_"):
+                field_name = _ARTIFACT_FIELD_NAME_MAP.get(
+                    artifact_name, artifact_name + "_artifact_id"
+                )
+                return {
+                    "status": "failed",
+                    "error": {
+                        "type": "ArtifactReadError",
+                        "field_name": field_name,
+                        "artifact_slot": artifact_name,
+                        "artifact_id": ref_str,
+                        "message": f"Failed to resolve artifact_id={ref_str} for slot '{artifact_name}'.",
+                        "retryable": False,
+                        "do_not": [
+                            "Do not retry role_call with a new idempotency_key.",
+                            "Do not invent artifact ids.",
+                            "Do not pass artifact_type instead of artifact_id.",
+                        ],
+                        "next_action": {
+                            "tool": "role_list",
+                            "arguments": {},
+                        },
+                    },
+                }
             return {
                 "status": "failed",
                 "error": {
@@ -716,16 +753,31 @@ def role_call_start_impl(
 
         if not content.strip():
             logger.debug(
-                "ArtifactReadError artifact_type=%s artifact_id=%s",
+                "ArtifactReadError artifact_slot=%s artifact_id=%s",
                 artifact_name,
                 ref_str,
+            )
+            field_name = _ARTIFACT_FIELD_NAME_MAP.get(
+                artifact_name, artifact_name + "_artifact_id"
             )
             return {
                 "status": "failed",
                 "error": {
                     "type": "ArtifactReadError",
-                    "message": f"failed to read artifact: {artifact_name}",
+                    "field_name": field_name,
+                    "artifact_slot": artifact_name,
+                    "artifact_id": ref_str,
+                    "message": f"Failed to read artifact id from {field_name}.",
                     "retryable": False,
+                    "do_not": [
+                        "Do not retry role_call with a new idempotency_key.",
+                        "Do not invent artifact ids.",
+                        "Do not pass artifact_type instead of artifact_id.",
+                    ],
+                    "next_action": {
+                        "tool": "role_list",
+                        "arguments": {},
+                    },
                 },
             }
 
