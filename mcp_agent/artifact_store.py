@@ -360,7 +360,8 @@ class ArtifactStore:
         Raises
         ------
         ValueError
-            If the artifact cannot be found or resolved.
+            If the artifact cannot be found or resolved.  The message
+            distinguishes missing meta, missing file, and empty file.
         """
         if not isinstance(artifact_id, str) or not artifact_id:
             raise ValueError("invalid artifact_id")
@@ -386,11 +387,21 @@ class ArtifactStore:
                 try:
                     self._ensure_under_state_dir(full_path)
                 except ValueError:
-                    continue
-                if full_path.exists():
-                    return full_path.read_text(encoding="utf-8")
+                    raise ValueError(
+                        f"ArtifactMetaNotFoundError: path escapes state dir for {artifact_id}"
+                    )
+                if not full_path.exists():
+                    raise FileNotFoundError(
+                        f"ArtifactFileMissingError: file not found for {artifact_id}"
+                    )
+                content = full_path.read_text(encoding="utf-8")
+                if not content.strip():
+                    raise ValueError(
+                        f"EmptyArtifactError: artifact has no content for {artifact_id}"
+                    )
+                return content
 
-        raise ValueError(f"artifact not found: {artifact_id}")
+        raise ValueError(f"ArtifactNotFoundError: no metadata record for {artifact_id}")
 
     # -- internals ---------------------------------------------------------
 

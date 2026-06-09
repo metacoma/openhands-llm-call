@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from . import debug as oh_debug
 from . import openhands_llm_call as oh
 
 logger = logging.getLogger("openhands-llm")
@@ -288,7 +289,17 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
         )
     )
 
-    final_answer = oh.extract_final_answer(answers)
+    final_answer = oh.extract_final_answer(answers, logger=logger)
+
+    if oh_debug.is_debug_enabled():
+        oh_debug.debug_log(
+            logger,
+            "job_execute.answer_extracted",
+            conversation_id=conversation_id,
+            answer_len=len(final_answer),
+            answer_empty=not final_answer,
+            answers_count=len(answers),
+        )
 
     return {
         "answer": final_answer,
@@ -346,8 +357,19 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
             limit=100,
             max_pages=50,
         )
-        answers = oh.collect_final_text_from_events(events)
-        final_answer = oh.extract_final_answer([answers]) if answers else ""
+        answers = oh.collect_final_text_from_events(events, logger=logger)
+        final_answer = oh.extract_final_answer([answers], logger=logger) if answers else ""
+
+        if oh_debug.is_debug_enabled():
+            oh_debug.debug_log(
+                logger,
+                "job_poll.answer_extracted",
+                job_id=uid,
+                answer_len=len(final_answer),
+                answer_empty=not final_answer,
+                events_count=len(events),
+                execution_status=exec_status,
+            )
 
         if exec_status in ("failed", "error"):
             job_status = "failed"

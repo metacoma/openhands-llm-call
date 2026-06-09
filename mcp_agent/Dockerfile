@@ -8,7 +8,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY mcp_agent/ mcp_agent/
 COPY prompts/ prompts/
 COPY config/ config/
+COPY common/ common/
 
+ENV PYTHONPATH=/app
 ENV OPENHANDS_URL=http://openhands_llm:8000
 ENV PORT=8000
 

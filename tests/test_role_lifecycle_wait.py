@@ -1189,5 +1189,155 @@ class TestEmptyPrimaryArtifactHandling(unittest.TestCase):
         self.assertEqual(updated_run["lifecycle_state"], "empty_primary_artifact")
 
 
+# ---------------------------------------------------------------------------
+# Test: OPENHANDS_LLM_CALL_DEBUG env var
+# ---------------------------------------------------------------------------
+
+class TestDebugEnvVar(unittest.TestCase):
+    """Test that OPENHANDS_LLM_CALL_DEBUG works correctly."""
+
+    def setUp(self):
+        # Clear any existing value
+        os.environ.pop("OPENHANDS_LLM_CALL_DEBUG", None)
+
+    def tearDown(self):
+        os.environ.pop("OPENHANDS_LLM_CALL_DEBUG", None)
+
+    def test_debug_enabled_with_1(self):
+        """OPENHANDS_LLM_CALL_DEBUG=1 enables debug."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "1"
+        from common import debug as oh_debug
+        self.assertTrue(oh_debug.is_debug_enabled())
+
+    def test_debug_enabled_with_true(self):
+        """OPENHANDS_LLM_CALL_DEBUG=true enables debug."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "true"
+        # Need to re-import to pick up the env var
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertTrue(oh_debug.is_debug_enabled())
+
+    def test_debug_enabled_with_yes(self):
+        """OPENHANDS_LLM_CALL_DEBUG=yes enables debug."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "yes"
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertTrue(oh_debug.is_debug_enabled())
+
+    def test_debug_enabled_with_on(self):
+        """OPENHANDS_LLM_CALL_DEBUG=on enables debug."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "on"
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertTrue(oh_debug.is_debug_enabled())
+
+    def test_debug_enabled_with_debug(self):
+        """OPENHANDS_LLM_CALL_DEBUG=debug enables debug."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "debug"
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertTrue(oh_debug.is_debug_enabled())
+
+    def test_debug_enabled_case_insensitive(self):
+        """OPENHANDS_LLM_CALL_DEBUG=TRUE enables debug (case-insensitive)."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "TRUE"
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertTrue(oh_debug.is_debug_enabled())
+
+    def test_debug_disabled_when_missing(self):
+        """Missing env var keeps normal behavior."""
+        # Already cleared in setUp
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertFalse(oh_debug.is_debug_enabled())
+
+    def test_debug_disabled_with_zero(self):
+        """OPENHANDS_LLM_CALL_DEBUG=0 disables debug."""
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "0"
+        import importlib
+        import common.debug as oh_debug
+        importlib.reload(oh_debug)
+        self.assertFalse(oh_debug.is_debug_enabled())
+
+
+# ---------------------------------------------------------------------------
+# Test: Artifact read error classification
+# ---------------------------------------------------------------------------
+
+class TestArtifactReadErrorClassification(unittest.TestCase):
+    """Test that artifact read errors are classified correctly."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_artifact_errors_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+
+    def test_missing_meta_returns_artifact_not_found(self):
+        """Missing meta raises ValueError with ArtifactNotFoundError."""
+        store = ArtifactStore()
+        with self.assertRaises(ValueError) as ctx:
+            store.get_content_by_id("art_nonexistent-meta_scout_report")
+        self.assertIn("ArtifactNotFoundError", str(ctx.exception))
+
+    def test_missing_file_returns_file_missing(self):
+        """Missing file raises FileNotFoundError with ArtifactFileMissingError."""
+        store = ArtifactStore()
+        # Create a meta file that points to a non-existent artifact
+        meta = {
+            "artifact_id": "art_test-missing-file_scout_report",
+            "artifact_path": "nonexistent/missing.artifact",
+            "artifact_name": "scout_report",
+            "artifact_type": "scout_report",
+            "run_id": "test-missing-file",
+            "role_run_id": "test-run-scout-test-missing-file",
+            "role": "scout",
+        }
+        meta_path = os.path.join(self.tmpdir, "test-missing-file", "test-run-scout-test-missing-file_scout_report.meta.json")
+        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+        with self.assertRaises(FileNotFoundError) as ctx:
+            store.get_content_by_id("art_test-missing-file_scout_report")
+        self.assertIn("ArtifactFileMissingError", str(ctx.exception))
+
+    def test_empty_file_returns_empty_artifact_error(self):
+        """Empty file raises ValueError with EmptyArtifactError."""
+        store = ArtifactStore()
+        # Create a meta file that points to an empty artifact
+        meta = {
+            "artifact_id": "art_test-empty-file_scout_report",
+            "artifact_path": "test-empty-file/empty.artifact",
+            "artifact_name": "scout_report",
+            "artifact_type": "scout_report",
+            "run_id": "test-empty-file",
+            "role_run_id": "test-run-scout-test-empty-file",
+            "role": "scout",
+        }
+        meta_path = os.path.join(self.tmpdir, "test-empty-file", "test-run-scout-test-empty-file_scout_report.meta.json")
+        artifact_path = os.path.join(self.tmpdir, "test-empty-file", "empty.artifact")
+        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+        # Create empty artifact file
+        with open(artifact_path, "w") as f:
+            pass  # empty
+
+        with self.assertRaises(ValueError) as ctx:
+            store.get_content_by_id("art_test-empty-file_scout_report")
+        self.assertIn("EmptyArtifactError", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

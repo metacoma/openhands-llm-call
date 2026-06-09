@@ -43,6 +43,20 @@ from typing import Any, Optional
 
 import requests
 
+# Import shared debug helper — works at runtime with PYTHONPATH=/app
+# and falls back to relative path for local development.
+try:
+    from common import debug as oh_debug
+except ImportError:
+    import sys as _sys
+    import os as _os
+    _common_path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(__file__)), "common"
+    )
+    if _common_path not in _sys.path:
+        _sys.path.insert(0, _common_path)
+    from common import debug as oh_debug  # noqa: F401
+
 from .artifact_store import ArtifactStore, _generate_artifact_id
 from .lock_manager import RoleLockManager
 from .prompt_renderer import render_prompt
@@ -1371,6 +1385,79 @@ def role_lifecycle_wait_impl(
         role_run_id,
         lifecycle_state="main_response_received",
     )
+
+    # ------------------------------------------------------------------
+    # Pre-save guard: refuse to save empty primary artifact (task requirement)
+    # ------------------------------------------------------------------
+    if main_completed and not main_response.strip():
+        # Try safe fallback: re-read events from /v1/jobs/{uid}/events
+        fallback_text = ""
+        if job_id:
+            try:
+                events_resp = requests.get(
+                    f"{_OPENHANDS_URL.rstrip('/')}/v1/jobs/{job_id}/events",
+                    timeout=_OPENHANDS_REQUEST_TIMEOUT,
+                )
+                if events_resp.status_code == 200:
+                    events_data = events_resp.json()
+                    events_list = events_data.get("events", [])
+                    if events_list:
+                        import importlib
+                        oh_module = importlib.import_module(
+                            "openhands_llm.openhands_llm_call"
+                        )
+                        fallback_text = oh_module.collect_final_text_from_events(events_list)
+                        if oh_debug.is_debug_enabled():
+                            oh_debug.debug_log(
+                                logger,
+                                "role_wait.fallback_events_found",
+                                job_id=job_id,
+                                fallback_len=len(fallback_text),
+                            )
+            except Exception as exc:
+                if oh_debug.is_debug_enabled():
+                    oh_debug.debug_log(
+                        logger,
+                        "role_wait.fallback_failed",
+                        job_id=job_id,
+                        error=str(exc),
+                    )
+
+        if not fallback_text.strip():
+            # No fallback available — fail before saving
+            artifact_slot = role_run.get("artifact_name", "unknown")
+            role_store.update_role_run(
+                role_run_id,
+                status="failed",
+                lifecycle_state="empty_primary_artifact",
+            )
+            return {
+                "status": "failed",
+                "role_run_id": role_run_id,
+                "run_id": role_run.get("run_id", ""),
+                "role": role_run.get("role", ""),
+                "error": {
+                    "type": "EmptyPrimaryArtifactError",
+                    "artifact_slot": artifact_slot,
+                    "artifact_id": "",
+                    "message": (
+                        f"OpenHands job completed but produced an empty primary artifact '{artifact_slot}'. "
+                        f"The answer field from /v1/jobs/{job_id} is empty/whitespace-only. "
+                        f"No fallback was available. Refusing to mark role '{role_run.get('role', '')}' as completed."
+                    ),
+                    "retryable": True,
+                },
+            }
+        else:
+            # Use fallback text as the primary artifact content
+            main_response = fallback_text
+            if oh_debug.is_debug_enabled():
+                oh_debug.debug_log(
+                    logger,
+                    "role_wait.fallback_used",
+                    job_id=job_id,
+                    answer_len=len(main_response),
+                )
 
     # ------------------------------------------------------------------
     # Save primary artifact (only if main job completed — Blocker 1)

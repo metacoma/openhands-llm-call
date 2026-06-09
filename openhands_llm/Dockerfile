@@ -6,7 +6,9 @@ COPY openhands_llm/requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY openhands_llm/ openhands_llm/
+COPY common/ common/
 
+ENV PYTHONPATH=/app
 ENV OPENHANDS_URL=http://localhost:3000
 ENV PORT=8000
 

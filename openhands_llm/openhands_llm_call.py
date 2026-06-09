@@ -421,6 +421,11 @@ def search_v1_events(
 
 
 def content_to_text(value: Any) -> str:
+    """Extract a plain-text string from a value that may be str, list, dict, or None.
+
+    Handles common OpenHands event shapes including ``args.*`` and ``extras.*``
+    nesting that appears in real production events.
+    """
     if value is None:
         return ""
 
@@ -436,9 +441,11 @@ def content_to_text(value: Any) -> str:
         return "\n".join(parts).strip()
 
     if isinstance(value, dict):
+        # 1. Direct text-content block (e.g. ``{"type": "text", "text": "..."}``)
         if value.get("type") == "text" and isinstance(value.get("text"), str):
             return value["text"].strip()
 
+        # 2. Preferred direct keys
         preferred_keys = (
             "text",
             "message",
@@ -449,13 +456,31 @@ def content_to_text(value: Any) -> str:
             "result",
             "output",
         )
-
         for key in preferred_keys:
             if key in value:
                 text = content_to_text(value[key])
                 if text:
                     return text
 
+        # 3. ``args.*`` nesting — common in OpenHands tool-call / observation events
+        args = value.get("args")
+        if isinstance(args, dict):
+            for key in ("final_thought", "message", "content", "text", "thought", "observation"):
+                if key in args:
+                    text = content_to_text(args[key])
+                    if text:
+                        return text
+
+        # 4. ``extras.*`` nesting — another OpenHands convention
+        extras = value.get("extras")
+        if isinstance(extras, dict):
+            for key in ("message", "content", "text", "thought"):
+                if key in extras:
+                    text = content_to_text(extras[key])
+                    if text:
+                        return text
+
+        # 5. Fallback: iterate all values
         parts: list[str] = []
         for nested_value in value.values():
             text = content_to_text(nested_value)
@@ -572,28 +597,112 @@ def extract_finish_action_text(event: dict[str, Any]) -> str:
 
 
 def extract_message_event_text(event: dict[str, Any]) -> str:
+    """Extract textual content from an agent message event.
+
+    Checks ``llm_message.content`` first (the canonical path), then
+    top-level event fields, then ``args.*`` / ``extras.*`` nesting,
+    and finally falls back to ``content_to_text(event)``.
+    """
     if not is_agent_message_event(event):
         return ""
 
+    # 1. Canonical llm_message.content path
     llm_message = event.get("llm_message")
     if isinstance(llm_message, dict):
         text = content_to_text(llm_message.get("content"))
         if text:
             return text
 
+    # 2. Top-level event text fields (real OpenHands events may place the
+    #    final answer here rather than inside llm_message)
+    for key in ("message", "text", "thought", "final_thought", "content", "observation"):
+        val = event.get(key)
+        if val is not None:
+            text = content_to_text(val)
+            if text:
+                return text
+
+    # 3. Top-level args.* nesting
+    args = event.get("args")
+    if isinstance(args, dict):
+        for key in ("final_thought", "message", "content", "text", "thought"):
+            val = args.get(key)
+            if val is not None:
+                text = content_to_text(val)
+                if text:
+                    return text
+
+    # 4. Top-level extras.* nesting
+    extras = event.get("extras")
+    if isinstance(extras, dict):
+        for key in ("message", "content", "text", "thought"):
+            val = extras.get(key)
+            if val is not None:
+                text = content_to_text(val)
+                if text:
+                    return text
+
+    # 5. Fallback: descend into the whole event dict
     return content_to_text(event)
 
 
-def collect_final_text_from_events(events: list[dict[str, Any]]) -> str:
+def collect_final_text_from_events(events: list[dict[str, Any]], logger=None) -> str:
+    """Extract final text from a list of OpenHands events.
+
+    Parameters
+    ----------
+    events :
+        List of event dicts from ``search_v1_events``.
+    logger :
+        Optional ``logging.Logger`` for structured debug output when
+        ``OPENHANDS_LLM_CALL_DEBUG`` is enabled.
+    """
+    # Import shared debug helper — works with PYTHONPATH=/app and falls back
+    try:
+        from common import debug as oh_debug
+    except ImportError:
+        import sys as _sys
+        import os as _os
+        _common_path = _os.path.join(
+            _os.path.dirname(_os.path.dirname(__file__)), "common"
+        )
+        if _common_path not in _sys.path:
+            _sys.path.insert(0, _common_path)
+        from common import debug as oh_debug  # noqa: F401
+
+    # Pass 1: finish-action events (highest priority)
     for event in events:
         text = extract_finish_action_text(event)
         if text:
+            if logger and oh_debug.is_debug_enabled():
+                oh_debug.debug_log(
+                    logger,
+                    "collect_final_text.finish_action_found",
+                    event_kind=event_kind(event),
+                    text_len=len(text),
+                )
             return text
 
+    # Pass 2: message events
     for event in events:
         text = extract_message_event_text(event)
         if text:
+            if logger and oh_debug.is_debug_enabled():
+                oh_debug.debug_log(
+                    logger,
+                    "collect_final_text.message_event_found",
+                    event_kind=event_kind(event),
+                    event_source=event_source(event),
+                    text_len=len(text),
+                )
             return text
+
+    if logger and oh_debug.is_debug_enabled():
+        oh_debug.debug_log(
+            logger,
+            "collect_final_text.no_text_found",
+            events_count=len(events),
+        )
 
     return ""
 
@@ -775,18 +884,65 @@ def run_and_collect_message_events(
     return collected_answers
 
 
-def extract_final_answer(answers: list[str]) -> str:
+def extract_final_answer(answers: list[str], logger=None) -> str:
+    """Select the final answer from a list of candidate texts.
+
+    Parameters
+    ----------
+    answers :
+        Candidate text strings, typically from ``collect_final_text_from_events``.
+    logger :
+        Optional ``logging.Logger`` for structured debug output when
+        ``OPENHANDS_LLM_CALL_DEBUG`` is enabled.
+    """
+    # Import shared debug helper — works with PYTHONPATH=/app and falls back
+    try:
+        from common import debug as oh_debug
+    except ImportError:
+        import sys as _sys
+        import os as _os
+        _common_path = _os.path.join(
+            _os.path.dirname(__file__), "..", "common"
+        )
+        if _common_path not in _sys.path:
+            _sys.path.insert(0, _common_path)
+        from common import debug as oh_debug  # noqa: F401
+
     for answer in reversed(answers):
         answer = answer.strip()
         if not answer:
+            if logger and oh_debug.is_debug_enabled():
+                oh_debug.debug_log(
+                    logger,
+                    "extract_final_answer.rejected_empty",
+                    answer_len=0,
+                )
             continue
 
         lowered = answer.lower()
         if lowered in {"done", "ok", "okay", "finished"}:
+            if logger and oh_debug.is_debug_enabled():
+                oh_debug.debug_log(
+                    logger,
+                    "extract_final_answer.rejected_short",
+                    answer=lowered,
+                )
             continue
 
+        if logger and oh_debug.is_debug_enabled():
+            oh_debug.debug_log(
+                logger,
+                "extract_final_answer.accepted",
+                answer_len=len(answer),
+            )
         return answer
 
+    if logger and oh_debug.is_debug_enabled():
+        oh_debug.debug_log(
+            logger,
+            "extract_final_answer.no_valid_answer",
+            answers_count=len(answers),
+        )
     return ""
 
 
