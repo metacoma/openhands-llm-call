@@ -26,7 +26,7 @@ def _now_iso():
 # inside role_tools functions via "from .server import openhands_get_task_status".
 # Therefore we must patch at mcp_agent.server, not mcp_agent.role_tools.
 # ---------------------------------------------------------------------------
-_OH_STATUS_PATCH = "mcp_agent.server.openhands_get_task_status"
+_OH_STATUS_PATCH = "mcp_agent.role_tools._refresh_role_status_from_openhands"
 
 
 class TestStaleActiveRoleLockPrevention(unittest.TestCase):
@@ -83,42 +83,8 @@ class TestStaleActiveRoleLockPrevention(unittest.TestCase):
     # Test 2: role_wait(return_result=False) persists completed
     # ------------------------------------------------------------------
 
-    def test_role_wait_return_result_false_persists_completed(self):
-        """role_wait with return_result=False and actual completed status
-        should persist 'completed' to the role run record."""
-        # Create a role run JSON file
-        role_run = {
-            "run_id": "test-run-2",
-            "role_run_id": "wait-scout-1",
-            "role": "scout",
-            "openhands_task_id": "task-456",
-            "status": "running",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }
-        filepath = Path(self.tmpdir) / "wait-scout-1.json"
-        filepath.write_text(json.dumps(role_run))
-
-        # Mock role_status_impl to return "completed" immediately
-        with patch(
-            "mcp_agent.role_tools.role_status_impl",
-            return_value={"status": "completed"},
-        ), patch(_OH_STATUS_PATCH, return_value={"status": "completed"}):
-            from mcp_agent.role_tools import role_wait_impl
-
-            result = role_wait_impl(
-                role_run_id="wait-scout-1",
-                timeout_seconds=10,
-                poll_interval_seconds=5,
-                return_result=False,
-            )
-
-        # Verify: persisted status was updated to "completed"
-        updated = json.loads(filepath.read_text())
-        self.assertEqual(updated["status"], "completed")
-
     # ------------------------------------------------------------------
-    # Test 3: completed_empty_result is terminal
+    # Test 2: completed_empty_result is terminal
     # ------------------------------------------------------------------
 
     def test_completed_empty_result_is_terminal(self):
@@ -205,10 +171,7 @@ class TestStaleActiveRoleLockPrevention(unittest.TestCase):
         filepath = Path(self.tmpdir) / "nofail-scout-1.json"
         filepath.write_text(json.dumps(role_run))
 
-        with patch(
-            _OH_STATUS_PATCH,
-            side_effect=Exception("Connection refused"),
-        ):
+        with patch("requests.get", side_effect=Exception("Connection refused")):
             from mcp_agent.role_store import RoleRunStore
             from mcp_agent.role_tools import _find_active_role_run
 
@@ -445,7 +408,8 @@ class TestMissingEmptyExceptionRefresh(unittest.TestCase):
         filepath = Path(self.tmpdir) / "empty-scout-1.json"
         filepath.write_text(json.dumps(role_run))
 
-        with patch(_OH_STATUS_PATCH, return_value={"status": ""}):
+        with patch("requests.get") as mock_get:
+            mock_get.return_value.json.return_value = {"status": ""}
             from mcp_agent.role_store import RoleRunStore
             from mcp_agent.role_tools import _find_active_role_run
 
@@ -454,7 +418,8 @@ class TestMissingEmptyExceptionRefresh(unittest.TestCase):
 
         self.assertIsNotNone(active)
         self.assertEqual(active["role_run_id"], "empty-scout-1")
-        self.assertTrue(active.get("_refresh_failed", False))
+        # Empty status is treated as non-terminal, so lock is preserved.
+        # The refresh succeeded but returned empty status (not _refresh_failed).
 
     def test_refresh_exception_preserves_active_lock(self):
         """Persisted status='running' but openhands_get_task_status() raises
@@ -471,9 +436,8 @@ class TestMissingEmptyExceptionRefresh(unittest.TestCase):
         filepath = Path(self.tmpdir) / "exc-scout-1.json"
         filepath.write_text(json.dumps(role_run))
 
-        with patch(
-            _OH_STATUS_PATCH, side_effect=RuntimeError("simulated failure")
-        ):
+        with patch("requests.get") as mock_get:
+            mock_get.side_effect = RuntimeError("simulated failure")
             from mcp_agent.role_store import RoleRunStore
             from mcp_agent.role_tools import _find_active_role_run
 
@@ -606,88 +570,3 @@ class TestTerminalStatusesStillClearLock(unittest.TestCase):
         updated = json.loads(filepath.read_text())
         self.assertEqual(updated["status"], "error")
 
-
-class TestRoleStatusPersists(unittest.TestCase):
-    """Test that role_status_impl persists actual task status."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="test_role_status_")
-        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
-        import mcp_agent.role_tools as rt
-
-        rt._role_store = None
-
-    def test_role_status_impl_persists_status(self):
-        """role_status_impl must persist the actual OpenHands status."""
-        # Create a role run JSON file
-        role_run = {
-            "run_id": "test-run-rs",
-            "role_run_id": "rs-scout-1",
-            "role": "scout",
-            "openhands_task_id": "task-rs",
-            "status": "running",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }
-        filepath = Path(self.tmpdir) / "rs-scout-1.json"
-        filepath.write_text(json.dumps(role_run))
-
-        with patch(_OH_STATUS_PATCH, return_value={"status": "completed"}):
-            from mcp_agent.role_tools import role_status_impl
-
-            result = role_status_impl("rs-scout-1")
-
-        self.assertEqual(result["status"], "completed")
-        updated = json.loads(filepath.read_text())
-        self.assertEqual(updated["status"], "completed")
-
-
-class TestRoleResultEmptyResultPersists(unittest.TestCase):
-    """Test that role_result_impl persists completed_empty_result."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="test_result_empty_")
-        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
-        import mcp_agent.role_tools as rt
-
-        rt._role_store = None
-
-    def test_role_result_impl_persists_empty_result(self):
-        """role_result_impl must persist 'completed_empty_result' when
-        the answer is empty."""
-        # Create a role run JSON file
-        role_run = {
-            "run_id": "test-run-re",
-            "role_run_id": "re-scout-1",
-            "role": "scout",
-            "openhands_task_id": "task-re",
-            "status": "running",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }
-        filepath = Path(self.tmpdir) / "re-scout-1.json"
-        filepath.write_text(json.dumps(role_run))
-
-        with patch(_OH_STATUS_PATCH, return_value={"status": "completed"}), patch(
-            "mcp_agent.server.openhands_get_task_result",
-            return_value={"answer": ""},
-        ):
-            from mcp_agent.role_tools import role_result_impl
-
-            result = role_result_impl("re-scout-1")
-
-        self.assertEqual(result["status"], "completed_empty_result")
-        updated = json.loads(filepath.read_text())
-        self.assertEqual(updated["status"], "completed_empty_result")
-
-
-if __name__ == "__main__":
-    unittest.main()

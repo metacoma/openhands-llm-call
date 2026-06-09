@@ -62,12 +62,7 @@ If the response returns `status: "running"` with `timeout: true`, call `role_wai
 User / Head-of-IT
   └── OpenHands chat (prompts/head_of_it.md)
         └── MCP server (mcp_agent/server.py)
-              ├── Generic OpenHands tools
-              │   openhands_start_task, openhands_get_task_status,
-              │   openhands_get_task_result, openhands_get_task_events,
-              │   openhands_cancel_task, call_llm, check_health, check_job
-              ├── Public role tools
-              │   role_list, role_call, role_wait
+              ├── Public MCP tools: role_list, role_call, role_wait
               ├── Artifact store (mcp_agent/artifact_store.py)
               ├── Role registry (config/roles.yaml)
               ├── Prompt renderer (mcp_agent/prompt_renderer.py)
@@ -146,20 +141,7 @@ meant to be used as the main OpenHands chat prompt, not as a worker role.
 
 ## MCP Tools
 
-### Generic OpenHands tools
-
-| Tool | Purpose |
-|---|---|
-| `openhands_start_task` | Start a non-blocking OpenHands task |
-| `openhands_get_task_status` | Poll task status |
-| `openhands_get_task_result` | Fetch final task result |
-| `openhands_get_task_events` | Retrieve task event log |
-| `openhands_cancel_task` | Cancel a running task |
-| `call_llm` | High-level LLM call (backward-compatible) |
-| `check_health` | Health-check the backend |
-| `check_job` | Check an async LLM job by UID |
-
-### Public Role Tools
+Exactly three public MCP tools are exported:
 
 | Tool | Purpose |
 |---|---|
@@ -314,10 +296,6 @@ Then wait for completion (step 2):
 | `idempotency_key` | No | Deduplication key |
 
 > **Note:** `api_key`, `llm_model`, and `url` are internal-only. They are read from environment variables (`OPENHANDS_API_KEY`, `OPENHANDS_LLM_MODEL`, `OPENHANDS_URL`) and must **not** be passed by Head of IT.
-
-### Legacy tools (hidden from LLM)
-
-Legacy functions (`role_start`, `role_status`, `role_result`, `artifact_get`, `_internal_role_*`) are kept in `server.py` without the `@MCP.tool()` decorator. They are **not** visible to LLM via MCP tool discovery. See [docs/legacy_internal.md](docs/legacy_internal.md) for legacy documentation.
 
 ### Example full role chain
 
@@ -502,19 +480,17 @@ Tests are in `tests/`:
 
 | File | Coverage |
 |---|---|
-| `test_role_tools.py` | parse_action, parse_risk, make_summary, role_list, role_start validation, role_status, role_result |
-| `test_role_store.py` | RoleRunStore create/get/update/save_artifact/get_artifact/get_attempt_count |
+| `test_role_tools.py` | parse_action, parse_risk, make_summary, role_list_impl, role_wait_impl |
+| `test_role_lifecycle.py` | role_call_start_impl, role_lifecycle_wait_impl |
+| `test_role_call.py` | role_call validation, artifact ID resolution, loop guard |
+| `test_role_lifecycle_v2.py` | role_call lifecycle with mocked OpenHands |
+| `test_role_lifecycle_wait.py` | role_wait wrapped args, terminal statuses |
+| `test_role_store.py` | RoleRunStore create/get/update/save_artifact |
 | `test_roles.py` | load_roles, get_role, list_roles, validation |
-| `test_task_store.py` | TaskStore CRUD, idempotency, persistence |
-| `test_mcp_tools.py` | Mocked OpenHands integration for all generic tools |
 | `test_prompt_renderer.py` | Jinja2 prompt rendering |
 | `test_lock_manager.py` | Lock acquire/release/conflict/stale handling |
+| `test_stale_lock.py` | Stale lock detection and clearing |
 | `test_artifact_store.py` | Artifact save/list/get/path-traversal prevention |
-
-New tests added for this hardening:
-
-- Idempotency: first call creates task, duplicate call returns existing
-- Timeout: per-role `timeout_minutes` converted to `max_polls`
-- Locks: acquire, conflict, readonly bypass, release on completion, stale expiry
-- Artifacts: save, list, get, path traversal rejection
-- `include_full_result`: false omits full_result, true preserves old behavior
+| `test_summary_validator.py` | Summary validation and repair |
+| `test_safe_logging.py` | Safe diagnostic logging |
+| `test_public_mcp_surface.py` | Public MCP tool surface = {role_list, role_call, role_wait} |
