@@ -1,136 +1,18 @@
 #!/usr/bin/env python3
-"""Role-level MCP tools and action/risk parsing helpers."""
+"""Role-level MCP tools and internal helpers."""
 
 import json
 import logging
-import math
 import os
-import re
 import time
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone, timedelta
+from typing import Optional
 
-from .roles import get_role, list_roles, RoleSpec
-from .prompt_renderer import render_prompt
-from .role_store import RoleRunStore, _generate_run_id, _generate_role_run_id
+from .role_store import RoleRunStore
 from .lock_manager import RoleLockManager
 from .artifact_store import ArtifactStore
 
 logger = logging.getLogger("openhands-mcp")
-
-
-# ---------------------------------------------------------------------------
-# Action/Risk parsing helpers
-# ---------------------------------------------------------------------------
-
-
-def parse_action(role: str, text: str) -> Optional[str]:
-    """Extract the action from a role result.
-
-    Parameters
-    ----------
-    role :
-        The role name (used to determine parsing rules).
-    text :
-        The full result text.
-
-    Returns
-    -------
-    str or None
-        ``"PASS"`` / ``"BLOCKER"`` for reviewer,
-        ``"READY"`` / ``"BLOCKED"`` for publisher,
-        ``"CONTINUE"`` for all other completed roles.
-        Returns ``None`` when the expected pattern is not found
-        (e.g. reviewer forgot to emit ACTION).
-    """
-    if role == "reviewer":
-        m = re.search(r"ACTION:\s*(PASS|BLOCKER)", text, re.IGNORECASE)
-        return m.group(1).upper() if m else None
-    elif role == "publisher":
-        m = re.search(
-            r"PUBLISH_STATUS:\s*(READY|BLOCKED)", text, re.IGNORECASE
-        )
-        return m.group(1).upper() if m else None
-    # For all other completed roles default to CONTINUE.
-    return "CONTINUE"
-
-
-def parse_risk(text: str) -> Optional[str]:
-    """Extract the risk level from text.
-
-    Parameters
-    ----------
-    text :
-        The full result text.
-
-    Returns
-    -------
-    str or None
-        ``"LOW"``, ``"MEDIUM"``, or ``"HIGH"``, or None if not found.
-    """
-    m = re.search(r"RISK:\s*(LOW|MEDIUM|HIGH)", text, re.IGNORECASE)
-    return m.group(1).upper() if m else None
-
-
-def make_summary(text: str, max_chars: int = 700) -> str:
-    """Create a short summary of *text* (up to *max_chars* characters).
-
-    Improvements over the previous implementation:
-    - Strips markdown headings (lines starting with ``#``) lightly.
-    - Removes excessive blank lines (collapses 3+ consecutive blanks to 2).
-    - Caps at *max_chars* (default 700) at a word boundary.
-    - Preserves useful first lines.
-    - Never returns an empty string when *text* is non-empty.
-    """
-    if not text:
-        return ""
-    stripped = text.strip()
-    if not stripped:
-        return ""
-
-    # 1. Lightly strip markdown headings (remove lines that are only headings)
-    lines = stripped.split("\n")
-    filtered_lines = []
-    for line in lines:
-        # Keep lines that are not pure heading lines (e.g. "## Title")
-        if re.match(r"^\s*#+\s*\S", line):
-            # Keep the first few heading lines (up to 2) for context
-            if len(filtered_lines) < 2:
-                filtered_lines.append(line)
-            continue
-        filtered_lines.append(line)
-
-    # 2. Remove excessive blank lines (collapse 3+ to 2)
-    collapsed: list[str] = []
-    blank_count = 0
-    for line in filtered_lines:
-        if line.strip() == "":
-            blank_count += 1
-            if blank_count <= 2:
-                collapsed.append(line)
-        else:
-            blank_count = 0
-            collapsed.append(line)
-
-    result = "\n".join(collapsed)
-
-    # 3. Cap at max_chars
-    if len(result) <= max_chars:
-        return result
-
-    truncated = result[:max_chars]
-    # Truncate at last word boundary
-    last_space = truncated.rfind(" ")
-    if last_space > 0:
-        truncated = truncated[:last_space]
-    else:
-        # No word boundary found — hard truncate
-        truncated = truncated.rstrip()
-
-    # Ensure we don't return empty string when input was non-empty
-    if not truncated:
-        truncated = "..."
-
-    return truncated + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +34,6 @@ def _get_role_store() -> RoleRunStore:
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-
-import hashlib
-from datetime import datetime, timezone, timedelta
 
 
 def _now_iso() -> str:
@@ -180,34 +59,6 @@ def _normalize_lock_key(
     repo_str = (repo or "").rstrip("/").lower()
     branch_str = (branch or base_branch or "").rstrip("/").lower()
     return f"{repo_str}|{branch_str}"
-
-
-# ---------------------------------------------------------------------------
-# MCP tool implementations
-# ---------------------------------------------------------------------------
-
-
-def role_list_impl() -> dict:
-    """Implementation of the ``role_list`` MCP tool.
-
-    Returns a dict with a ``roles`` key containing a list of role
-    summaries (sanitized to not expose secrets).
-    """
-    roles = list_roles()
-    # Sanitize: include model only because this is a local homelab
-    # system; exclude it in production contexts.
-    safe_roles = []
-    for r in roles:
-        safe_roles.append({
-            "name": r["name"],
-            "description": r["description"],
-            "model": r["model"],
-            "readonly": r["readonly"],
-            "requires_artifacts": r["requires_artifacts"],
-            "output_artifact": r["output_artifact"],
-            "timeout_minutes": r["timeout_minutes"],
-        })
-    return {"roles": safe_roles}
 
 
 # ---------------------------------------------------------------------------
@@ -363,30 +214,3 @@ _DEFAULT_ROLE_WAIT_POLL_INTERVAL = int(
 _MIN_POLL_INTERVAL = 5
 _MAX_POLL_INTERVAL = 120
 
-
-def artifact_list_impl(run_id: str) -> dict:
-    """Implementation of the ``artifact_list`` MCP tool.
-
-    Parameters
-    ----------
-    run_id :
-        The top-level run identifier.
-
-    Returns
-    -------
-    dict
-        ``{run_id, artifacts: [...]}``
-    """
-    store = ArtifactStore()
-    try:
-        artifacts = store.list(run_id)
-    except ValueError as exc:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "PathTraversalDetected",
-                "message": str(exc),
-                "retryable": False,
-            },
-        }
-    return {"run_id": run_id, "artifacts": artifacts}

@@ -4,6 +4,7 @@
 import os
 import sys
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -35,6 +36,61 @@ class TestPublicMCPToolSurface(unittest.TestCase):
         }
         overlap = tool_names & legacy_names
         self.assertEqual(overlap, set(), f"Legacy tools still exposed: {overlap}")
+
+
+class TestNegativeAssertions(unittest.TestCase):
+    """Negative assertions: forbidden terms must not appear in public output/docs/prompts."""
+
+    def test_role_list_no_forbidden_fields(self):
+        """role_list response does not contain forbidden_fields key."""
+        from mcp_agent.server import role_list
+        result = role_list()
+        contract = result.get("flat_role_call_contract", {})
+        self.assertNotIn("forbidden_fields", contract)
+
+    def test_role_list_no_full_result_or_artifact_path_recursively(self):
+        """role_list response does not contain full_result/artifact_path recursively."""
+        import json
+        from mcp_agent.server import role_list
+        result = role_list()
+        text = json.dumps(result)
+        self.assertNotIn("full_result", text)
+        self.assertNotIn("artifact_path", text)
+
+    def test_head_of_it_prompt_no_forbidden_terms(self):
+        """prompts/head_of_it.md does not contain full_result/artifact_path/return_result."""
+        prompts_dir = os.path.join(os.path.dirname(__file__), "..", "prompts")
+        content = Path(os.path.join(prompts_dir, "head_of_it.md")).read_text(encoding="utf-8")
+        self.assertNotIn("full_result", content)
+        self.assertNotIn("artifact_path", content)
+        self.assertNotIn("return_result", content)
+
+    def test_server_docstrings_no_forbidden_terms(self):
+        """server.py public tool docstrings do not contain full_result/artifact_path/return_result."""
+        server_path = os.path.join(os.path.dirname(__file__), "..", "mcp_agent", "server.py")
+        content = Path(server_path).read_text(encoding="utf-8")
+        # Extract docstrings from @MCP.tool() decorated functions
+        # Check the full file for forbidden terms in docstring context
+        self.assertNotIn("full_result", content)
+        self.assertNotIn("artifact_path", content)
+        self.assertNotIn("return_result", content)
+
+    def test_rg_no_production_matches(self):
+        """rg for role_call_impl/artifact_list_impl/role_list_impl returns no production matches."""
+        import subprocess
+        result = subprocess.run(
+            [
+                "rg", "-n",
+                "role_call_impl|artifact_list_impl|_role_call_impl_alias",
+                "mcp_agent",
+            ],
+            capture_output=True, text=True,
+            cwd=os.path.join(os.path.dirname(__file__), ".."),
+        )
+        self.assertEqual(
+            result.returncode, 1,
+            f"Found production matches for deleted functions:\n{result.stdout}",
+        )
 
 
 if __name__ == "__main__":

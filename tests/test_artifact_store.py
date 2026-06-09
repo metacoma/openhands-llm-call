@@ -148,36 +148,6 @@ class TestArtifactStore(unittest.TestCase):
                 store.get("run-006", artifact_name="test")
 
 
-class TestArtifactToolImpl(unittest.TestCase):
-    """Test artifact_list_impl (artifact_get_impl removed as legacy)."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="test_artifact_tools_")
-        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
-
-    def tearDown(self):
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
-
-    def test_artifact_list_impl(self):
-        """artifact_list returns artifacts for run_id."""
-        from mcp_agent.artifact_store import ArtifactStore
-        from mcp_agent.role_tools import artifact_list_impl
-
-        store = ArtifactStore()
-        store.save(
-            run_id="run-010",
-            role_run_id="run-010-scout-1",
-            role="scout",
-            artifact_name="scout_report",
-            content="scout",
-        )
-
-        result = artifact_list_impl(run_id="run-010")
-        self.assertEqual(result["run_id"], "run-010")
-        self.assertEqual(len(result["artifacts"]), 1)
-
-
 class TestArtifactStorePathValidation(unittest.TestCase):
     """Security tests for ArtifactStore path validation."""
 

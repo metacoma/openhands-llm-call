@@ -331,7 +331,7 @@ def _looks_like_artifact_content(value: Any) -> bool:
             return True
     if "artifact_content" in value:
         return True
-    if "full_result" in value or "result" in value:
+    if "result" in value:
         return True
     if "messages" in value and isinstance(value["messages"], list):
         return True
@@ -504,14 +504,32 @@ def role_list() -> dict:
         "public_tools": ["role_list", "role_call", "role_wait"],
         "flat_role_call_contract": {
             "use_only_flat_scalar_fields": True,
-            "forbidden_fields": [
-                "metadata",
-                "input_artifacts",
-                "artifact_content",
-                "full_result",
-                "artifact_path",
+            "allowed_tools": ["role_list", "role_call", "role_wait"],
+            "allowed_role_call_fields": [
+                "role",
+                "user_task",
+                "repository",
+                "feature",
+                "scout_report_artifact_id",
+                "architect_plan_artifact_id",
+                "coder_report_artifact_id",
+                "reviewer_report_artifact_id",
+                "publisher_instructions_artifact_id",
+                "idempotency_key",
             ],
             "artifact_fields": dict(_ARTIFACT_FIELD_NAME_MAP),
+            "examples": {
+                "start_scout": {
+                    "tool": "role_call",
+                    "arguments": {
+                        "role": "scout",
+                        "user_task": "Analyze repository ...",
+                        "repository": "https://github.com/metacoma/openhands-llm-call",
+                        "feature": "llm-proof-mcp-tools",
+                        "idempotency_key": "llm-proof-mcp-tools-scout",
+                    },
+                },
+            },
         },
         "routing_examples": {
             "architect_after_scout": {
@@ -550,7 +568,7 @@ def role_call(
     publisher_instructions_artifact_id: McpString = "",
     idempotency_key: McpString = "",
 ) -> dict:
-    """Start one specialist role. Use flat scalar fields only: role, user_task, repository, feature, *_artifact_id, idempotency_key. Do not pass metadata, input_artifacts, nested JSON, artifact content, or full_result. After role_call returns role_run_id, call role_wait with the same role_run_id. Do not call role_call again for polling. Artifact routing: architect needs scout_report_artifact_id; coder needs scout_report_artifact_id + architect_plan_artifact_id; reviewer needs scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id; publisher needs reviewer_report_artifact_id. For detailed routing, call role_list."""
+    """Start one specialist role. Use flat scalar fields only: role, user_task, repository, feature, *_artifact_id, idempotency_key. After role_call returns role_run_id, call role_wait with the same role_run_id. Do not call role_call again for polling. Artifact routing: architect needs scout_report_artifact_id; coder needs scout_report_artifact_id + architect_plan_artifact_id; reviewer needs scout_report_artifact_id + architect_plan_artifact_id + coder_report_artifact_id; publisher needs reviewer_report_artifact_id. For detailed routing, call role_list."""
     # ------------------------------------------------------------------
     # Debug logging
     # ------------------------------------------------------------------
@@ -773,7 +791,7 @@ def role_wait(
     timeout_seconds: McpInt = 1800,
     poll_interval_seconds: McpInt = 30,
 ) -> dict:
-    """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. Do not request artifact content, artifact_path, or full_result."""
+    """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. role_wait returns only status, control_summary, and artifact id references."""
     # Defensive parsing for nested LLM mistakes.
     raw_role_arg = role_run_id
     _timeout = timeout_seconds

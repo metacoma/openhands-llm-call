@@ -2794,33 +2794,24 @@ class TestRoleCallDescriptionFlatOnly(TestCase):
         self.assertIn("scalar", role_call.__doc__.lower())
 
     def test_role_call_description_forbids_metadata(self):
-        """role_call docstring says 'Do not pass metadata'."""
+        """role_call docstring uses positive contract (no metadata field)."""
         from mcp_agent.server import role_call
         doc = role_call.__doc__
-        self.assertTrue(
-            any(phrase in doc for phrase in [
-                "Do not pass metadata",
-                "do not pass metadata",
-                "Do NOT pass metadata",
-            ]),
-            "role_call description must forbid metadata",
+        # After cleanup, docstring should NOT mention metadata as a field
+        self.assertNotIn(
+            "metadata", doc.lower().split("artifact routing")[0] if "artifact routing" in doc.lower() else doc.lower(),
+            "role_call description should not mention metadata as an input field",
         )
 
     def test_role_call_description_forbids_input_artifacts(self):
-        """role_call docstring forbids input_artifacts."""
+        """role_call docstring uses positive contract (no input_artifacts field)."""
         from mcp_agent.server import role_call
         doc = role_call.__doc__
-        self.assertIn(
-            "input_artifacts", doc,
-            "role_call description must mention input_artifacts",
+        # After cleanup, docstring should NOT mention input_artifacts as a field
+        self.assertNotIn(
+            "input_artifacts", doc.lower().split("artifact routing")[0] if "artifact routing" in doc.lower() else doc.lower(),
+            "role_call description should not mention input_artifacts as an input field",
         )
-        # Verify it appears in a forbidden context
-        for line in doc.split("\n"):
-            if "input_artifacts" in line.lower():
-                self.assertTrue(
-                    any(kw in line.lower() for kw in ["do not", "forbidden", "not"]),
-                    f"input_artifacts should appear in forbidden context, found: {line.strip()}",
-                )
 
     def test_role_call_description_mentions_role_wait(self):
         """role_call docstring mentions role_wait."""
@@ -2901,14 +2892,19 @@ class TestRoleListResponseUsageDocs(TestCase):
         self.assertGreater(len(result["workflow"]), 0)
 
     def test_role_list_contains_flat_role_call_contract(self):
-        """role_list response contains flat_role_call_contract key."""
+        """role_list response contains flat_role_call_contract key with positive contract."""
         from mcp_agent.server import role_list
         result = role_list()
         self.assertIn("flat_role_call_contract", result)
         contract = result["flat_role_call_contract"]
         self.assertTrue(contract["use_only_flat_scalar_fields"])
-        self.assertIn("forbidden_fields", contract)
+        # Positive contract: allowed_tools, allowed_role_call_fields, artifact_fields, examples
+        self.assertIn("allowed_tools", contract)
+        self.assertIn("allowed_role_call_fields", contract)
         self.assertIn("artifact_fields", contract)
+        self.assertIn("examples", contract)
+        # forbidden_fields removed per legacy cleanup
+        self.assertNotIn("forbidden_fields", contract)
 
     def test_role_list_contains_routing_examples(self):
         """role_list response contains routing_examples key."""
@@ -3066,14 +3062,22 @@ class TestRoleCallDocstringConcise(TestCase):
     def test_role_call_docstring_forbids_metadata(self):
         from mcp_agent.server import role_call
         doc = role_call.__doc__
-        self.assertTrue(
-            any(kw in doc for kw in ["Do not pass metadata", "Do NOT pass metadata"]),
-            "role_call docstring must forbid metadata",
+        # After cleanup, docstring uses positive contract
+        pre_routing = doc.lower().split("artifact routing")[0] if "artifact routing" in doc.lower() else doc.lower()
+        self.assertNotIn(
+            "metadata", pre_routing,
+            "role_call docstring should not mention metadata as an input field",
         )
 
     def test_role_call_docstring_forbids_input_artifacts(self):
         from mcp_agent.server import role_call
-        self.assertIn("input_artifacts", role_call.__doc__)
+        doc = role_call.__doc__
+        # After cleanup, docstring uses positive contract
+        pre_routing = doc.lower().split("artifact routing")[0] if "artifact routing" in doc.lower() else doc.lower()
+        self.assertNotIn(
+            "input_artifacts", pre_routing,
+            "role_call docstring should not mention input_artifacts as an input field",
+        )
 
     def test_role_call_docstring_mentions_role_wait(self):
         from mcp_agent.server import role_call

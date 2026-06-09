@@ -405,7 +405,7 @@ role as still active.
 
 **What to do:**
 
-1. Follow the `next_action` field and call ``role_call`` for the
+1. Follow the `next_action` field and call ``role_wait`` for the
    existing role (it will return the existing result if already completed).
 2. Do NOT start another role until the previous role is confirmed terminal.
 3. If the OpenHands backend is temporarily unavailable, wait and retry.
@@ -479,7 +479,7 @@ Tests are in `tests/`:
 
 | File | Coverage |
 |---|---|
-| `test_role_tools.py` | parse_action, parse_risk, make_summary, role_list_impl |
+| `test_role_tools.py` | role_wait integration, prompt template markers |
 | `test_role_lifecycle.py` | role_call_start_impl, role_lifecycle_wait_impl |
 | `test_role_call.py` | role_call validation, artifact ID resolution, loop guard |
 | `test_role_lifecycle_v2.py` | role_call lifecycle with mocked OpenHands |
