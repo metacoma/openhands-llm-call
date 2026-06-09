@@ -2,8 +2,6 @@
 """MCP server that proxies to the OpenHands LLM Call FastAPI server.
 
 Public API: exactly three MCP tools — role_list, role_call, role_wait.
-All legacy tool names (shttp_*, shtpp_*, openhands_*, role_start, role_status,
-role_result, artifact_get, call_llm, check_health, check_job) have been removed.
 """
 
 import hashlib
@@ -472,16 +470,6 @@ def role_list() -> dict:
     return {
         "tools": {
             "allowed": ["role_list", "role_call", "role_wait"],
-            "forbidden": [
-                "shttp_role_call",
-                "shttp_role_list",
-                "shttp_role_wait",
-                "role_start",
-                "role_status",
-                "role_result",
-                "artifact_get",
-                "*_v2",
-            ],
         },
         "workflow": workflow_steps,
         "rules": [

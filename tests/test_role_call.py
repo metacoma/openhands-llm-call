@@ -2491,16 +2491,14 @@ class TestRoleListStructure(TestCase):
         roles_mod._ROLES = None
         os.environ.pop("ROLE_CONFIG_PATH", None)
 
-    def test_role_list_has_tools_allowed_forbidden(self):
-        """role_list has tools.allowed and tools.forbidden."""
+    def test_role_list_has_tools_allowed(self):
+        """role_list has tools.allowed, no forbidden list."""
         from mcp_agent.server import role_list
         result = role_list()
         self.assertIn("tools", result)
         self.assertIn("allowed", result["tools"])
-        self.assertIn("forbidden", result["tools"])
+        self.assertNotIn("forbidden", result["tools"])
         self.assertEqual(set(result["tools"]["allowed"]), {"role_list", "role_call", "role_wait"})
-        self.assertIn("role_start", result["tools"]["forbidden"])
-        self.assertIn("artifact_get", result["tools"]["forbidden"])
 
     def test_role_list_has_workflow_with_steps(self):
         """role_list has workflow with step objects."""

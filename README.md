@@ -348,7 +348,7 @@ The only valid lifecycle per role is:
 role_call → running (role_run_id) → role_wait → completed (artifacts)
 ```
 
-Head of IT never calls ``role_start``, ``role_status``, ``role_result``, or ``artifact_get``.
+Head of IT uses only ``role_call`` and ``role_wait``.
 The MCP server handles all waiting and artifact resolution internally.
 
 ### Single-threaded execution

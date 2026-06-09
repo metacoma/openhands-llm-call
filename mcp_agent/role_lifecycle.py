@@ -52,7 +52,7 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
-# Keys that must never appear in public role_wait / role_result responses.
+# Keys that must never appear in public role_wait responses.
 FORBIDDEN_PUBLIC_KEYS = {"artifact_path", "content", "full_result", "result"}
 
 

@@ -262,24 +262,6 @@ def role_list_impl() -> dict:
     return {"roles": safe_roles}
 
 
-def role_status_impl(role_run_id: str) -> dict:
-    """LEGACY — removed from public API. Kept only for backward compat."""
-    raise NotImplementedError(
-        "role_status_impl is removed; use role_wait instead."
-    )
-
-
-def role_result_impl(
-    role_run_id: str,
-    include_full_result: bool = True,
-    force_refresh: bool = False,
-) -> dict:
-    """LEGACY — removed from public API. Kept only for backward compat."""
-    raise NotImplementedError(
-        "role_result_impl is removed; use role_wait instead."
-    )
-
-
 # ---------------------------------------------------------------------------
 # role_wait — server-side polling
 # ---------------------------------------------------------------------------
@@ -349,7 +331,7 @@ def _find_active_role_run(role_store: "RoleRunStore") -> Optional[dict]:
     refreshes its actual OpenHands task status. If the actual status
     is terminal, the persisted record is updated and the candidate is
     skipped. This prevents stale "running" locks from blocking future
-    ``role_start`` calls.
+    ``role_call`` calls.
 
     If the actual status cannot be refreshed (missing metadata or
     OpenHands unavailable), the candidate is returned as active with
@@ -472,125 +454,3 @@ def artifact_list_impl(run_id: str) -> dict:
             },
         }
     return {"run_id": run_id, "artifacts": artifacts}
-
-
-def artifact_get_impl(
-    run_id: str | None = None,
-    artifact_name: str | None = None,
-    role_run_id: str | None = None,
-) -> dict:
-    """Implementation of the ``artifact_get`` MCP tool.
-
-    Parameters
-    ----------
-    run_id :
-        The top-level run identifier.
-    artifact_name :
-        Logical artifact name (e.g. ``"scout_report"``).
-    role_run_id :
-        Role-specific run ID.
-
-    Returns
-    -------
-    dict
-        Artifact metadata with ``content`` key, or an error dict.
-    """
-    # Resolve run_id and artifact_name from role_run_id if run_id is not provided
-    if not run_id and role_run_id:
-        role_store = _get_role_store()
-        role_run = role_store.get_role_run(role_run_id)
-        if role_run is None:
-            return {
-                "status": "failed",
-                "error": {
-                    "type": "UnknownRoleRunId",
-                    "message": (
-                        f"No role run found for role_run_id='{role_run_id}'. "
-                        "Verify the ID returned by role_start."
-                    ),
-                    "retryable": False,
-                },
-            }
-        run_id = role_run.get("run_id")
-        if not artifact_name:
-            artifact_name = role_run.get("artifact_name")
-
-    if not run_id:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "MissingRunId",
-                "message": (
-                    "Missing run_id. Provide either run_id or role_run_id."
-                ),
-                "retryable": False,
-            },
-        }
-
-    if not artifact_name and not role_run_id:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "MissingArtifactName",
-                "message": (
-                    "Missing artifact_name. Provide artifact_name or role_run_id."
-                ),
-                "retryable": False,
-            },
-        }
-
-    store = ArtifactStore()
-    try:
-        artifact = store.get(run_id, artifact_name=artifact_name, role_run_id=role_run_id)
-    except ValueError as exc:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "PathTraversalDetected",
-                "message": str(exc),
-                "retryable": False,
-            },
-        }
-    except FileNotFoundError:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "ArtifactNotFound",
-                "message": (
-                    f"Artifact not found for run_id='{run_id}'"
-                    + (f", artifact_name='{artifact_name}'" if artifact_name else "")
-                    + (f", role_run_id='{role_run_id}'" if role_run_id else "")
-                ),
-                "retryable": False,
-            },
-        }
-
-    if artifact is None:
-        return {
-            "status": "failed",
-            "error": {
-                "type": "ArtifactNotFound",
-                "message": (
-                    f"Artifact not found for run_id='{run_id}'"
-                    + (f", artifact_name='{artifact_name}'" if artifact_name else "")
-                    + (f", role_run_id='{role_run_id}'" if role_run_id else "")
-                ),
-                "retryable": False,
-            },
-        }
-
-    # Ensure empty-content diagnostics are always present
-    if "content_empty" not in artifact:
-        artifact["content_empty"] = not artifact.get("content", "").strip()
-    if "valid_role_report" not in artifact:
-        artifact["valid_role_report"] = bool(artifact.get("content", "").strip())
-
-    # Add warning for empty artifacts
-    if artifact.get("content_empty"):
-        artifact["valid_role_report"] = False
-        artifact["warning"] = {
-            "type": "EmptyArtifactContent",
-            "message": "Artifact exists but content is empty.",
-        }
-
-    return artifact
