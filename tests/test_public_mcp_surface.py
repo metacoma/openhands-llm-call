@@ -19,24 +19,6 @@ class TestPublicMCPToolSurface(unittest.TestCase):
         tool_names = {t.name for t in MCP._tool_manager.list_tools()}
         self.assertEqual(tool_names, {"role_list", "role_call", "role_wait"})
 
-    def test_no_legacy_tools_exposed(self):
-        """No legacy tool names appear in the public MCP surface."""
-        from mcp_agent.server import MCP
-
-        tool_names = {t.name for t in MCP._tool_manager.list_tools()}
-        legacy_names = {
-            "shttp_role_call", "shttp_role_list", "shttp_role_wait",
-            "shtpp_role_call", "shtpp_role_list", "shtpp_role_wait",
-            "role_start", "role_status", "role_result",
-            "artifact_get", "artifact_list",
-            "openhands_start_task", "openhands_get_task_status",
-            "openhands_get_task_result", "openhands_get_task_events",
-            "openhands_cancel_task",
-            "call_llm", "check_health", "check_job",
-        }
-        overlap = tool_names & legacy_names
-        self.assertEqual(overlap, set(), f"Legacy tools still exposed: {overlap}")
-
 
 class TestNegativeAssertions(unittest.TestCase):
     """Negative assertions: forbidden terms must not appear in public output/docs/prompts."""
