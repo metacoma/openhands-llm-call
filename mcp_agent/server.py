@@ -137,7 +137,7 @@ def unwrap_scalar(value: Any, extra_keys: list[str] | None = None) -> Any:
         return value
     if len(value) == 1:
         key = next(iter(value))
-        known_keys = ("text", "value", "default", "name", "id", "artifact_id", "string", "content")
+        known_keys = ("text", "value", "default", "name", "id", "artifact_id", "string", "content", "idempotency_key")
         if key in known_keys or (extra_keys and key in extra_keys):
             return unwrap_scalar(value[key])
         return value
