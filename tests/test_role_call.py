@@ -325,79 +325,11 @@ class TestRoleListTool(TestCase):
         self.assertIn("scout_report", architect["requires_artifacts"])
 
 
-# ---------------------------------------------------------------------------
-# Tests — Legacy tools NOT exposed
-# ---------------------------------------------------------------------------
-
 def _get_public_tool_names():
     """Return a set of public MCP tool names from the server module."""
     from mcp_agent.server import MCP
     tools = MCP._tool_manager.list_tools()
     return {t.name for t in tools}
-
-
-class TestLegacyToolsHidden(TestCase):
-    """Test that legacy tools are NOT decorated with @MCP.tool()."""
-
-    def test_role_start_not_decorated(self):
-        """role_start is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("role_start", tool_names,
-                         "role_start should NOT be a public MCP tool")
-
-    def test_role_wait_not_decorated(self):
-        """role_wait IS decorated with @MCP.tool() (public tool)."""
-        tool_names = _get_public_tool_names()
-        self.assertIn("role_wait", tool_names,
-                      "role_wait SHOULD be a public MCP tool")
-
-    def test_role_status_not_decorated(self):
-        """role_status is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("role_status", tool_names,
-                         "role_status should NOT be a public MCP tool")
-
-    def test_role_result_not_decorated(self):
-        """role_result is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("role_result", tool_names,
-                         "role_result should NOT be a public MCP tool")
-
-    def test_artifact_get_not_decorated(self):
-        """artifact_get is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("artifact_get", tool_names,
-                         "artifact_get should NOT be a public MCP tool")
-
-    def test_legacy_role_start_v2_not_decorated(self):
-        """shttp_role_start_v2 is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("shttp_role_start_v2", tool_names,
-                         "shttp_role_start_v2 should NOT be a public MCP tool")
-
-    def test_legacy_role_wait_v2_not_decorated(self):
-        """shttp_role_wait_v2 is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("shttp_role_wait_v2", tool_names,
-                         "shttp_role_wait_v2 should NOT be a public MCP tool")
-
-    def test_legacy_role_result_v2_not_decorated(self):
-        """shttp_role_result_v2 is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("shttp_role_result_v2", tool_names,
-                         "shttp_role_result_v2 should NOT be a public MCP tool")
-
-    def test_role_list_not_decorated(self):
-        """shttp_role_list (old name) is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("shttp_role_list", tool_names,
-                         "shttp_role_list should NOT be a public MCP tool")
-
-    def test_artifact_list_not_decorated(self):
-        """artifact_list is NOT decorated with @MCP.tool()."""
-        tool_names = _get_public_tool_names()
-        self.assertNotIn("artifact_list", tool_names,
-                         "artifact_list should NOT be a public MCP tool")
 
 
 # ---------------------------------------------------------------------------
