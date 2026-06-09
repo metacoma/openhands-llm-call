@@ -17,6 +17,11 @@ Lifecycle state machine:
     → summary_artifact_saved
     → completed
 
+If primary artifact is empty (no content after stripping whitespace):
+
+    main_response_received
+    → empty_primary_artifact
+
 If summary parsing fails:
 
     summary_response_received
@@ -76,6 +81,65 @@ def _sanitize_public_role_response(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize_public_role_response(v) for v in value]
     return value
+
+
+def _validate_primary_artifact_nonempty(
+    artifact_id: str,
+    artifact_store: "ArtifactStore",
+    artifact_name: str,
+    role: str,
+) -> tuple[bool, Optional[dict]]:
+    """Validate that the primary artifact exists and has non-empty content.
+
+    Returns
+    -------
+    tuple[bool, dict | None]
+        (is_valid, error_dict).  If valid, error_dict is None.
+        If invalid, error_dict has keys: type, message, retryable, artifact_slot.
+    """
+    # Check 1: artifact_id must be non-empty
+    if not artifact_id:
+        return (False, {
+            "type": "EmptyPrimaryArtifactError",
+            "artifact_slot": artifact_name,
+            "artifact_id": "",
+            "message": (
+                f"Primary artifact '{artifact_name}' has no artifact_id. "
+                f"Refusing to mark role '{role}' as completed."
+            ),
+            "retryable": True,
+        })
+
+    # Check 2: resolve by artifact_id (same code path used by role_call)
+    try:
+        content = artifact_store.get_content_by_id(artifact_id)
+    except ValueError:
+        return (False, {
+            "type": "EmptyPrimaryArtifactError",
+            "artifact_slot": artifact_name,
+            "artifact_id": artifact_id,
+            "message": (
+                f"Primary artifact '{artifact_name}' (id={artifact_id}) "
+                f"cannot be resolved. Refusing to mark role '{role}' as completed."
+            ),
+            "retryable": True,
+        })
+
+    # Check 3: content must be non-empty after strip()
+    if not content.strip():
+        return (False, {
+            "type": "EmptyPrimaryArtifactError",
+            "artifact_slot": artifact_name,
+            "artifact_id": artifact_id,
+            "message": (
+                f"OpenHands job completed but produced an empty primary artifact "
+                f"'{artifact_name}'. The artifact file exists but has no content "
+                f"after stripping whitespace. Refusing to mark role '{role}' as completed."
+            ),
+            "retryable": True,
+        })
+
+    return (True, None)
 
 
 # Mapping from artifact type name to the flat role_call field name
@@ -1145,18 +1209,46 @@ def role_lifecycle_wait_impl(
 
     # Idempotent: if already completed with summary, return existing result
     if role_run.get("status") == "completed" and role_run.get("result_summary"):
-        control_summary = None
-        if role_run.get("result_summary"):
-            try:
-                control_summary = json.loads(role_run["result_summary"])
-            except (json.JSONDecodeError, TypeError):
-                control_summary = {"raw": role_run["result_summary"]}
+        # Re-validate primary artifact to catch previously-bugged completions
         stored_artifacts = None
         if role_run.get("artifacts"):
             try:
                 stored_artifacts = json.loads(role_run["artifacts"])
             except (json.JSONDecodeError, TypeError):
                 stored_artifacts = None
+        primary_artifact_id_for_check = ""
+        if stored_artifacts and isinstance(stored_artifacts, dict):
+            primary_artifact_id_for_check = (
+                stored_artifacts.get("primary", {}).get("artifact_id", "")
+            )
+        if primary_artifact_id_for_check:
+            artifact_store = ArtifactStore()
+            is_valid, empty_err = _validate_primary_artifact_nonempty(
+                artifact_id=primary_artifact_id_for_check,
+                artifact_store=artifact_store,
+                artifact_name=role_run.get("artifact_name", "unknown"),
+                role=role_run.get("role", ""),
+            )
+            if not is_valid:
+                role_store.update_role_run(
+                    role_run_id,
+                    status="failed",
+                    lifecycle_state="empty_primary_artifact",
+                )
+                return {
+                    "status": "failed",
+                    "role_run_id": role_run_id,
+                    "run_id": role_run.get("run_id", ""),
+                    "role": role_run.get("role", ""),
+                    "error": empty_err,
+                }
+
+        control_summary = None
+        if role_run.get("result_summary"):
+            try:
+                control_summary = json.loads(role_run["result_summary"])
+            except (json.JSONDecodeError, TypeError):
+                control_summary = {"raw": role_run["result_summary"]}
         artifacts_result: dict[str, Any] = {}
         if stored_artifacts and isinstance(stored_artifacts, dict):
             for key in ("primary", "summary"):
@@ -1310,6 +1402,30 @@ def role_lifecycle_wait_impl(
 
     primary_artifact_path = primary_meta["artifact_path"]
     primary_artifact_id = primary_meta.get("artifact_id", "")
+
+    # ------------------------------------------------------------------
+    # Validate primary artifact is non-empty (bug fix: prevent empty artifacts)
+    # ------------------------------------------------------------------
+    is_valid, empty_err = _validate_primary_artifact_nonempty(
+        artifact_id=primary_artifact_id,
+        artifact_store=artifact_store,
+        artifact_name=role_run.get("artifact_name", "unknown"),
+        role=role_run.get("role", ""),
+    )
+
+    if not is_valid:
+        role_store.update_role_run(
+            role_run_id,
+            status="failed",
+            lifecycle_state="empty_primary_artifact",
+        )
+        return {
+            "status": "failed",
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "error": empty_err,
+        }
 
     # ------------------------------------------------------------------
     # Check if summary was already done (idempotent role_wait)

@@ -978,5 +978,216 @@ class TestRoleWaitShortPollingContract(unittest.TestCase):
         self.assertEqual(result["wait"]["effective_timeout_seconds"], 5)
 
 
+# ---------------------------------------------------------------------------
+# Test: Empty primary artifact handling (regression test for empty answer bug)
+# ---------------------------------------------------------------------------
+
+class TestEmptyPrimaryArtifactHandling(unittest.TestCase):
+    """Tests for the fix: role_wait must never return completed with an empty primary artifact.
+
+    Covers:
+    - Test 1: completed OpenHands job with empty answer must fail
+    - Test 2: completed role always has readable non-empty primary artifact
+    - Test 4: ArtifactStore rejects or flags empty required artifacts
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_rw_empty_")
+        os.environ["OPENHANDS_ROLE_STATE_DIR"] = self.tmpdir
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ.pop("OPENHANDS_ROLE_STATE_DIR", None)
+        import mcp_agent.role_lifecycle as rl
+        rl._role_store = None
+        import mcp_agent.roles as roles_mod
+        roles_mod._ROLES = None
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_empty_answer_returns_failed_status(self, mock_start,
+                                                  mock_get_status):
+        """Test 1: Mock job returns completed with empty answer. role_wait must return failed."""
+        mock_get_status.side_effect = [
+            # Main job completes with empty answer
+            {"_normalized_status": "completed", "status": "completed",
+             "answer": ""},
+            # Summary job check (should not be reached)
+            {"_normalized_status": "completed", "status": "completed",
+             "answer": "{}"},
+        ]
+
+        role_run_id = _setup_store(self.tmpdir)
+
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=300,
+            poll_interval_seconds=5,
+        )
+
+        # Must fail, not complete
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("error", result)
+        self.assertEqual(result["error"]["type"], "EmptyPrimaryArtifactError")
+        self.assertIn("scout_report", result["error"]["message"])
+        self.assertTrue(result["error"]["retryable"])
+
+        # No usable artifacts.primary should be returned
+        self.assertNotIn("artifacts", result)
+        self.assertNotIn("primary", result.get("artifacts", {}))
+
+        # Verify role run was persisted as failed with empty_primary_artifact state
+        from mcp_agent.role_store import RoleRunStore
+        store = RoleRunStore(self.tmpdir)
+        stored_run = store.get_role_run(role_run_id)
+        self.assertEqual(stored_run["status"], "failed")
+        self.assertEqual(stored_run["lifecycle_state"], "empty_primary_artifact")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_normal_completed_still_works(self, mock_start,
+                                           mock_get_status):
+        """Test 2: Normal completed role has readable non-empty primary artifact."""
+        mock_get_status.side_effect = [
+            # Main job completes with non-empty answer
+            {"_normalized_status": "completed", "status": "completed",
+             "answer": json.dumps({
+                 "status": "completed",
+                 "role": "scout",
+                 "summary": "Scout completed.",
+                 "primary_artifact_name": "scout_report",
+                 "blocking": False,
+                 "risk_level": "LOW",
+                 "action": None,
+                 "blocking_summary": [],
+             })},
+            # Summary job completes
+            {"_normalized_status": "completed", "status": "completed",
+             "answer": json.dumps({
+                 "status": "completed",
+                 "role": "scout",
+                 "summary": "Scout summary.",
+                 "primary_artifact_name": "scout_report",
+                 "blocking": False,
+                 "risk_level": "LOW",
+                 "action": None,
+                 "blocking_summary": [],
+             })},
+        ]
+
+        mock_start.side_effect = [
+            {"task_id": "task-main", "conversation_id": "conv-1"},
+            {"task_id": "task-summary", "conversation_id": "conv-1"},
+        ]
+
+        role_run_id = _setup_store(self.tmpdir)
+
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=300,
+            poll_interval_seconds=5,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("artifacts", result)
+        self.assertIn("primary", result["artifacts"])
+        primary_artifact_id = result["artifacts"]["primary"]["artifact_id"]
+        self.assertTrue(primary_artifact_id)
+
+        # Read the artifact using the same resolver used by role_call
+        artifact_store = ArtifactStore()
+        content = artifact_store.get_content_by_id(primary_artifact_id)
+        self.assertTrue(content.strip(), "Primary artifact content must be non-empty after strip")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    @patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi")
+    def test_whitespace_only_answer_returns_failed(self, mock_start,
+                                                    mock_get_status):
+        """Whitespace-only content should also be rejected as empty."""
+        mock_get_status.side_effect = [
+            # Main job completes with whitespace-only answer
+            {"_normalized_status": "completed", "status": "completed",
+             "answer": "   \n\t\n  "},
+            {"_normalized_status": "completed", "status": "completed",
+             "answer": "{}"},
+        ]
+
+        role_run_id = _setup_store(self.tmpdir)
+
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=300,
+            poll_interval_seconds=5,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "EmptyPrimaryArtifactError")
+
+        # Verify role run was persisted as failed
+        from mcp_agent.role_store import RoleRunStore
+        store = RoleRunStore(self.tmpdir)
+        stored_run = store.get_role_run(role_run_id)
+        self.assertEqual(stored_run["status"], "failed")
+        self.assertEqual(stored_run["lifecycle_state"], "empty_primary_artifact")
+
+    @patch("mcp_agent.role_lifecycle._get_task_status_once")
+    def test_repeated_wait_on_empty_artifact_still_fails(self, mock_get_status):
+        """Test that repeated role_wait on a previously-bugged completed role still fails.
+
+        This simulates the scenario where a role was marked completed with an empty
+        artifact (from the buggy code), and a subsequent role_wait call should
+        now catch it and fail.
+        """
+        role_run_id = _setup_store(self.tmpdir)
+
+        # Manually mark the role as completed with an empty primary artifact
+        # (simulating the buggy behavior)
+        from mcp_agent.role_store import RoleRunStore
+        store = RoleRunStore(self.tmpdir)
+        stored_run = store.get_role_run(role_run_id)
+
+        # Save the role as completed with artifacts (but the artifact file is empty)
+        store.update_role_run(
+            role_run_id,
+            status="completed",
+            lifecycle_state="completed",
+            result_summary=json.dumps({
+                "status": "completed",
+                "role": "scout",
+                "summary": "Scout completed.",
+                "primary_artifact_name": "scout_report",
+                "blocking": False,
+                "risk_level": "LOW",
+                "action": None,
+                "blocking_summary": [],
+            }),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_name": "scout_report",
+                    "artifact_id": "art_test-scout-test-run-empty_scout_report",
+                },
+                "summary": {
+                    "artifact_name": "control_summary",
+                    "artifact_id": "art_test-scout-test-run-empty_control_summary",
+                },
+            }),
+        )
+
+        # Now call role_wait again — it should re-validate and fail
+        result = role_lifecycle.role_lifecycle_wait_impl(
+            role_run_id=role_run_id,
+            timeout_seconds=300,
+            poll_interval_seconds=5,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"]["type"], "EmptyPrimaryArtifactError")
+
+        # Verify the role run was updated to failed
+        updated_run = store.get_role_run(role_run_id)
+        self.assertEqual(updated_run["status"], "failed")
+        self.assertEqual(updated_run["lifecycle_state"], "empty_primary_artifact")
+
+
 if __name__ == "__main__":
     unittest.main()
