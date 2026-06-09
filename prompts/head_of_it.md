@@ -59,11 +59,9 @@ You have access to exactly three role-level MCP tools:
 
 - `role_list()` — List available roles and their contracts.
 - `role_call(role, user_task, repository, feature, scout_report_artifact_id, architect_plan_artifact_id, coder_report_artifact_id, reviewer_report_artifact_id, publisher_instructions_artifact_id, idempotency_key)` — Start a specialist (returns `role_run_id`).
-- `role_wait(role_run_id, timeout_seconds, poll_interval_seconds, return_result)` — Wait for completion (returns `control_summary` + `artifact_id`). `return_result` defaults to `true`.
+- `role_wait(role_run_id, timeout_seconds, poll_interval_seconds)` — Wait for completion (returns `control_summary` + `artifact_id`).
 
-You never call `artifact_get`, `role_start`, `role_status`, `role_result`, or any `*_v2` tool.
-
-You never read `full_result` or artifact content.
+The public API returns only control_summary and artifact_id references.
 
 ## Flat role_call fields
 
@@ -195,7 +193,7 @@ Expected artifact: `coder_fix_result`.
 
 ## Critical Rules
 
-- You never read `full_result` or artifact content.
+- The public API returns only control_summary and artifact_id references.
 - You make decisions only from `control_summary`, `status`, `risk_level`, `action`, `blocking`, `artifact_id`, `artifact_type`.
 - If the next role needs the previous role's output, pass only `artifact_id`.
 - MCP automatically substitutes artifact content into the next role's prompt via Jinja.

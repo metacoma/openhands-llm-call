@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Two-step role lifecycle with in-conversation summary.
 
-Provides ``role_call_impl`` which implements the full two-step
-lifecycle: main prompt → response → summary prompt → response →
-validation → control summary returned inline.
+Provides ``role_call_start_impl`` and ``role_lifecycle_wait_impl``
+for the non-blocking two-step pattern: main prompt → response →
+summary prompt → response → validation → control summary returned inline.
 
 Lifecycle state machine:
 
@@ -52,7 +52,7 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
-# Keys that must never appear in public role_wait / role_result responses.
+# Keys that must never appear in public role_wait responses.
 FORBIDDEN_PUBLIC_KEYS = {"artifact_path", "content", "full_result", "result"}
 
 
@@ -1048,7 +1048,6 @@ def role_lifecycle_wait_impl(
     role_run_id: str,
     timeout_seconds: Optional[int] = None,
     poll_interval_seconds: Optional[int] = None,
-    return_result: bool = True,
 ) -> dict[str, Any]:
     """Wait for a role run to complete (polling + summary).
 
@@ -1062,8 +1061,6 @@ def role_lifecycle_wait_impl(
         Maximum seconds to wait (default 1800).
     poll_interval_seconds :
         Seconds between status checks (default 30).
-    return_result :
-        Whether to include the full result in the response (default True).
 
     Returns
     -------
@@ -1641,82 +1638,3 @@ def role_lifecycle_wait_impl(
             },
         },
     })
-
-
-def role_call_impl(
-    role: str,
-    user_task: str,
-    input_artifacts: Optional[dict[str, Any]] = None,
-    metadata: Optional[dict[str, Any]] = None,
-    api_key: str = "",
-    llm_model: Optional[str] = None,
-    url: Optional[str] = None,
-    idempotency_key: Optional[str] = None,
-) -> dict[str, Any]:
-    """Two-step role lifecycle with in-conversation summary.
-
-    **Deprecated**: Prefer ``role_call_start_impl`` + ``role_lifecycle_wait_impl``
-    for the non-blocking two-step pattern.
-
-    This function remains as a thin wrapper for backward compatibility:
-    it calls ``role_call_start_impl`` then ``role_lifecycle_wait_impl``
-    to preserve the existing blocking behavior for internal callers/tests.
-
-    Parameters
-    ----------
-    role :
-        The role name (e.g. ``"scout"``, ``"architect"``).
-    user_task :
-        The user task text. Must be non-empty.
-    input_artifacts :
-        Mapping of artifact names to their ID/path strings.
-    metadata :
-        Optional metadata dict (e.g. ``{"repository": "..."}``).
-    api_key :
-        OpenHands API key.
-    llm_model :
-        LLM model override.
-    url :
-        OpenHands LLM base URL override.
-    idempotency_key :
-        Optional stable key to deduplicate retried calls.
-
-    Returns
-    -------
-    dict
-        Control summary with ``artifact_id`` (not ``artifact_path``),
-        or an error dict.
-    """
-    if input_artifacts is None:
-        input_artifacts = {}
-    if metadata is None:
-        metadata = {}
-
-    # Start the role (non-blocking)
-    result = role_call_start_impl(
-        role=role,
-        user_task=user_task,
-        input_artifacts=input_artifacts,
-        metadata=metadata,
-        api_key=api_key,
-        llm_model=llm_model,
-        url=url,
-        idempotency_key=idempotency_key,
-    )
-
-    # If start returned "running", wait for completion
-    if result.get("status") == "running" and not result.get("_idempotent"):
-        role_run_id = result.get("role_run_id", "")
-        if role_run_id:
-            return role_lifecycle_wait_impl(
-                role_run_id=role_run_id,
-            )
-
-    # Dedupe hit, error, or other non-running status - return as-is
-    return result
-
-
-# Backward-compatible alias for existing callers/tests.
-# Prefer direct import of role_call_impl.
-_role_call_impl_alias = role_call_impl
-
