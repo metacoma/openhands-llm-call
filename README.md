@@ -426,7 +426,7 @@ role as still active.
   repo/branch fail fast with a clear error. Locks expire after
   `OPENHANDS_ROLE_LOCK_TTL_MINUTES` (default 180 min) for crash recovery.
 
-- **Idempotent role_start**: Providing an `idempotency_key` (top-level or in
+- **Idempotent role_call**: Providing an `idempotency_key` (top-level or in
   `context`) deduplicates retry calls. The uniqueness scope is
   `run_id:role:idempotency_key`. Duplicate calls return the existing
   `role_run_id` with `idempotent_reuse: true`.

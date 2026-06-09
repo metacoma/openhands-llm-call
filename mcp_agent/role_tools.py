@@ -447,22 +447,6 @@ def role_wait_impl(
 
 
 def artifact_list_impl(run_id: str) -> dict:
-    """LEGACY — removed from public API. Kept only for backward compat."""
-    raise NotImplementedError(
-        "artifact_list_impl is removed; use artifact_store.list_artifacts() directly."
-    )
-
-
-def artifact_get_impl(
-    run_id: Optional[str] = None,
-    role_run_id: Optional[str] = None,
-    artifact_name: Optional[str] = None,
-) -> dict:
-    """LEGACY — removed from public API. Kept only for backward compat."""
-    raise NotImplementedError(
-        "artifact_get_impl is removed; use artifact_store.get_artifact() directly."
-    )
-def artifact_list_impl(run_id: str) -> dict:
     """Implementation of the ``artifact_list`` MCP tool.
 
     Parameters
