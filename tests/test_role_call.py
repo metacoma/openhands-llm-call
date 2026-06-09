@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for the new public MCP API: role_list + role_call.
+"""Tests for the new public MCP API: role_list + role_call + role_wait.
 
-public surface consisting of exactly three tools: role_list, role_call, role_wait.
-public surface consisting of exactly two tools.
+These tests verify the public surface consists of exactly three tools:
+role_list, role_call, role_wait.
 """
 
 import json
