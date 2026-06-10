@@ -543,6 +543,26 @@ class TestRepairSummary(unittest.TestCase):
         self.assertIn("ACTION:", prompt)
         self.assertIn("BLOCKERS:", prompt)
 
+        # Multiline layout assertions (same as role_summary.md tests)
+        self.assertIn("ROLE_SUMMARY_BEGIN\nSTATUS:", prompt)
+        self.assertIn("\nROLE:", prompt)
+        self.assertIn("\nPRIMARY_ARTIFACT:", prompt)
+        self.assertIn("\nBLOCKING:", prompt)
+        self.assertIn("\nRISK:", prompt)
+        self.assertIn("\nACTION:", prompt)
+        self.assertIn("\nSUMMARY:", prompt)
+        self.assertIn("\nBLOCKERS:\n- none\nROLE_SUMMARY_END", prompt)
+
+    def test_repair_prompt_not_inline(self):
+        """Repair prompt does NOT show inline one-line format."""
+        from mcp_agent.summary_validator import repair_summary
+
+        prompt = repair_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+        )
+        self.assertNotIn("ROLE_SUMMARY_BEGIN STATUS:", prompt)
+
     def test_repair_prompt_includes_role(self):
         """Repair prompt includes role-specific info."""
         from mcp_agent.summary_validator import repair_summary
@@ -552,6 +572,23 @@ class TestRepairSummary(unittest.TestCase):
             summary_artifact_name="reviewer_report",
         )
         self.assertIn("ROLE_SUMMARY_BEGIN", prompt)
+
+
+class TestRawPromptMultilineFormat(unittest.TestCase):
+    """Test that raw prompt files contain multiline summary block."""
+
+    def test_raw_prompt_files_multiline_format(self):
+        """Both raw prompt files contain multiline summary block."""
+        from pathlib import Path
+
+        for path in [
+            Path(__file__).parent.parent / "prompts" / "summaries" / "role_summary.md",
+            Path(__file__).parent.parent / "prompts" / "summaries" / "role_summary_repair.md",
+        ]:
+            text = path.read_text()
+            self.assertNotIn("ROLE_SUMMARY_BEGIN STATUS:", text)
+            self.assertIn("ROLE_SUMMARY_BEGIN\nSTATUS:", text)
+            self.assertIn("\nBLOCKERS:\n- none\nROLE_SUMMARY_END", text)
 
 
 class TestSafeFallbackSummary(unittest.TestCase):
