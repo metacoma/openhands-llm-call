@@ -50,7 +50,8 @@ Pass artifact ids via dedicated flat fields:
 {
   "role_run_id": "20260608-xxx-architect-1",
   "timeout_seconds": 60,
-  "poll_interval_seconds": 10
+  "poll_interval_seconds": 10,
+  "request_nonce": "2026-06-10T14:55:31Z"
 }
 ```
 
@@ -74,7 +75,7 @@ A `running`/`timeout` response means the role is still alive; call `role_wait` a
 2. Wait with short polling:
 
 ```json
-{"role_run_id": "...", "timeout_seconds": 60, "poll_interval_seconds": 10}
+{"role_run_id": "...", "timeout_seconds": 60, "poll_interval_seconds": 10, "request_nonce": "2026-06-10T14:55:31Z"}
 ```
 
 3. Repeat step 2 until you receive:

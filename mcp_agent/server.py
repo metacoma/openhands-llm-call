@@ -804,7 +804,16 @@ def role_wait(
     poll_interval_seconds: McpInt = 5,
     request_nonce: str | None = None,
 ) -> dict:
-    """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. role_wait returns only status, control_summary, and artifact id references."""
+    """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. role_wait returns only status, control_summary, and artifact id references.
+
+    IMPORTANT FOR LLM CALLERS:
+    Always include request_nonce when calling role_wait.
+    Generate request_nonce at call time using the current UTC timestamp.
+    Recommended format: ISO-8601 UTC, for example "2026-06-10T14:55:31Z".
+    This value is only for request traceability and to make repeated wait calls visibly unique.
+    It does not affect polling behavior, role state, artifacts, or result content.
+    When provided, request_nonce is echoed back in the response.
+    The server also returns response_nonce independently (do not confuse the two)."""
     # Defensive parsing for nested LLM mistakes.
     raw_role_arg = role_run_id
     _timeout = timeout_seconds

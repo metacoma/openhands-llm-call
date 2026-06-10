@@ -148,6 +148,35 @@ class TestRequestNonceSchema(unittest.TestCase):
         else:
             self.fail("role_wait tool not found in MCP tool list")
 
+    def test_role_wait_docstring_instructs_always_include_request_nonce(self):
+        """The role_wait MCP tool description instructs LLMs to always include request_nonce."""
+        from mcp_agent.server import MCP
+
+        for tool in MCP._tool_manager.list_tools():
+            if tool.name == "role_wait":
+                desc = tool.description
+                self.assertIsNotNone(desc)
+                self.assertIn("Always include request_nonce", desc)
+                break
+        else:
+            self.fail("role_wait tool not found in MCP tool list")
+
+    def test_role_wait_docstring_includes_iso8601_example(self):
+        """The role_wait MCP tool description includes an ISO-8601 UTC timestamp example."""
+        import re
+
+        from mcp_agent.server import MCP
+
+        for tool in MCP._tool_manager.list_tools():
+            if tool.name == "role_wait":
+                desc = tool.description
+                self.assertIsNotNone(desc)
+                # Verify an ISO-8601 UTC example like 2026-06-10T14:55:31Z appears
+                self.assertRegex(desc, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+                break
+        else:
+            self.fail("role_wait tool not found in MCP tool list")
+
 
 if __name__ == "__main__":
     unittest.main()
