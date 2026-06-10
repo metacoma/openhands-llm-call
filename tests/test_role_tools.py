@@ -1201,6 +1201,207 @@ class TestRequestNonce(unittest.TestCase):
         self.assertEqual(result_b["request_nonce"], nonce_b)
         self.assertNotEqual(nonce_a, nonce_b)
 
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_request_nonce_accepts_nested_object(self, mock_lifecycle_wait):
+        """role_wait accepts a nested object as request_nonce and normalizes it."""
+        import json
+
+        from mcp_agent.server import role_wait
+
+        nonce = {
+            "summary": "Poll scout role completion",
+            "request_nonce": "2026-06-10T16:45:30Z",
+        }
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            request_nonce=nonce,
+        )
+
+        self.assertIn("request_nonce", result)
+        self.assertIsInstance(result["request_nonce"], str)
+        self.assertIn("2026-06-10T16:45:30Z", result["request_nonce"])
+        # Verify it is valid JSON
+        parsed = json.loads(result["request_nonce"])
+        self.assertEqual(parsed["summary"], "Poll scout role completion")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_request_nonce_accepts_list(self, mock_lifecycle_wait):
+        """role_wait accepts a list as request_nonce and normalizes it."""
+        import json
+
+        from mcp_agent.server import role_wait
+
+        nonce = ["poll", "scout", "2026-06-10T16:45:30Z"]
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            request_nonce=nonce,
+        )
+
+        self.assertIn("request_nonce", result)
+        self.assertIsInstance(result["request_nonce"], str)
+        parsed = json.loads(result["request_nonce"])
+        self.assertEqual(parsed, nonce)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_request_nonce_accepts_number(self, mock_lifecycle_wait):
+        """role_wait accepts a number as request_nonce and normalizes it."""
+        from mcp_agent.server import role_wait
+
+        nonce = 42
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            request_nonce=nonce,
+        )
+
+        self.assertIn("request_nonce", result)
+        self.assertIsInstance(result["request_nonce"], str)
+        self.assertEqual(result["request_nonce"], "42")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_request_nonce_accepts_boolean(self, mock_lifecycle_wait):
+        """role_wait accepts a boolean as request_nonce and normalizes it."""
+        from mcp_agent.server import role_wait
+
+        nonce = True
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            request_nonce=nonce,
+        )
+
+        self.assertIn("request_nonce", result)
+        self.assertIsInstance(result["request_nonce"], str)
+        self.assertEqual(result["request_nonce"], "true")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_request_nonce_normalized_is_json_serializable(self, mock_lifecycle_wait):
+        """Normalized request_nonce is always valid JSON."""
+        import json
+
+        from mcp_agent.server import role_wait
+
+        test_values = [
+            "plain-string",
+            42,
+            3.14,
+            True,
+            False,
+            None,
+            {"key": "value"},
+            ["a", "b", "c"],
+        ]
+
+        for nonce in test_values:
+            mock_lifecycle_wait.return_value = {
+                "status": "completed",
+                "role_run_id": "run-001",
+                "run_id": "test-run-001",
+                "role": "scout",
+                "control_summary": {"status": "DONE"},
+                "artifacts": {
+                    "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                },
+            }
+
+            result = role_wait(
+                role_run_id="run-001",
+                timeout_seconds=300,
+                poll_interval_seconds=15,
+                request_nonce=nonce,
+            )
+
+            if nonce is not None:
+                self.assertIn("request_nonce", result)
+                self.assertIsInstance(result["request_nonce"], str)
+                # For non-string types, verify the normalized output is valid JSON
+                if not isinstance(nonce, str):
+                    json.loads(result["request_nonce"])  # raises if not valid JSON
+            else:
+                # None → omitted from response
+                self.assertNotIn("request_nonce", result)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_response_nonce_independent_of_request_nonce_with_object(self, mock_lifecycle_wait):
+        """response_nonce is still present and independent when request_nonce is an object."""
+        from mcp_agent.server import role_wait
+
+        nonce = {
+            "summary": "Poll scout role completion",
+            "request_nonce": "2026-06-10T16:45:30Z",
+        }
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+            request_nonce=nonce,
+        )
+
+        self.assertIn("request_nonce", result)
+        self.assertIn("response_nonce", result)
+        self.assertNotEqual(result["response_nonce"], result["request_nonce"])
+
 
 if __name__ == "__main__":
     unittest.main()

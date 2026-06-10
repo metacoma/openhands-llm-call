@@ -157,6 +157,8 @@ class TestRequestNonceSchema(unittest.TestCase):
                 desc = tool.description
                 self.assertIsNotNone(desc)
                 self.assertIn("Always include request_nonce", desc)
+                self.assertIn("any JSON value", desc)
+                self.assertIn("UTC timestamp", desc)
                 break
         else:
             self.fail("role_wait tool not found in MCP tool list")
@@ -171,8 +173,21 @@ class TestRequestNonceSchema(unittest.TestCase):
             if tool.name == "role_wait":
                 desc = tool.description
                 self.assertIsNotNone(desc)
-                # Verify an ISO-8601 UTC example like 2026-06-10T14:55:31Z appears
+                # Verify an ISO-8601 UTC example like 2026-06-10T16:45:30Z appears
                 self.assertRegex(desc, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+                break
+        else:
+            self.fail("role_wait tool not found in MCP tool list")
+
+    def test_role_wait_docstring_says_any_json_value(self):
+        """The role_wait MCP tool description says request_nonce may be any JSON value."""
+        from mcp_agent.server import MCP
+
+        for tool in MCP._tool_manager.list_tools():
+            if tool.name == "role_wait":
+                desc = tool.description
+                self.assertIsNotNone(desc)
+                self.assertIn("any JSON value", desc)
                 break
         else:
             self.fail("role_wait tool not found in MCP tool list")
