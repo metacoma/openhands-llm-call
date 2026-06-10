@@ -230,26 +230,289 @@ class TestValidateSummary(unittest.TestCase):
         self.assertTrue(result.get("valid"))
 
 
+class TestValidateSummaryStructuredText(unittest.TestCase):
+    """Test validate_summary with structured text format."""
+
+    def _make_structured(self, overrides=None):
+        """Create a structured-text summary with optional overrides."""
+        lines = [
+            "ROLE_SUMMARY_BEGIN",
+            "STATUS: completed",
+            "ROLE: scout",
+            "PRIMARY_ARTIFACT: scout_report",
+            "BLOCKING: no",
+            "RISK: LOW",
+            "ACTION: NONE",
+            "SUMMARY: Scout completed successfully.",
+            "BLOCKERS:",
+            "- none",
+            "ROLE_SUMMARY_END",
+        ]
+        if overrides:
+            new_lines = []
+            for line in lines:
+                for key, val in overrides.items():
+                    prefix = f"{key}:"
+                    if line.strip().startswith(prefix):
+                        new_lines.append(f"{key}: {val}")
+                        break
+                else:
+                    new_lines.append(line)
+            lines = new_lines
+        return "\n".join(lines)
+
+    def test_valid_structured_non_reviewer_passes(self):
+        """Valid non-reviewer structured summary with ACTION: NONE parses to action is None."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured(),
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["role"], "scout")
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(result["action"])
+        self.assertFalse(result["blocking"])
+
+    def test_valid_reviewer_action_pass(self):
+        """Valid reviewer summary with ACTION: PASS."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="reviewer",
+            summary_artifact_name="reviewer_report",
+            json_str=self._make_structured({
+                "ROLE": "reviewer",
+                "PRIMARY_ARTIFACT": "reviewer_report",
+                "ACTION": "PASS",
+            }),
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["action"], "PASS")
+
+    def test_valid_reviewer_action_blocker_with_blockers(self):
+        """Valid reviewer summary with ACTION: BLOCKER and blockers list."""
+        from mcp_agent.summary_validator import validate_summary
+
+        text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            "STATUS: blocked\n"
+            "ROLE: reviewer\n"
+            "PRIMARY_ARTIFACT: reviewer_report\n"
+            "BLOCKING: yes\n"
+            "RISK: HIGH\n"
+            "ACTION: BLOCKER\n"
+            "SUMMARY: Review found blockers.\n"
+            "BLOCKERS:\n"
+            "- Blocker 1\n"
+            "- Blocker 2\n"
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="reviewer",
+            summary_artifact_name="reviewer_report",
+            json_str=text,
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["action"], "BLOCKER")
+        self.assertTrue(result["blocking"])
+        self.assertEqual(result["risk_level"], "HIGH")
+        self.assertEqual(result["blocking_summary"], ["Blocker 1", "Blocker 2"])
+
+    def test_risk_none_maps_to_none(self):
+        """RISK: NONE maps to risk_level is None."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured({"RISK": "NONE"}),
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertIsNone(result["risk_level"])
+
+    def test_blocking_yes_no_maps_to_bool(self):
+        """BLOCKING: yes/no maps to bool."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured({"BLOCKING": "yes"}),
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertTrue(result["blocking"])
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured({"BLOCKING": "no"}),
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertFalse(result["blocking"])
+
+    def test_none_blockers_maps_to_empty_list(self):
+        """- none maps to empty blocker list."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured(),
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["blocking_summary"], [])
+
+    def test_wrong_role_returns_role_mismatch(self):
+        """Wrong role returns SummaryRoleMismatch."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured({"ROLE": "architect"}),
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryRoleMismatch")
+
+    def test_wrong_primary_artifact_returns_artifact_mismatch(self):
+        """Wrong primary artifact returns SummaryArtifactMismatch."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="wrong_artifact",
+            json_str=self._make_structured(),
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryArtifactMismatch")
+
+    def test_forbidden_next_role_returns_forbidden_fields(self):
+        """Forbidden next_role returns SummaryForbiddenFields."""
+        from mcp_agent.summary_validator import validate_summary
+
+        text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            "STATUS: completed\n"
+            "ROLE: scout\n"
+            "PRIMARY_ARTIFACT: scout_report\n"
+            "BLOCKING: no\n"
+            "RISK: LOW\n"
+            "ACTION: NONE\n"
+            "SUMMARY: Test.\n"
+            "BLOCKERS:\n"
+            "- none\n"
+            "next_role: architect\n"
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=text,
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryForbiddenFields")
+
+    def test_forbidden_ready_for_next_role_returns_forbidden_fields(self):
+        """Forbidden ready_for_next_role returns SummaryForbiddenFields."""
+        from mcp_agent.summary_validator import validate_summary
+
+        text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            "STATUS: completed\n"
+            "ROLE: scout\n"
+            "PRIMARY_ARTIFACT: scout_report\n"
+            "BLOCKING: no\n"
+            "RISK: LOW\n"
+            "ACTION: NONE\n"
+            "SUMMARY: Test.\n"
+            "BLOCKERS:\n"
+            "- none\n"
+            "ready_for_next_role: true\n"
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=text,
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryForbiddenFields")
+
+    def test_reviewer_action_none_returns_invalid(self):
+        """Reviewer with ACTION: NONE returns invalid."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="reviewer",
+            summary_artifact_name="reviewer_report",
+            json_str=self._make_structured({
+                "ROLE": "reviewer",
+                "PRIMARY_ARTIFACT": "reviewer_report",
+                "ACTION": "NONE",
+            }),
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryInvalidField")
+
+    def test_non_reviewer_action_pass_returns_invalid(self):
+        """Non-reviewer with ACTION: PASS returns invalid."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=self._make_structured({"ACTION": "PASS"}),
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryInvalidField")
+
+    def test_malformed_missing_fields_returns_invalid(self):
+        """Malformed/missing fields returns invalid, not an exception."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str="garbage text",
+        )
+        self.assertFalse(result.get("valid"))
+
+    def test_missing_markers_partial_fields_returns_invalid(self):
+        """Missing markers with insufficient fields returns invalid."""
+        from mcp_agent.summary_validator import validate_summary
+
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str="STATUS: completed\nROLE: scout",
+        )
+        self.assertFalse(result.get("valid"))
+
+
 class TestRepairSummary(unittest.TestCase):
     """Test repair_summary function."""
 
-    def test_repair_prompt_contains_json_schema(self):
-        """Repair prompt contains JSON schema."""
+    def test_repair_prompt_uses_structured_text(self):
+        """Repair prompt uses structured text format, not JSON."""
         from mcp_agent.summary_validator import repair_summary
 
         prompt = repair_summary(
             role="scout",
             summary_artifact_name="scout_report",
         )
-        self.assertIn("JSON", prompt)
-        self.assertIn("status", prompt)
-        self.assertIn("role", prompt)
-        self.assertIn("summary", prompt)
-        self.assertIn("primary_artifact_name", prompt)
-        self.assertIn("blocking", prompt)
-        self.assertIn("risk_level", prompt)
-        self.assertIn("action", prompt)
-        self.assertIn("blocking_summary", prompt)
+        self.assertIn("ROLE_SUMMARY_BEGIN", prompt)
+        self.assertIn("ROLE_SUMMARY_END", prompt)
+        self.assertIn("STATUS:", prompt)
+        self.assertIn("ROLE:", prompt)
+        self.assertIn("SUMMARY:", prompt)
+        self.assertIn("PRIMARY_ARTIFACT:", prompt)
+        self.assertIn("BLOCKING:", prompt)
+        self.assertIn("RISK:", prompt)
+        self.assertIn("ACTION:", prompt)
+        self.assertIn("BLOCKERS:", prompt)
 
     def test_repair_prompt_includes_role(self):
         """Repair prompt includes role-specific info."""
@@ -259,7 +522,7 @@ class TestRepairSummary(unittest.TestCase):
             role="reviewer",
             summary_artifact_name="reviewer_report",
         )
-        self.assertIn("JSON", prompt)
+        self.assertIn("ROLE_SUMMARY_BEGIN", prompt)
 
 
 class TestSafeFallbackSummary(unittest.TestCase):

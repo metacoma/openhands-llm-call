@@ -1,19 +1,20 @@
-Your previous response was not valid JSON.
+Your previous response could not be parsed.
 
-Return valid JSON only.
-Do not include Markdown.
-Do not include code blocks.
-Use exactly this schema:
-{
-  "status": "completed" | "blocked",
-  "role": "<role>",
-  "summary": "<short factual summary>",
-  "primary_artifact_name": "<artifact name>",
-  "blocking": true | false,
-  "risk_level": "LOW" | "MEDIUM" | "HIGH" | null,
-  "action": "PASS" | "BLOCKER" | null,
-  "blocking_summary": ["..."]
-}
+Return plain structured text only. Do not return JSON. Do not include Markdown code fences.
+
+Use exactly this format:
+
+ROLE_SUMMARY_BEGIN
+STATUS: completed|blocked
+ROLE: {{ role }}
+PRIMARY_ARTIFACT: {{ primary_artifact_name }}
+BLOCKING: yes|no
+RISK: LOW|MEDIUM|HIGH|NONE
+ACTION: PASS|BLOCKER|NONE
+SUMMARY: short one-line summary, max 1000 characters
+BLOCKERS:
+- none
+ROLE_SUMMARY_END
 
 Do not include next_role.
 Do not include ready_for_next_role.

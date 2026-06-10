@@ -50,7 +50,6 @@ from .role_store import RoleRunStore, _generate_run_id, _generate_role_run_id
 from .roles import get_role, list_roles
 from .summary_validator import (
     derive_reviewer_action_from_main_artifact,
-    repair_summary,
     safe_fallback_summary,
     validate_summary,
 )
@@ -1686,81 +1685,14 @@ def role_lifecycle_wait_impl(
         json_str=summary_text,
     )
 
+    # ------------------------------------------------------------------
+    # If invalid, use safe fallback immediately (no repair round-trip)
+    # ------------------------------------------------------------------
     if not control_summary.get("valid"):
         role_store.update_role_run(
             role_run_id,
             lifecycle_state="summary_parse_failed",
         )
-
-        repair_prompt_text = repair_summary(
-            role=role,
-            summary_artifact_name=(role_spec.output_artifact if role_spec else "unknown"),
-        )
-
-        role_store.update_role_run(
-            role_run_id,
-            lifecycle_state="summary_repair_prompt_sent",
-        )
-
-        # ------------------------------------------------------------------
-        # Send repair prompt to the same OpenHands conversation
-        # ------------------------------------------------------------------
-        logger.info(
-            "role_wait.repair_prompt_send role_run_id=%s conversation_id=%s prompt_len=%d",
-            role_run_id,
-            conversation_id or "(none)",
-            len(repair_prompt_text),
-        )
-
-        try:
-            repair_conv_response = _start_conversation_on_fastapi(
-                prompt=repair_prompt_text,
-                api_key=os.getenv("OPENHANDS_API_KEY", ""),
-                conversation_id=conversation_id if conversation_id else None,
-                read_only_existing_conversation=False,
-            )
-        except Exception:
-            repair_conv_response = None
-
-        if repair_conv_response:
-            repair_job_id = (
-                repair_conv_response.get("task_id")
-                or repair_conv_response.get("conversation_id")
-                or repair_conv_response.get("id")
-                or repair_conv_response.get("app_conversation_id")
-                or ""
-            )
-            if not repair_job_id:
-                repair_job_id = conversation_id or "unknown"
-
-            # ------------------------------------------------------------------
-            # Wait for repair response using polling helper (Blocker 2)
-            # ------------------------------------------------------------------
-            repair_status, repair_response_data = wait_job_until_terminal(
-                job_id=repair_job_id,
-                deadline=summary_deadline,
-                poll_interval_seconds=poll_interval_seconds,
-            )
-
-            if repair_status in ("timeout", "timed_out", "canceled"):
-                repair_text = ""
-            else:
-                repair_text = repair_response_data.get("answer", "") or ""
-            role_store.update_role_run(
-                role_run_id,
-                lifecycle_state="summary_repair_response_received",
-            )
-
-            control_summary = validate_summary(
-                role=role,
-                summary_artifact_name=(role_spec.output_artifact if role_spec else "unknown"),
-                json_str=repair_text,
-            )
-
-    # ------------------------------------------------------------------
-    # If still invalid, use safe fallback
-    # ------------------------------------------------------------------
-    if not control_summary.get("valid"):
         control_summary = safe_fallback_summary(
             role=role,
             primary_artifact_name=(role_spec.output_artifact if role_spec else "control_summary"),

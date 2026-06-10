@@ -112,25 +112,28 @@ async def call_lm(body: Dict[str, Any]) -> JSONResponse:
         output_artifact = _OUTPUT_ARTIFACT_MAP.get(role, "control_summary")
 
         if role == "reviewer":
-            action_val: str | None = "PASS"
+            action_val: str = "PASS"
         else:
-            action_val = None
+            action_val = "NONE"
 
-        summary_json = json.dumps({
-            "status": "completed",
-            "role": role,
-            "summary": f"{role.capitalize()} completed successfully.",
-            "primary_artifact_name": output_artifact,
-            "blocking": False,
-            "risk_level": "LOW",
-            "action": action_val,
-            "blocking_summary": [],
-        })
+        summary_text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            f"STATUS: completed\n"
+            f"ROLE: {role}\n"
+            f"PRIMARY_ARTIFACT: {output_artifact}\n"
+            "BLOCKING: no\n"
+            "RISK: LOW\n"
+            f"ACTION: {action_val}\n"
+            f"SUMMARY: {role.capitalize()} completed successfully.\n"
+            "BLOCKERS:\n"
+            "- none\n"
+            "ROLE_SUMMARY_END"
+        )
 
         _conversations[conversation_id] = {
             "conversation_id": conversation_id,
             "status": "completed",
-            "answer": summary_json,
+            "answer": summary_text,
             "execution_status": "finished",
             "role": role,
             "is_summary": True,
