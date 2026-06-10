@@ -787,6 +787,16 @@ def role_call(
     return result
 
 
+def _make_response_nonce() -> str:
+    """Generate a unique nonce for role_wait responses.
+
+    Format: YYYYMMDDTHHMMSSffffffZ-<8-char-hex>
+    Uses UTC time and uuid4 for uniqueness.
+    """
+    now = datetime.now(timezone.utc)
+    return f"{now.strftime('%Y%m%dT%H%M%S')}{now.microsecond:06d}Z-{uuid.uuid4().hex[:8]}"
+
+
 @MCP.tool()
 def role_wait(
     role_run_id: McpString,
@@ -810,10 +820,12 @@ def role_wait(
     try:
         normalized_role_run_id = normalize_role_run_id(raw_role_arg)
     except ValueError:
-        return _build_invalid_role_run_id_error("role_run_id")
+        err = _build_invalid_role_run_id_error("role_run_id")
+        err["response_nonce"] = _make_response_nonce()
+        return err
 
     if not normalized_role_run_id:
-        return {
+        result = {
             "status": "failed",
             "error": {
                 "type": "MissingRoleRunId",
@@ -821,6 +833,8 @@ def role_wait(
                 "retryable": False,
             },
         }
+        result["response_nonce"] = _make_response_nonce()
+        return result
 
     normalized_timeout = normalize_int(_timeout, default=30)
     normalized_poll_interval = normalize_int(_poll, default=5)
@@ -892,6 +906,7 @@ def role_wait(
                 "arguments_hint": hint,
             }
 
+    result["response_nonce"] = _make_response_nonce()
     return result
 
 

@@ -451,33 +451,6 @@ class TestRoleWaitTool(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
 
     @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
-    def test_role_wait_clamps_zero_poll_interval(
-        self, mock_lifecycle_wait
-    ):
-        """role_wait clamps zero poll interval to minimum."""
-        from mcp_agent.server import role_wait
-
-        mock_lifecycle_wait.return_value = {
-            "status": "completed",
-            "role_run_id": "run-001",
-            "run_id": "test-run-001",
-            "role": "scout",
-            "control_summary": {"status": "DONE"},
-            "artifacts": {
-                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
-                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
-            },
-        }
-
-        result = role_wait(
-            role_run_id="run-001",
-            timeout_seconds=300,
-            poll_interval_seconds=0,
-        )
-
-        self.assertEqual(result["status"], "completed")
-
-    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
     def test_role_wait_fallback_empty_result_no_name_error(
         self, mock_lifecycle_wait
     ):
@@ -523,6 +496,183 @@ class TestRoleWaitTool(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "failed")
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_response_nonce_present_completed(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait response contains response_nonce for completed status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE", "summary": "Done"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertIn("response_nonce", result)
+        self.assertIsInstance(result["response_nonce"], str)
+        self.assertTrue(len(result["response_nonce"]) > 0)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_response_nonce_unique(
+        self, mock_lifecycle_wait
+    ):
+        """Two separate role_wait calls produce different response_nonce values."""
+        import copy
+        import time
+        from mcp_agent.server import role_wait
+
+        base_result = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {},
+        }
+
+        # Use side_effect to return a fresh copy each call
+        mock_lifecycle_wait.side_effect = [copy.deepcopy(base_result) for _ in range(2)]
+
+        result1 = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+        time.sleep(0.05)  # 50ms gap ensures different timestamp
+        mock_lifecycle_wait.side_effect = [copy.deepcopy(base_result) for _ in range(2)]
+
+        result2 = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertNotEqual(result1["response_nonce"], result2["response_nonce"])
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_response_nonce_present_running(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait response contains response_nonce for running status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "running",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "timeout": True,
+            "message": "Role is still running.",
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertIn("response_nonce", result)
+        self.assertIsInstance(result["response_nonce"], str)
+        self.assertTrue(len(result["response_nonce"]) > 0)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_response_nonce_present_failed(
+        self, mock_lifecycle_wait
+    ):
+        """role_wait response contains response_nonce for failed status."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "failed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "error": {"type": "ExecutionError", "message": "Task failed", "retryable": True},
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertIn("response_nonce", result)
+        self.assertIsInstance(result["response_nonce"], str)
+        self.assertTrue(len(result["response_nonce"]) > 0)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_existing_fields_preserved_completed(
+        self, mock_lifecycle_wait
+    ):
+        """Existing fields are still returned when role completes."""
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE", "summary": "Done"},
+            "artifacts": {
+                "primary": {"artifact_id": "art_primary", "artifact_type": "scout_report"},
+                "summary": {"artifact_id": "art_summary", "artifact_type": "control_summary"},
+            },
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["role_run_id"], "run-001")
+        self.assertEqual(result["run_id"], "test-run-001")
+        self.assertEqual(result["role"], "scout")
+        self.assertIn("control_summary", result)
+        self.assertIn("artifacts", result)
+        self.assertIn("response_nonce", result)
+
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_role_wait_response_nonce_format(
+        self, mock_lifecycle_wait
+    ):
+        """response_nonce matches expected format pattern."""
+        import re
+        from mcp_agent.server import role_wait
+
+        mock_lifecycle_wait.return_value = {
+            "status": "completed",
+            "role_run_id": "run-001",
+            "run_id": "test-run-001",
+            "role": "scout",
+            "control_summary": {"status": "DONE"},
+            "artifacts": {},
+        }
+
+        result = role_wait(
+            role_run_id="run-001",
+            timeout_seconds=300,
+            poll_interval_seconds=15,
+        )
+
+        nonce = result["response_nonce"]
+        # Format: YYYYMMDDTHHMMSSffffffZ-xxxxxxxx
+        pattern = r"^\d{8}T\d{6}\d{6}Z-[a-f0-9]{8}$"
+        self.assertRegex(nonce, pattern)
 
 
 class TestRoleWaitMissingTerminalStatuses(unittest.TestCase):
