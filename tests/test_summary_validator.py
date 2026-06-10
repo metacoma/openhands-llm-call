@@ -611,6 +611,77 @@ class TestSafeFallbackSummary(unittest.TestCase):
         self.assertEqual(result["action"], "PASS")
 
 
+class TestValidStructuredSummary(unittest.TestCase):
+    """Test parsing a valid multi-line structured text summary."""
+
+    def test_valid_multi_line_block(self):
+        """A valid multi-line structured text summary parses correctly."""
+        from mcp_agent.summary_validator import validate_summary
+
+        text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            "STATUS: completed\n"
+            "ROLE: scout\n"
+            "PRIMARY_ARTIFACT: scout_report\n"
+            "BLOCKING: no\n"
+            "RISK: LOW\n"
+            "ACTION: NONE\n"
+            "SUMMARY: Repository scan completed successfully.\n"
+            "BLOCKERS:\n"
+            "- none\n"
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=text,
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["role"], "scout")
+        self.assertEqual(result["primary_artifact_name"], "scout_report")
+        self.assertFalse(result["blocking"])
+        self.assertEqual(result["risk_level"], "LOW")
+        self.assertIsNone(result["action"])
+        self.assertEqual(result["blocking_summary"], [])
+
+
+class TestBlockersStructuredSummary(unittest.TestCase):
+    """Test parsing a structured text summary with blockers."""
+
+    def test_blocked_with_multiple_blockers(self):
+        """A blocked summary with multiple blockers parses correctly."""
+        from mcp_agent.summary_validator import validate_summary
+
+        text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            "STATUS: blocked\n"
+            "ROLE: reviewer\n"
+            "PRIMARY_ARTIFACT: reviewer_report\n"
+            "BLOCKING: yes\n"
+            "RISK: HIGH\n"
+            "ACTION: BLOCKER\n"
+            "SUMMARY: Review found a blocking issue.\n"
+            "BLOCKERS:\n"
+            "- Generated client does not cover all RPCs.\n"
+            "- Tests do not exercise the example client.\n"
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="reviewer",
+            summary_artifact_name="reviewer_report",
+            json_str=text,
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["status"], "blocked")
+        self.assertTrue(result["blocking"])
+        self.assertEqual(result["risk_level"], "HIGH")
+        self.assertEqual(result["action"], "BLOCKER")
+        self.assertEqual(len(result["blocking_summary"]), 2)
+        self.assertIn("Generated client does not cover all RPCs.", result["blocking_summary"])
+        self.assertIn("Tests do not exercise the example client.", result["blocking_summary"])
+
+
 class TestDeriveReviewerAction(unittest.TestCase):
     """Test derive_reviewer_action_from_main_artifact function."""
 

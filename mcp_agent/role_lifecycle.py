@@ -26,12 +26,8 @@ If summary parsing fails:
 
     summary_response_received
     → summary_parse_failed
-    → summary_repair_prompt_sent
-    → summary_repair_response_received
-    → summary_artifact_saved
+    → summary_artifact_saved (safe fallback)
     → completed
-
-If repair also fails, complete with a safe fallback summary.
 """
 
 import hashlib
@@ -1652,7 +1648,7 @@ def role_lifecycle_wait_impl(
         summary_job_id = conversation_id or "unknown"
 
     # ------------------------------------------------------------------
-    # Deadline for summary/repair phase
+    # Deadline for summary phase
     # ------------------------------------------------------------------
     summary_deadline = deadline
 

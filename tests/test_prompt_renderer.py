@@ -278,6 +278,55 @@ class TestPromptRenderer(unittest.TestCase):
         self.assertIn("Reviewer blockers", result)
         self.assertIn("CODER_STATUS: COMPLETE", result)
 
+    def test_rendered_role_summary_prompt_layout(self):
+        """Rendered role_summary.md contains the required multi-line structure.
+
+        Regression test: the prompt must show the summary format as a real
+        multi-line block so that the model returns one field per line.
+        """
+        from mcp_agent.prompt_renderer import render_prompt
+
+        repo_root = os.path.join(os.path.dirname(__file__), "..")
+        result = render_prompt(
+            template_path="prompts/summaries/role_summary.md",
+            variables={
+                "role": "scout",
+                "primary_artifact_name": "scout_report",
+            },
+            template_root=repo_root,
+        )
+
+        # Assert the required multi-line substrings are present
+        self.assertIn("ROLE_SUMMARY_BEGIN\nSTATUS:", result)
+        self.assertIn("\nROLE:", result)
+        self.assertIn("\nPRIMARY_ARTIFACT:", result)
+        self.assertIn("\nBLOCKING:", result)
+        self.assertIn("\nRISK:", result)
+        self.assertIn("\nACTION:", result)
+        self.assertIn("\nSUMMARY:", result)
+        self.assertIn("\nBLOCKERS:\n- none\nROLE_SUMMARY_END", result)
+
+    def test_rendered_role_summary_prompt_not_inline(self):
+        """Rendered role_summary.md does NOT show a one-line inline example.
+
+        Regression test: the prompt must not contain a single-line contract
+        such as "ROLE_SUMMARY_BEGIN STATUS:" that could encourage the model
+        to combine fields on one line.
+        """
+        from mcp_agent.prompt_renderer import render_prompt
+
+        repo_root = os.path.join(os.path.dirname(__file__), "..")
+        result = render_prompt(
+            template_path="prompts/summaries/role_summary.md",
+            variables={
+                "role": "scout",
+                "primary_artifact_name": "scout_report",
+            },
+            template_root=repo_root,
+        )
+
+        self.assertNotIn("ROLE_SUMMARY_BEGIN STATUS:", result)
+
 
 if __name__ == "__main__":
     unittest.main()
