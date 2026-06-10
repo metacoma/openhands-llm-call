@@ -469,6 +469,35 @@ class TestValidateSummaryStructuredText(unittest.TestCase):
         self.assertFalse(result.get("valid"))
         self.assertEqual(result["error"]["type"], "SummaryInvalidField")
 
+    def test_inline_malformed_summary_rejected(self):
+        """One-line inline summary must NOT parse as valid.
+
+        Regression test: if the prompt file accidentally contains
+        'ROLE_SUMMARY_BEGIN STATUS: ...' on one line, the parser must
+        reject it because required fields (ROLE, PRIMARY_ARTIFACT, etc.)
+        are not on separate lines.
+        """
+        from mcp_agent.summary_validator import validate_summary
+
+        inline_text = (
+            "ROLE_SUMMARY_BEGIN STATUS: completed "
+            "ROLE: scout "
+            "PRIMARY_ARTIFACT: scout_report "
+            "BLOCKING: no "
+            "RISK: NONE "
+            "ACTION: NONE "
+            "SUMMARY: Test. "
+            "BLOCKERS: - none "
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=inline_text,
+        )
+        self.assertFalse(result.get("valid"))
+        self.assertEqual(result["error"]["type"], "SummaryMissingFields")
+
     def test_malformed_missing_fields_returns_invalid(self):
         """Malformed/missing fields returns invalid, not an exception."""
         from mcp_agent.summary_validator import validate_summary
