@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Summary JSON validation, repair, and safe fallback for role runs.
+"""Summary structured-text validation, repair, and safe fallback for role runs.
 
 Provides:
-- ``validate_summary`` — validates summary JSON against the control-plane schema.
+- ``validate_summary`` — validates summary (structured text or JSON) against the control-plane schema.
 - ``repair_summary`` — renders a repair prompt for invalid summaries.
 - ``safe_fallback_summary`` — generates a safe fallback when parsing fails.
 - ``derive_reviewer_action_from_main_artifact`` — extracts ACTION from reviewer's main artifact.
@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger("openhands-mcp")
 
-# Required fields in the control-summary JSON schema
+# Required fields in the control-summary schema
 _REQUIRED_FIELDS = {
     "status",
     "role",
@@ -39,38 +39,286 @@ _VALID_STATUSES = {"completed", "blocked"}
 # Valid values for risk_level
 _VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", None}
 
+# Structured-text markers
+_SUMMARY_BEGIN = "ROLE_SUMMARY_BEGIN"
+_SUMMARY_END = "ROLE_SUMMARY_END"
 
-def validate_summary(
+
+# ---------------------------------------------------------------------------
+# Structured-text parser
+# ---------------------------------------------------------------------------
+
+def _parse_structured_summary(
     role: str,
     summary_artifact_name: str,
-    json_str: str,
+    text: str,
 ) -> dict[str, Any]:
-    """Validate summary JSON and return parsed dict or error dict.
+    """Parse a structured-text summary block and validate it.
 
-    Parameters
-    ----------
-    role :
-        The role name that produced the summary.
-    summary_artifact_name :
-        The expected primary artifact name (output_artifact from RoleSpec).
-    json_str :
-        The raw summary text to validate.
-
-    Returns
-    -------
-    dict
-        Parsed summary dict if valid, or an error dict with keys
-        ``{"valid": False, "error": {...}}`` if invalid.
+    Returns a dict with ``valid=True`` (parsed data) or ``valid=False`` (error).
     """
-    # Strip markdown code-block wrappers if present
-    stripped = json_str.strip()
+    # Extract content between markers if present
+    begin_idx = text.find(_SUMMARY_BEGIN)
+    end_idx = text.find(_SUMMARY_END)
+
+    if begin_idx != -1 and end_idx != -1 and end_idx > begin_idx:
+        block = text[begin_idx + len(_SUMMARY_BEGIN):end_idx].strip()
+        markers_found = True
+    else:
+        block = text.strip()
+        markers_found = False
+
+    # Parse header fields by line prefixes (case-insensitive)
+    fields: dict[str, str] = {}
+    blockers: list[str] = []
+    in_blockers = False
+
+    for raw_line in block.split("\n"):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        if in_blockers:
+            # Blocker lines start with "- " or just text until end marker
+            if stripped.startswith("- "):
+                blockers.append(stripped[2:].strip())
+            elif stripped.startswith("-"):
+                blockers.append(stripped[1:].strip())
+            else:
+                # Non-bullet line ends blocker section
+                in_blockers = False
+                # Fall through to field parsing below
+
+        if not in_blockers:
+            m = re.match(
+                r"^(STATUS|ROLE|PRIMARY_ARTIFACT|BLOCKERS|BLOCKING|RISK|ACTION|SUMMARY)\s*:\s*(.*)",
+                stripped,
+                re.IGNORECASE,
+            )
+            if m:
+                key = m.group(1).upper()
+                val = m.group(2).strip()
+                fields[key] = val
+                if key == "BLOCKERS":
+                    in_blockers = True
+                continue
+
+    # If BLOCKERS header was found but no bullet lines followed, collectors stay empty
+    # (treated as empty list)
+
+    # Normalise values
+    status = fields.get("STATUS", "").strip().lower() if fields.get("STATUS") else ""
+    role_val = fields.get("ROLE", "").strip()
+    summary_val = fields.get("SUMMARY", "").strip()
+    primary_artifact = fields.get("PRIMARY_ARTIFACT", "").strip()
+    blocking_raw = fields.get("BLOCKING", "").strip().lower()
+    risk_raw = fields.get("RISK", "").strip().upper()
+    action_raw = fields.get("ACTION", "").strip().upper()
+
+    # Convert BLOCKING: yes/no → bool
+    blocking = None
+    if blocking_raw == "yes":
+        blocking = True
+    elif blocking_raw == "no":
+        blocking = False
+
+    # Convert RISK: NONE → None
+    risk_level = None
+    if risk_raw in ("LOW", "MEDIUM", "HIGH"):
+        risk_level = risk_raw
+    elif risk_raw == "NONE":
+        risk_level = None
+
+    # Convert ACTION: NONE → None
+    action = None
+    if action_raw in ("PASS", "BLOCKER"):
+        action = action_raw
+    elif action_raw == "NONE":
+        action = None
+
+    # Parse blockers
+    blocking_summary: list[str] = []
+    if blockers:
+        blocking_summary = [b for b in blockers if b.lower() != "none"]
+    if not blocking_summary and in_blockers is False and "BLOCKERS" not in fields:
+        blocking_summary = []
+
+    # Check markers found (required fields must be present)
+    if markers_found:
+        missing = set()
+        for req in ("STATUS", "ROLE", "SUMMARY", "PRIMARY_ARTIFACT", "BLOCKING", "RISK", "ACTION", "BLOCKERS"):
+            if req not in fields:
+                missing.add(req)
+        if missing:
+            return {
+                "valid": False,
+                "error": {
+                    "type": "SummaryMissingFields",
+                    "message": f"Missing required fields: {', '.join(sorted(missing))}",
+                },
+            }
+
+    # Build a temporary dict for the shared validation logic
+    data: dict[str, Any] = {
+        "status": status,
+        "role": role_val,
+        "summary": summary_val,
+        "primary_artifact_name": primary_artifact,
+        "blocking": blocking,
+        "risk_level": risk_level,
+        "action": action,
+        "blocking_summary": blocking_summary,
+    }
+
+    # Check required fields (for non-marker case)
+    if not markers_found:
+        missing = set()
+        for req_name, data_key in [
+            ("status", "status"),
+            ("role", "role"),
+            ("summary", "summary"),
+            ("primary_artifact_name", "primary_artifact_name"),
+            ("blocking", "blocking"),
+            ("risk_level", "risk_level"),
+            ("action", "action"),
+            ("blocking_summary", "blocking_summary"),
+        ]:
+            if data_key not in data or data[data_key] is None or data[data_key] == []:
+                # Only flag if the field is truly absent (not just empty string for summary)
+                pass  # We'll check via the _REQUIRED_FIELDS logic below
+        # Use the same required-fields check as JSON path
+        present_keys = set(fields.keys())
+        required_lower = {f.lower() for f in _REQUIRED_FIELDS}
+        missing = required_lower - present_keys
+        if missing:
+            return {
+                "valid": False,
+                "error": {
+                    "type": "SummaryMissingFields",
+                    "message": f"Missing required fields: {', '.join(sorted(missing))}",
+                },
+            }
+
+    # Check forbidden fields (search in original text for next_role / ready_for_next_role)
+    text_lower = text.lower()
+    if "next_role" in text_lower or "ready_for_next_role" in text_lower:
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryForbiddenFields",
+                "message": "Forbidden fields present: next_role, ready_for_next_role",
+            },
+        }
+
+    # Validate status
+    if status not in _VALID_STATUSES:
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryInvalidField",
+                "message": f"Invalid status: {status!r}. Must be one of completed, blocked.",
+            },
+        }
+
+    # Validate role matches executed role
+    if role_val != role:
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryRoleMismatch",
+                "message": f"Summary role '{role_val}' does not match executed role '{role}'.",
+            },
+        }
+
+    # Validate primary_artifact_name matches output_artifact
+    if primary_artifact != summary_artifact_name:
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryArtifactMismatch",
+                "message": (
+                    f"Summary primary_artifact_name '{primary_artifact}' "
+                    f"does not match expected '{summary_artifact_name}'."
+                ),
+            },
+        }
+
+    # Validate blocking is boolean
+    if blocking is None:
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryInvalidField",
+                "message": f"blocking must be 'yes' or 'no', got {blocking_raw!r}.",
+            },
+        }
+
+    # Validate blocking_summary is a list (always is from our parser)
+    if not isinstance(blocking_summary, list):
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryInvalidField",
+                "message": "blocking_summary must be a list.",
+            },
+        }
+
+    # Validate risk_level
+    if risk_level not in _VALID_RISK_LEVELS:
+        return {
+            "valid": False,
+            "error": {
+                "type": "SummaryInvalidField",
+                "message": f"Invalid risk_level: {risk_raw!r}.",
+            },
+        }
+
+    # Role-specific action validation
+    if role == "reviewer":
+        if action not in ("PASS", "BLOCKER"):
+            return {
+                "valid": False,
+                "error": {
+                    "type": "SummaryInvalidField",
+                    "message": (
+                        f"Reviewer action must be PASS or BLOCKER, got {action_raw!r}."
+                    ),
+                },
+            }
+    else:
+        if action is not None:
+            return {
+                "valid": False,
+                "error": {
+                    "type": "SummaryInvalidField",
+                    "message": (
+                        f"Non-reviewer role '{role}' must have action=NONE, "
+                        f"got {action_raw!r}."
+                    ),
+                },
+            }
+
+    # All validations passed — return parsed data
+    data["valid"] = True
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible JSON parser (optional fallback)
+# ---------------------------------------------------------------------------
+
+def _try_json_parse(
+    role: str,
+    summary_artifact_name: str,
+    text: str,
+) -> dict[str, Any]:
+    """Try to parse text as JSON (backward compatibility)."""
+    stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.split("\n")
-        # Remove first and last lines if they are code-block markers
         if len(lines) >= 2 and lines[-1].strip().startswith("```"):
             stripped = "\n".join(lines[1:-1]).strip()
 
-    # Try JSON parse
     try:
         data = json.loads(stripped)
     except (json.JSONDecodeError, ValueError) as exc:
@@ -201,9 +449,49 @@ def validate_summary(
                 },
             }
 
-    # All validations passed — return parsed data
     data["valid"] = True
     return data
+
+
+def validate_summary(
+    role: str,
+    summary_artifact_name: str,
+    json_str: str,
+) -> dict[str, Any]:
+    """Validate summary and return parsed dict or error dict.
+
+    Tries structured-text format first, then falls back to JSON
+    (for backward compatibility with old prompts).
+
+    Parameters
+    ----------
+    role :
+        The role name that produced the summary.
+    summary_artifact_name :
+        The expected primary artifact name (output_artifact from RoleSpec).
+    json_str :
+        The raw summary text to validate (structured text or JSON).
+
+    Returns
+    -------
+    dict
+        Parsed summary dict if valid, or an error dict with keys
+        ``{"valid": False, "error": {...}}`` if invalid.
+    """
+    # 1. Try structured-text parser first
+    result = _parse_structured_summary(role, summary_artifact_name, json_str)
+    if result.get("valid"):
+        return result
+
+    # 2. Fallback: try JSON parser for backward compatibility
+    stripped = json_str.strip()
+    if stripped.startswith("{") or stripped.startswith("```"):
+        result = _try_json_parse(role, summary_artifact_name, json_str)
+        if result.get("valid"):
+            return result
+
+    # 3. Return structured-text parse error
+    return result
 
 
 def repair_summary(role: str, summary_artifact_name: str) -> str:
