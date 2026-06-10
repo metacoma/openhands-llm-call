@@ -122,6 +122,10 @@ User / Head-of-IT
 | `OPENHANDS_API_KEY` | *(empty)* | API key forwarded to the backend |
 | `OPENHANDS_MAX_RUNTIME_SECONDS` | `7200` | Default max runtime (seconds) for tasks |
 | `OPENHANDS_POLL_INTERVAL_SECONDS` | `10` | Polling interval (seconds) |
+| `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS` | `60` | Total seconds to retry fetching the final OpenHands answer after a conversation reaches terminal state. Set to `0` for one immediate fetch (no retry). |
+| `OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS` | `10` | Seconds between retry attempts. Must be positive; invalid values fall back to `10`. |
+
+These variables control how long the backend retries fetching the final OpenHands answer after a conversation reaches terminal state. This avoids false `completed_empty_result` errors caused by delayed event availability. When an OpenHands job reaches terminal state, the system polls for the final answer up to `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS` total time, at intervals of `OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS`. Failed/error jobs are not retried.
 
 ### Role configuration
 

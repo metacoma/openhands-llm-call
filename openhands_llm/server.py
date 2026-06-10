@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import sys
+import time
 import contextlib
 from typing import Any
 
@@ -23,6 +24,115 @@ logger = logging.getLogger("openhands-llm")
 
 DEFAULT_BASE_URL = os.getenv("OPENHANDS_URL", "http://localhost:3000")
 DEFAULT_LLM_MODEL = os.getenv("LLM_MODEL")
+
+# ---------------------------------------------------------------------------
+# Final-answer retry configuration (env-configurable)
+# ---------------------------------------------------------------------------
+
+
+def _final_answer_retry_config_from_env() -> tuple[float, float]:
+    """Parse OPENHANDS_FINAL_ANSWER_RETRY_SECONDS and OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS.
+
+    Returns (retry_total_seconds, retry_interval_seconds).
+
+    Defaults: (60, 10)
+    If retry_total is 0, returns (0, 1) — one immediate fetch, no retry.
+    Invalid values fall back to defaults.
+    """
+    try:
+        retry_total = float(os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_SECONDS", "60"))
+        if retry_total < 0:
+            retry_total = 60
+    except (ValueError, TypeError):
+        retry_total = 60
+
+    try:
+        retry_interval = float(
+            os.getenv("OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS", "10")
+        )
+        if retry_interval <= 0:
+            retry_interval = 10
+    except (ValueError, TypeError):
+        retry_interval = 10
+
+    return (retry_total, retry_interval)
+
+
+def _get_final_answer_with_retry(
+    uid: str,
+    base_url: str,
+    api_key: str,
+    exec_status: str | None,
+    retry_total: float,
+    retry_interval: float,
+) -> tuple[str, int]:
+    """Fetch final answer from events with retry for empty answers.
+
+    Returns (final_answer, event_count) where event_count is the count
+    from the last fetch attempt.
+
+    If exec_status indicates failure, returns ("", 0) after a single fetch.
+    If retry_total is 0, performs one immediate fetch (no retry).
+    """
+    if exec_status in ("failed", "error"):
+        # Do not retry failed/error jobs — return immediately
+        events = oh.search_v1_events(
+            base_url=base_url,
+            api_key=api_key,
+            conversation_id=uid,
+            limit=100,
+            max_pages=50,
+        )
+        answers = oh.collect_final_text_from_events(events)
+        final_answer = oh.extract_final_answer([answers]) if answers else ""
+        return (final_answer, len(events))
+
+    deadline = time.monotonic() + retry_total
+    attempt = 0
+
+    while True:
+        attempt += 1
+        events = oh.search_v1_events(
+            base_url=base_url,
+            api_key=api_key,
+            conversation_id=uid,
+            limit=100,
+            max_pages=50,
+        )
+        answers = oh.collect_final_text_from_events(events)
+        final_answer = oh.extract_final_answer([answers]) if answers else ""
+
+        if final_answer.strip():
+            logger.info(
+                "job.final_answer_found conversation_id=%s attempt=%d event_count=%d",
+                uid, attempt, len(events),
+            )
+            return (final_answer, len(events))
+
+        now = time.monotonic()
+        if now >= deadline:
+            logger.info(
+                "job.final_answer_timeout conversation_id=%s attempts=%d event_count=%d",
+                uid, attempt, len(events),
+            )
+            return (final_answer, len(events))
+
+        remaining = max(0, deadline - now)
+        sleep_time = min(retry_interval, remaining)
+
+        logger.info(
+            "job.final_answer_retry conversation_id=%s attempt=%d event_count=%d "
+            "retrying_in=%.1fs (of %.0fs total)",
+            uid, attempt, len(events), sleep_time, retry_total,
+        )
+        time.sleep(sleep_time)
+
+        # If deadline passed during sleep, one more check
+        if time.monotonic() >= deadline:
+            break
+
+    return (final_answer, len(events))
+
 
 # ---------------------------------------------------------------------------
 # Request / response models
@@ -340,16 +450,23 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
     is_done = oh.conversation_is_done(conversation)
 
     if is_done:
-        # Extract final answer from events
-        events = oh.search_v1_events(
+        # Extract final answer from events with retry for empty answers
+        retry_total, retry_interval = _final_answer_retry_config_from_env()
+
+        logger.info(
+            "job.terminal_detected conversation_id=%s execution_status=%s "
+            "retry_total=%.0fs retry_interval=%.0fs",
+            uid, exec_status, retry_total, retry_interval,
+        )
+
+        final_answer, event_count = _get_final_answer_with_retry(
+            uid=uid,
             base_url=base_url,
             api_key=api_key,
-            conversation_id=uid,
-            limit=100,
-            max_pages=50,
+            exec_status=exec_status,
+            retry_total=retry_total,
+            retry_interval=retry_interval,
         )
-        answers = oh.collect_final_text_from_events(events)
-        final_answer = oh.extract_final_answer([answers]) if answers else ""
 
         if exec_status in ("failed", "error"):
             job_status = "failed"
@@ -357,6 +474,12 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
             job_status = "completed_empty_result"
         else:
             job_status = "completed"
+
+        logger.info(
+            "job.final_result conversation_id=%s status=%s execution_status=%s "
+            "event_count=%d answer_len=%d",
+            uid, job_status, exec_status, event_count, len(final_answer),
+        )
 
         return {
             "conversation_id": uid,
