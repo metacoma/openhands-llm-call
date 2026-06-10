@@ -59,6 +59,9 @@ class TestNegativeAssertions(unittest.TestCase):
 
     def test_rg_no_production_matches(self):
         """rg for role_call_impl/artifact_list_impl/role_list_impl returns no production matches."""
+        import shutil
+        if shutil.which("rg") is None:
+            self.skipTest("ripgrep (rg) not installed")
         import subprocess
         result = subprocess.run(
             [

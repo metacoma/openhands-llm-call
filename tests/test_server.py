@@ -224,5 +224,34 @@ class TestCallLMResponseContent(unittest.TestCase):
         self.assertEqual(data["status"], "completed_empty_result")
 
 
+class TestStartV1AppConversationRunFlag(unittest.TestCase):
+    """Direct test on start_v1_app_conversation payload structure."""
+
+    @patch("openhands_llm.openhands_llm_call.request_json")
+    def test_run_is_true(self, mock_request_json):
+        """payload['initial_message']['run'] must be True."""
+        from openhands_llm.openhands_llm_call import start_v1_app_conversation
+
+        mock_request_json.return_value = {
+            "task_id": "task-1",
+            "conversation_id": "conv-1",
+        }
+
+        result = start_v1_app_conversation(
+            base_url="http://localhost:3000",
+            api_key="test-key",
+            repo=None,
+            branch=None,
+            prompt="Test task",
+            llm_model="openai/qwen3:32b",
+            agent_type="scout",
+        )
+
+        self.assertEqual(result["task_id"], "task-1")
+        captured_call = mock_request_json.call_args
+        payload = captured_call.kwargs["json_body"]
+        self.assertTrue(payload["initial_message"]["run"])
+
+
 if __name__ == "__main__":
     unittest.main()
