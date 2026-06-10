@@ -26,10 +26,6 @@ If a command may modify the repository or environment, do not run it unless it i
 
 {{ user_task }}
 
-## Repository
-
-{{ repo | default("current repository") }}
-
 ## Repository Workspace Contract
 
 Derive `project_name` from the `Repository` value by taking the repository basename and removing a trailing `.git` suffix.
@@ -48,9 +44,6 @@ Do not search for, clone into, or use any other repository location.
 Run repository commands with `git -C "$REPO_DIR" ...` or by explicitly using `REPO_DIR`.
 
 
-## Base Branch
-
-{{ base_branch | default("unknown") }}
 
 ## Extra Context
 
