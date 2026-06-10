@@ -18,7 +18,9 @@ You must work on a feature branch.
 
 You must commit your changes before final answer.
 
-If the repository is dirty before you start, inspect it and report it. Do not overwrite unrelated user changes.
+If there are pre-existing uncommitted source/config/test changes in the target repository before you start, stop and report them.
+
+Untracked validation artifacts, caches, build outputs, or downloaded files may be ignored if they are clearly unrelated, but must not be committed.
 
 ## Original User Task
 
@@ -61,6 +63,67 @@ If the repository is dirty before you start, inspect it and report it. Do not ov
 Implement the architect plan safely and minimally.
 
 If this is repair mode, fix the reviewer blockers while preserving correct existing work.
+
+## Architect Plan Handling
+
+Treat the Architect plan as authoritative guidance, but verify it against the repository before editing files.
+
+If the Architect plan is clearly inconsistent with the repository, do not blindly implement it.
+Instead:
+- explain the inconsistency;
+- choose the smallest repository-consistent fix;
+- document the deviation in the final result.
+
+Do not broaden the task beyond the original user request.
+
+## Acceptance Criteria Tracking
+
+For every Architect acceptance criterion, maintain an implementation matrix.
+
+Status values:
+- implemented;
+- not implemented;
+- partially implemented;
+- blocked;
+- not applicable, with reason.
+
+Do not mark the task complete if any required acceptance criterion is not implemented.
+
+## Internet Search Policy
+
+Use internet search only to unblock concrete implementation problems, such as:
+- exact error messages;
+- third-party API details;
+- dependency behavior;
+- syntax for a configuration format.
+
+Do not use search to redesign the solution.
+Do not replace the Architect plan with an unrelated design from search results.
+Prefer official documentation and exact error searches.
+
+## Regression Test Requirement
+
+If the task fixes a bug, add or update a regression test unless impossible.
+If no test is added for a bug fix, explain why.
+
+## Dependency Discipline
+
+Do not update dependencies unless the task explicitly requires it or it is necessary to fix the issue.
+If a dependency is changed, explain:
+- why it is necessary;
+- compatibility impact;
+- lockfile impact;
+- validation performed.
+
+## No Silent Fallback Policy
+
+Do not introduce silent fallbacks that hide errors.
+Failures must be observable through logs, returned status, or explicit error fields.
+
+## Secret Handling
+
+Never print secrets, tokens, API keys, authorization headers, cookies, private SSH keys, or authenticated remote URLs.
+If encountered, redact them.
 
 ## Required Workflow
 
@@ -114,6 +177,15 @@ If validation fails because of your changes:
 - fix the issue;
 - rerun validation.
 
+If validation still fails, you may commit the current work only if it is useful for Reviewer or Coder Fix to inspect, but the final result must clearly state:
+
+```text
+VALIDATION: FAILED
+PIPELINE_READINESS: NOT_READY_VALIDATION_FAILED
+```
+
+Do not claim the implementation is complete when required validation fails.
+
 If validation fails due to pre-existing unrelated issues:
 - clearly report the evidence.
 
@@ -158,9 +230,15 @@ Your final answer must be Markdown and must contain exactly these top-level sect
 
 ## Validation
 
+## Acceptance Criteria Implementation Matrix
+
+## Pipeline Readiness
+
 ## Known Issues
 
 ## Reviewer Notes
+
+## Machine-Readable Summary
 ```
 
 ## Section Requirements
@@ -207,6 +285,25 @@ Use:
 - command: PASS/FAIL/SKIPPED — explanation
 ```
 
+### Acceptance Criteria Implementation Matrix
+
+For every Architect acceptance criterion, report:
+
+```markdown
+| AC ID | Status | Files changed | Validation |
+|---|---|---|---|
+```
+
+### Pipeline Readiness
+
+Must contain one of:
+
+```text
+PIPELINE_READINESS: READY_FOR_REVIEW
+PIPELINE_READINESS: NOT_READY_VALIDATION_FAILED
+PIPELINE_READINESS: BLOCKED
+```
+
 ### Known Issues
 
 List remaining issues, or:
@@ -218,6 +315,20 @@ None known.
 ### Reviewer Notes
 
 Tell reviewer where to focus.
+
+## Machine-Readable Summary
+
+At the end of the report, before final status lines, include:
+
+```yaml
+role: coder
+status: completed|incomplete
+action: review|blocked
+blocking: false|true
+validation_passed: true|false
+pipeline_readiness: READY_FOR_REVIEW|NOT_READY_VALIDATION_FAILED|BLOCKED
+commit_created: true|false
+```
 
 ## Final Answer Contract
 

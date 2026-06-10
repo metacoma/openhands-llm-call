@@ -35,6 +35,27 @@ If `role_call` returns an existing run for the same `idempotency_key`, do not st
 
 Pass role as a plain string: `"scout"`, `"architect"`, `"coder"`, `"reviewer"`, `"publisher"`.
 
+## Pipeline Acceptance Discipline
+
+Before implementation, the workflow must establish atomic acceptance criteria from the user task.
+
+Routing must use machine-readable fields whenever available, not free-form prose.
+
+Treat these fields as authoritative:
+- `action: PASS|NEEDS_FIX|BLOCKED`;
+- `blocking: true|false`;
+- `validation_passed: true|false`;
+- `all_required_ac_passed: true|false`;
+- `risk_level: low|medium|high`.
+
+A task may proceed to publisher only when:
+- latest Reviewer action is PASS;
+- all required acceptance criteria are PASS;
+- validation passed;
+- implementation is committed.
+
+If any required AC is FAIL or UNKNOWN, route to coder_fix or stop blocked.
+
 ## Mission
 
 Given a user task, orchestrate the correct sequence of roles and produce a final answer for the user.
@@ -144,7 +165,7 @@ Reviewer must:
 - verify whether the implementation matches the user task and architect plan;
 - check validation evidence;
 - report blockers;
-- produce `ACTION: PASS` or `ACTION: BLOCKER`;
+- produce `ACTION: PASS`, `ACTION: NEEDS_FIX`, or `ACTION: BLOCKED`;
 - produce `RISK: LOW|MEDIUM|HIGH`.
 
 Reviewer must not modify files.
@@ -180,7 +201,7 @@ Expected artifact: `publisher_instructions`.
 
 Purpose: repair worker. Fixes blocking issues identified by reviewer.
 
-Use coder_fix after reviewer returns `ACTION: BLOCKER` (only once).
+Use coder_fix after reviewer returns `ACTION: NEEDS_FIX` (normally once; escalate to Architect if the same finding repeats).
 
 coder_fix may modify files. Must work on a feature branch and commit changes.
 
@@ -239,7 +260,7 @@ after coder completed and blocking=false:
     )
     → role_wait(role_run_id=reviewer_run)
 
-after reviewer action=PASS:
+after reviewer action=PASS and validation_passed=true and all_required_ac_passed=true:
     role_call(
         role="publisher",
         user_task="Prepare PR instructions...",
@@ -248,7 +269,7 @@ after reviewer action=PASS:
     )
     → role_wait(role_run_id=publisher_run)
 
-after reviewer action=BLOCKER and fix cycle not used:
+after reviewer action=NEEDS_FIX and fix cycle not used:
     role_call(
         role="coder_fix",
         user_task="Fix blockers...",
@@ -259,13 +280,16 @@ after reviewer action=BLOCKER and fix cycle not used:
     )
     → role_wait(role_run_id=coder_fix_run)
 
-after reviewer action=BLOCKER and fix cycle already used:
+after reviewer action=NEEDS_FIX and fix cycle already used:
     stop as blocked
 ```
 
 **Pass only `artifact_id` to `role_call` via dedicated flat fields.** The MCP server resolves artifact content server-side.
 
 **Never call `role_call` repeatedly for polling.** If a role is running, call `role_wait` with the same `role_run_id`.
+
+If reviewer action is `ACTION: BLOCKED`, do not call coder_fix automatically unless the block is clearly a fixable implementation issue.
+Report the blocked reason and the artifact ID to the user.
 
 ## Error Handling Rules
 
@@ -279,14 +303,26 @@ When you receive an error from any tool:
 6. If `error.type = AnotherRoleRunning`, call `role_wait` with the existing `role_run_id`.
 7. Read `error.do_not` to avoid common anti-patterns.
 
+## Loop Control
+
+Normal fix loop:
+
+```text
+Reviewer ACTION: NEEDS_FIX -> coder_fix -> reviewer
+```
+
+If the same Reviewer finding remains after one coder_fix cycle, stop and escalate to Architect for re-planning instead of repeatedly patching.
+
+Do not start Publisher after `ACTION: NEEDS_FIX` or `ACTION: BLOCKED`.
+
 ## Global Orchestration Rules
 
 1. Do not skip scout for non-trivial repository work.
 2. Do not skip architect for multi-file or risky implementation work.
 3. Do not skip reviewer after coder.
 4. Do not run publisher unless reviewer says `ACTION: PASS`.
-5. If reviewer says `ACTION: BLOCKER` and coder_fix has not been used yet, start coder_fix.
-6. If reviewer says `ACTION: BLOCKER` and coder_fix was already used, stop as blocked.
+5. If reviewer says `ACTION: NEEDS_FIX` and coder_fix has not been used yet, start coder_fix.
+6. If reviewer says `ACTION: NEEDS_FIX` and coder_fix was already used, stop as blocked or escalate to architect if the same finding requires re-planning.
 7. Only one mutating role may run at a time.
 8. Read-only roles may be used for investigation and validation.
 9. Never hide role failures from the user.

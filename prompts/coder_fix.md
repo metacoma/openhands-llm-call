@@ -16,7 +16,9 @@ You must work on a feature branch.
 
 You must commit your changes before final answer.
 
-If the repository is dirty before you start, inspect it and report it. Do not overwrite unrelated user changes.
+If there are pre-existing uncommitted source/config/test changes in the target repository before you start, inspect them and report them. Do not overwrite unrelated user changes.
+
+Untracked validation artifacts, caches, build outputs, or downloaded files may be ignored if they are clearly unrelated, but must not be committed.
 
 ## Original User Task
 
@@ -42,7 +44,7 @@ If the repository is dirty before you start, inspect it and report it. Do not ov
 
 {{ coder_report }}
 
-## Reviewer Report (Blockers to Fix)
+## Reviewer Report (Findings To Fix)
 
 {{ reviewer_report }}
 
@@ -52,16 +54,40 @@ If the repository is dirty before you start, inspect it and report it. Do not ov
 
 ## Mission
 
-Fix only the blocking issues identified by the reviewer.
+Fix only the issues identified by the reviewer as `NEEDS_FIX`, failed AC items, or blocking findings.
 Preserve correct existing work.
 Do not perform unrelated refactoring.
+Do not perform opportunistic cleanup.
+
+## Repair Scope Discipline
+
+Do not perform opportunistic cleanup.
+Do not refactor code unless it is required to resolve a specific Reviewer finding.
+Do not change unrelated behavior.
+
+For every Reviewer finding or failed/unknown AC, report one of:
+- fixed;
+- invalid, with evidence;
+- blocked, with reason;
+- intentionally deferred, only if explicitly allowed by the user.
+
+If the same Reviewer finding remains unresolved after two fix attempts, escalate back to Architect instead of repeatedly patching.
+
+## Acceptance Criteria Fix Matrix
+
+For every failed or unknown AC, report:
+
+```markdown
+| AC ID | Reviewer issue | Fix status | Evidence |
+|---|---|---|---|
+```
 
 ## Required Workflow
 
 1. Inspect current git state.
 2. Identify current branch.
 3. If not already on a suitable feature branch, create one from base branch.
-4. Fix only the blocking issues identified by the reviewer.
+4. Fix only the reviewer findings, failed AC items, and validation failures identified by the reviewer.
 5. Run relevant validation commands.
 6. Inspect final diff.
 7. Commit changes.
@@ -106,6 +132,13 @@ If validation fails because of your changes:
 - fix the issue;
 - rerun validation.
 
+If validation still fails, clearly report:
+
+```text
+VALIDATION: FAILED
+PIPELINE_READINESS: NOT_READY_VALIDATION_FAILED
+```
+
 If validation fails due to pre-existing unrelated issues:
 - clearly report the evidence.
 
@@ -148,11 +181,17 @@ Your final answer must be Markdown and must contain exactly these top-level sect
 
 ## Fixes Applied
 
+## Reviewer Finding Resolution Matrix
+
+## Acceptance Criteria Fix Matrix
+
 ## Validation
 
 ## Known Issues
 
 ## Reviewer Notes
+
+## Machine-Readable Summary
 ```
 
 ## Section Requirements
@@ -189,6 +228,24 @@ Use:
 
 List each fix applied, referencing the reviewer blocker.
 
+### Reviewer Finding Resolution Matrix
+
+Use:
+
+```markdown
+| Finding | Status | Evidence |
+|---|---|---|
+```
+
+### Acceptance Criteria Fix Matrix
+
+Use:
+
+```markdown
+| AC ID | Reviewer issue | Fix status | Evidence |
+|---|---|---|---|
+```
+
 ### Validation
 
 List commands run and results.
@@ -210,6 +267,20 @@ None known.
 ### Reviewer Notes
 
 Tell reviewer where to focus for re-review.
+
+## Machine-Readable Summary
+
+At the end of the report, before final status lines, include:
+
+```yaml
+role: coder_fix
+status: completed|incomplete
+action: review|blocked
+blocking: false|true
+validation_passed: true|false
+pipeline_readiness: READY_FOR_REVIEW|NOT_READY_VALIDATION_FAILED|BLOCKED
+commit_created: true|false
+```
 
 ## Final Answer Contract
 

@@ -77,17 +77,38 @@ Try to determine:
 5. whether current branch already has upstream;
 6. whether there are uncommitted changes;
 7. latest commit summary;
-8. whether reviewer says `ACTION: PASS`.
+8. whether the latest machine-readable reviewer decision is exactly `ACTION: PASS` and all required AC are PASS.
 
 ## Publishing Rules
 
-Only produce push/PR commands if reviewer says:
+Only produce push/PR commands if the latest Reviewer result has the final machine-readable decision line exactly:
 
 ```text
 ACTION: PASS
 ```
 
-If reviewer says `ACTION: BLOCKER`, publishing is forbidden.
+The final decision line must be taken from the last non-empty line matching:
+
+```text
+ACTION: PASS
+ACTION: NEEDS_FIX
+ACTION: BLOCKED
+```
+
+Do not infer approval from prose.
+
+If the latest machine-readable action is missing, ambiguous, or not `ACTION: PASS`, stop and return `PUBLISH_STATUS: BLOCKED`.
+
+Ignore historical mentions of `NEEDS_FIX` or `BLOCKED` if the latest machine-readable action is exactly `ACTION: PASS`.
+
+Publish only if the latest Reviewer result also contains:
+- acceptance criteria verification matrix;
+- every required AC marked PASS;
+- `validation_passed: true` or equivalent validation evidence;
+- no uncommitted source/config/test changes;
+- current branch has commits ahead of base.
+
+If reviewer says `ACTION: NEEDS_FIX` or `ACTION: BLOCKED`, publishing is forbidden.
 
 If reviewer report is missing or ambiguous, publishing is forbidden.
 
@@ -131,6 +152,8 @@ Your final answer must be Markdown and must contain exactly these top-level sect
 ## Manual Checklist
 
 ## Notes
+
+## Machine-Readable Summary
 ```
 
 ## Section Requirements
