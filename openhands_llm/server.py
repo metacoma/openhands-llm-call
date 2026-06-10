@@ -290,6 +290,14 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
 
     final_answer = oh.extract_final_answer(answers)
 
+    # Guard: terminal job with empty answer → distinct status
+    if not final_answer.strip():
+        return {
+            "answer": "",
+            "conversation_id": conversation_id,
+            "status": "completed_empty_result",
+        }
+
     return {
         "answer": final_answer,
         "conversation_id": conversation_id,
@@ -351,6 +359,8 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
 
         if exec_status in ("failed", "error"):
             job_status = "failed"
+        elif not final_answer.strip():
+            job_status = "completed_empty_result"
         else:
             job_status = "completed"
 

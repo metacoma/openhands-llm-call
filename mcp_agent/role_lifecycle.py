@@ -1306,9 +1306,39 @@ def role_lifecycle_wait_impl(
         main_status = main_response_data.get("_normalized_status",
                                               main_response_data.get("status", "unknown"))
 
-        if main_status in ("completed", "completed_empty_result"):
+        if main_status == "completed":
             main_completed = True
             break
+        elif main_status == "completed_empty_result":
+            role_store.update_role_run(
+                role_run_id,
+                status="failed",
+                lifecycle_state="empty_main_response",
+            )
+            logger.warning(
+                "OpenHands job returned empty answer; primary artifact will not be saved",
+                extra={
+                    "role_run_id": role_run_id,
+                    "run_id": role_run.get("run_id"),
+                    "job_id": job_id,
+                    "main_status": main_status,
+                    "execution_status": main_response_data.get("execution_status"),
+                },
+            )
+            return {
+                "status": "failed",
+                "role_run_id": role_run_id,
+                "run_id": role_run.get("run_id", ""),
+                "role": role_run.get("role", ""),
+                "error": {
+                    "type": "EmptyMainResponse",
+                    "message": (
+                        "OpenHands job reached terminal state but returned an empty answer. "
+                        "Primary artifact was not saved."
+                    ),
+                    "retryable": True,
+                },
+            }
         elif main_status in ("failed", "error", "cancelled", "canceled", "timeout", "timed_out"):
             role_store.update_role_run(
                 role_run_id,
@@ -1371,6 +1401,40 @@ def role_lifecycle_wait_impl(
         role_run_id,
         lifecycle_state="main_response_received",
     )
+
+    # ------------------------------------------------------------------
+    # Early guard: reject empty main response before saving artifact
+    # ------------------------------------------------------------------
+    if not main_response.strip():
+        role_store.update_role_run(
+            role_run_id,
+            status="failed",
+            lifecycle_state="empty_main_response",
+        )
+        logger.warning(
+            "Empty main response detected before artifact save; skipping primary artifact",
+            extra={
+                "role_run_id": role_run_id,
+                "run_id": role_run.get("run_id"),
+                "job_id": job_id,
+                "main_status": main_status,
+                "execution_status": main_response_data.get("execution_status"),
+            },
+        )
+        return {
+            "status": "failed",
+            "role_run_id": role_run_id,
+            "run_id": role_run.get("run_id", ""),
+            "role": role_run.get("role", ""),
+            "error": {
+                "type": "EmptyMainResponse",
+                "message": (
+                    "OpenHands job completed but returned an empty answer. "
+                    "Primary artifact was not saved."
+                ),
+                "retryable": True,
+            },
+        }
 
     # ------------------------------------------------------------------
     # Save primary artifact (only if main job completed — Blocker 1)
