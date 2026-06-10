@@ -148,3 +148,34 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         self.assertEqual(result.get("request_nonce"), request_nonce)
         mock_impl.assert_called_once()
 
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_nested_args_with_object_request_nonce(self, mock_impl):
+        """role_wait handles nested args with an object request_nonce."""
+        import json
+
+        mock_impl.return_value = {"status": "completed"}
+
+        from mcp_agent.server import role_wait
+
+        request_nonce = {
+            "summary": "Poll scout role completion",
+            "request_nonce": "2026-06-10T14:55:31Z",
+        }
+        result = role_wait(
+            role_run_id={
+                "role_run_id": "abc-scout-1",
+                "timeout_seconds": 600,
+                "poll_interval_seconds": 15,
+            },
+            request_nonce=request_nonce,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertIn("request_nonce", result)
+        self.assertIsInstance(result["request_nonce"], str)
+        self.assertIn("2026-06-10T14:55:31Z", result["request_nonce"])
+        # Verify it is valid JSON
+        parsed = json.loads(result["request_nonce"])
+        self.assertEqual(parsed["summary"], "Poll scout role completion")
+        mock_impl.assert_called_once()
+

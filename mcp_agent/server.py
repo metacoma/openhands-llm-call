@@ -797,23 +797,42 @@ def _make_response_nonce() -> str:
     return f"{now.strftime('%Y%m%dT%H%M%S')}{now.microsecond:06d}Z-{uuid.uuid4().hex[:8]}"
 
 
+def normalize_request_nonce(value: Any) -> str | None:
+    """Normalize request_nonce to a stable JSON-serializable string.
+
+    - None → None (omitted from response)
+    - str → returned unchanged
+    - Other JSON-serializable values → json.dumps with sort_keys=True
+    - Non-serializable → str(value) fallback
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(value)
+
+
 @MCP.tool()
 def role_wait(
     role_run_id: McpString,
     timeout_seconds: McpInt = 30,
     poll_interval_seconds: McpInt = 5,
-    request_nonce: str | None = None,
+    request_nonce: Any = None,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. role_wait returns only status, control_summary, and artifact id references.
 
     IMPORTANT FOR LLM CALLERS:
     Always include request_nonce when calling role_wait.
-    Generate request_nonce at call time using the current UTC timestamp.
-    Recommended format: ISO-8601 UTC, for example "2026-06-10T14:55:31Z".
-    This value is only for request traceability and to make repeated wait calls visibly unique.
-    It does not affect polling behavior, role state, artifacts, or result content.
-    When provided, request_nonce is echoed back in the response.
-    The server also returns response_nonce independently (do not confuse the two)."""
+    request_nonce is optional and may be any JSON value (string, number, boolean,
+    object, array, or null). A UTC timestamp string is recommended, for example
+    "2026-06-10T16:45:30Z". Objects are accepted too, but a plain string is
+    preferred. The server normalizes request_nonce for traceability only. It does
+    not affect polling, role state, artifacts, or result content. When provided,
+    request_nonce is echoed back (normalized) in the response. The server also
+    returns response_nonce independently (do not confuse the two)."""
     # Defensive parsing for nested LLM mistakes.
     raw_role_arg = role_run_id
     _timeout = timeout_seconds
@@ -833,7 +852,7 @@ def role_wait(
         err = _build_invalid_role_run_id_error("role_run_id")
         err["response_nonce"] = _make_response_nonce()
         if request_nonce is not None:
-            err["request_nonce"] = request_nonce
+            err["request_nonce"] = normalize_request_nonce(request_nonce)
         return err
 
     if not normalized_role_run_id:
@@ -847,7 +866,7 @@ def role_wait(
         }
         result["response_nonce"] = _make_response_nonce()
         if request_nonce is not None:
-            result["request_nonce"] = request_nonce
+            result["request_nonce"] = normalize_request_nonce(request_nonce)
         return result
 
     normalized_timeout = normalize_int(_timeout, default=30)
@@ -922,7 +941,7 @@ def role_wait(
 
     result["response_nonce"] = _make_response_nonce()
     if request_nonce is not None:
-        result["request_nonce"] = request_nonce
+        result["request_nonce"] = normalize_request_nonce(request_nonce)
     return result
 
 
