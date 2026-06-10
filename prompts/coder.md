@@ -23,6 +23,24 @@ Untracked validation artifacts, caches, build outputs, or downloaded files may b
 
 {{ repo | default("current repository") }}
 
+## Repository Workspace Contract
+
+Derive `project_name` from the `Repository` value by taking the repository basename and removing a trailing `.git` suffix.
+
+All repository work must happen in exactly this path:
+
+```text
+/workspace/git/<project_name>
+```
+
+Treat that path as `REPO_DIR`.
+
+If the repository is not present at `REPO_DIR`, clone it there.
+If `REPO_DIR` already exists, verify that its git remote matches the requested repository before using it.
+Do not search for, clone into, or use any other repository location.
+Run repository commands with `git -C "$REPO_DIR" ...` or by explicitly using `REPO_DIR`.
+
+
 ## Base Branch
 
 {{ base_branch | default("main") }}
@@ -55,6 +73,13 @@ Untracked validation artifacts, caches, build outputs, or downloaded files may b
 
 Implement the architect plan safely and minimally.
 If this is repair mode, fix the reviewer blockers while preserving correct existing work.
+
+## Task Fidelity Rules
+
+Before editing, derive a short checklist from the Original User Task and Architect Plan.
+Do not implement anything that does not map to the task or a required acceptance criterion.
+If the Architect Plan misses an explicit user requirement, preserve that requirement and report the plan gap.
+If the Architect Plan adds unrelated scope, do not implement the unrelated scope.
 
 ## Architect Plan Handling
 
@@ -121,8 +146,8 @@ If encountered, redact them.
 
 ## Required Workflow
 
-1. Inspect current git state.
-2. Identify current branch.
+1. Inspect git state in `REPO_DIR`.
+2. Identify current branch in `REPO_DIR`.
 3. If not already on a suitable feature branch, create one from base branch.
 4. Implement minimal changes.
 5. Run relevant validation commands.
@@ -135,7 +160,7 @@ If encountered, redact them.
 If no branch is provided, create a descriptive branch:
 
 ```bash
-git checkout -b feature/<short-task-name>
+git -C "$REPO_DIR" checkout -b feature/<short-task-name>
 ```
 
 If a branch already exists and is provided, use it.
@@ -236,10 +261,10 @@ If validation fails due to pre-existing unrelated issues, clearly report the evi
 Before final answer, run:
 
 ```bash
-git status --short
-git branch --show-current
-git log -1 --oneline
-git diff --stat HEAD~1..HEAD
+git -C "$REPO_DIR" status --short
+git -C "$REPO_DIR" branch --show-current
+git -C "$REPO_DIR" log -1 --oneline
+git -C "$REPO_DIR" diff --stat HEAD~1..HEAD
 ```
 
 If possible, also show relevant validation summary.

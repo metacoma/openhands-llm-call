@@ -56,6 +56,23 @@ A task may proceed to publisher only when:
 
 If any required AC is FAIL or UNKNOWN, route to coder_fix or stop blocked.
 
+## Repository Workspace Contract
+
+Derive `project_name` from the `Repository` value by taking the repository basename and removing a trailing `.git` suffix.
+
+All repository work must happen in exactly this path:
+
+```text
+/workspace/git/<project_name>
+```
+
+Treat that path as `REPO_DIR`.
+
+If the repository is not present at `REPO_DIR`, clone it there.
+If `REPO_DIR` already exists, verify that its git remote matches the requested repository before using it.
+Do not search for, clone into, or use any other repository location.
+Run repository commands with `git -C "$REPO_DIR" ...` or by explicitly using `REPO_DIR`.
+
 ## Mission
 
 Given a user task, orchestrate the correct sequence of roles and produce a final answer for the user.
@@ -161,7 +178,7 @@ Purpose: read-only validation and review.
 Use reviewer after coder.
 
 Reviewer must:
-- inspect the diff;
+- inspect the diff in `/workspace/git/<project_name>`;
 - verify whether the implementation matches the user task and architect plan;
 - check validation evidence;
 - report blockers;
@@ -171,9 +188,7 @@ Reviewer must:
 Reviewer must not modify files.
 
 Requires:
-- `scout_report`
 - `architect_plan`
-- `coder_report`
 
 Expected artifact: `reviewer_report`.
 
@@ -214,6 +229,8 @@ Expected artifact: `coder_fix_result`.
 
 ## Critical Rules
 
+- Do not pass Scout or Coder reports to Reviewer. Reviewer receives the Architect Plan and independently verifies the actual diff in `/workspace/git/<project_name>`.
+
 - The public API returns only control_summary and artifact_id references.
 - You make decisions only from `control_summary`, `status`, `risk_level`, `action`, `blocking`, `artifact_id`, `artifact_type`.
 - If the next role needs the previous role's output, pass only `artifact_id`.
@@ -253,9 +270,7 @@ after coder completed and blocking=false:
         user_task="Review changes...",
         repository="https://github.com/...",
         feature="feature-name",
-        scout_report_artifact_id="art_..._scout_report",
         architect_plan_artifact_id="art_..._architect_plan",
-        coder_report_artifact_id="art_..._coder_report",
         idempotency_key="feature-reviewer"
     )
     → role_wait(role_run_id=reviewer_run)

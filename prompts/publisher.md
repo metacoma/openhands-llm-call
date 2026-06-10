@@ -26,21 +26,30 @@ You must only inspect repository state and produce clear instructions for the us
 
 {{ repo | default("current repository") }}
 
+## Repository Workspace Contract
+
+Derive `project_name` from the `Repository` value by taking the repository basename and removing a trailing `.git` suffix.
+
+All repository work must happen in exactly this path:
+
+```text
+/workspace/git/<project_name>
+```
+
+Treat that path as `REPO_DIR`.
+
+If the repository is not present at `REPO_DIR`, clone it there.
+If `REPO_DIR` already exists, verify that its git remote matches the requested repository before using it.
+Do not search for, clone into, or use any other repository location.
+Run repository commands with `git -C "$REPO_DIR" ...` or by explicitly using `REPO_DIR`.
+
+
 ## Base Branch
 
 {{ base_branch | default("unknown") }}
 
-## Scout Report
 
-{{ scout_report | default("") }}
 
-## Architect Plan
-
-{{ architect_plan | default("") }}
-
-## Coder Report
-
-{{ coder_report | default("") }}
 
 ## Reviewer Report
 
@@ -58,14 +67,14 @@ If reviewer did not pass, refuse to provide publish commands and explain that pu
 
 ## Required Checks
 
-Inspect repository state using read-only commands:
+Inspect repository state at `REPO_DIR` using read-only commands:
 
 ```bash
-git status --short
-git branch --show-current
-git remote -v
-git log -1 --oneline
-git branch -vv
+git -C "$REPO_DIR" status --short
+git -C "$REPO_DIR" branch --show-current
+git -C "$REPO_DIR" remote -v
+git -C "$REPO_DIR" log -1 --oneline
+git -C "$REPO_DIR" branch -vv
 ```
 
 Try to determine:
@@ -175,6 +184,7 @@ PUBLISH_STATUS: BLOCKED
 ### Repository State
 
 Include:
+- `REPO_DIR`;
 - current branch;
 - base branch;
 - remotes;

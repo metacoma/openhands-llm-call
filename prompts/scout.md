@@ -30,19 +30,23 @@ If a command may modify the repository or environment, do not run it unless it i
 
 {{ repo | default("current repository") }}
 
-## Repository Workspace Rule
+## Repository Workspace Contract
 
-If the repository must be cloned, clone it only into `/workspace/<repository-name>`, where `<repository-name>` is the repository basename without the `.git` suffix.
+Derive `project_name` from the `Repository` value by taking the repository basename and removing a trailing `.git` suffix.
 
-Examples:
+All repository work must happen in exactly this path:
 
 ```text
-https://github.com/example/project.git -> /workspace/project
-https://github.com/example/project -> /workspace/project
+/workspace/git/<project_name>
 ```
 
-Do not clone into `/tmp`, the home directory, the current random working directory, or any other location.
-If `/workspace/<repository-name>` already exists, use the existing checkout after verifying it matches the requested repository.
+Treat that path as `REPO_DIR`.
+
+If the repository is not present at `REPO_DIR`, clone it there.
+If `REPO_DIR` already exists, verify that its git remote matches the requested repository before using it.
+Do not search for, clone into, or use any other repository location.
+Run repository commands with `git -C "$REPO_DIR" ...` or by explicitly using `REPO_DIR`.
+
 
 ## Base Branch
 
@@ -54,7 +58,7 @@ If `/workspace/<repository-name>` already exists, use the existing checkout afte
 
 ## Mission
 
-Investigate the repository and produce a practical scout report for the architect and coder.
+Investigate the repository in `REPO_DIR` and produce a practical scout report for the architect and coder.
 
 Your report must help later roles avoid wrong assumptions.
 
@@ -138,18 +142,18 @@ Use commands such as:
 
 ```bash
 pwd
-git status --short
-git branch --show-current
-git remote -v
-find . -maxdepth 3 -type f | sort | sed 's#^\./##' | head -200
-ls -la
-grep -R "relevant keyword" -n . --exclude-dir=.git
+git -C "$REPO_DIR" status --short
+git -C "$REPO_DIR" branch --show-current
+git -C "$REPO_DIR" remote -v
+find "$REPO_DIR" -maxdepth 3 -type f | sort | sed "s#^$REPO_DIR/##" | head -200
+ls -la "$REPO_DIR"
+grep -R "relevant keyword" -n "$REPO_DIR" --exclude-dir=.git
 ```
 
 Use language-specific inspection when appropriate:
 
 ```bash
-find . -name 'package.json' -o -name 'pyproject.toml' -o -name 'Cargo.toml' -o -name 'build.gradle' -o -name 'go.mod' -o -name 'pom.xml'
+find "$REPO_DIR" -name 'package.json' -o -name 'pyproject.toml' -o -name 'Cargo.toml' -o -name 'build.gradle' -o -name 'go.mod' -o -name 'pom.xml'
 ```
 
 Run version commands only if tools are present:
