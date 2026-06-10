@@ -153,6 +153,51 @@ class TestExecuteEmptyAnswer(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["answer"], "Valid answer")
 
+    @patch("openhands_llm.openhands_llm_call.collect_existing_conversation_answer")
+    @patch("openhands_llm.openhands_llm_call.extract_final_answer")
+    def test_execute_read_only_empty_result(
+        self, mock_extract, mock_collect
+    ):
+        """_execute returns completed_empty_result for read_only path with empty answer."""
+        mock_collect.return_value = []
+        mock_extract.return_value = ""
+
+        req = server.CallLMRequest(
+            prompt="Test prompt",
+            llm_model="openai/qwen3:32b",
+            api_key="test-key",
+            conversation_id="conv-existing",
+            read_only_existing_conversation=True,
+        )
+
+        result = server._execute(req)
+
+        self.assertEqual(result["status"], "completed_empty_result")
+        self.assertEqual(result["answer"], "")
+
+    @patch("openhands_llm.openhands_llm_call.send_message_to_existing_conversation")
+    @patch("openhands_llm.openhands_llm_call.run_and_collect_message_events")
+    @patch("openhands_llm.openhands_llm_call.extract_final_answer")
+    def test_execute_existing_conversation_empty_result(
+        self, mock_extract, mock_collect, mock_send
+    ):
+        """_execute returns completed_empty_result for existing-conversation path with empty answer."""
+        mock_send.return_value = {"task_id": "task-1", "job_id": "job-1"}
+        mock_collect.return_value = []
+        mock_extract.return_value = ""
+
+        req = server.CallLMRequest(
+            prompt="Test prompt",
+            llm_model="openai/qwen3:32b",
+            api_key="test-key",
+            conversation_id="conv-existing",
+        )
+
+        result = server._execute(req)
+
+        self.assertEqual(result["status"], "completed_empty_result")
+        self.assertEqual(result["answer"], "")
+
 
 class TestCallLMResponseContent(unittest.TestCase):
     """POST /v1/call_lm must propagate completed_empty_result status."""

@@ -1028,11 +1028,8 @@ class TestEmptyPrimaryArtifactHandling(unittest.TestCase):
         # Must fail, not complete
         self.assertEqual(result["status"], "failed")
         self.assertIn("error", result)
-        # Early guard now returns EmptyMainResponse before artifact save
-        self.assertIn(result["error"]["type"], (
-            "EmptyMainResponse",
-            "EmptyPrimaryArtifactError",
-        ))
+        # Early guard returns EmptyMainResponse before artifact save
+        self.assertEqual(result["error"]["type"], "EmptyMainResponse")
         self.assertTrue(result["error"]["retryable"])
 
         # No usable artifacts.primary should be returned
@@ -1123,11 +1120,8 @@ class TestEmptyPrimaryArtifactHandling(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "failed")
-        # Early guard now returns EmptyMainResponse before artifact save
-        self.assertIn(result["error"]["type"], (
-            "EmptyMainResponse",
-            "EmptyPrimaryArtifactError",
-        ))
+        # Early guard returns EmptyMainResponse before artifact save
+        self.assertEqual(result["error"]["type"], "EmptyMainResponse")
 
         # Verify role run was persisted as failed
         from mcp_agent.role_store import RoleRunStore
