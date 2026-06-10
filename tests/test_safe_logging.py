@@ -17,6 +17,8 @@ from mcp_agent.safe_logging import (
     correlate_id_from_args,
     format_correlation,
     SENSITIVE_KEYS,
+    is_debug_enabled,
+    debug_log,
 )
 
 
@@ -202,6 +204,72 @@ class TestHttpErrorIncludesBody(TestCase):
                 )
 
             self.assertIn("422", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# Test: OPENHANDS_LLM_CALL_DEBUG env var
+# ---------------------------------------------------------------------------
+
+class TestDebugEnvVar(TestCase):
+    """Test is_debug_enabled() and debug_log() with OPENHANDS_LLM_CALL_DEBUG."""
+
+    def setUp(self):
+        self._orig = os.environ.pop("OPENHANDS_LLM_CALL_DEBUG", None)
+
+    def tearDown(self):
+        if self._orig is not None:
+            os.environ["OPENHANDS_LLM_CALL_DEBUG"] = self._orig
+        else:
+            os.environ.pop("OPENHANDS_LLM_CALL_DEBUG", None)
+
+    def test_missing_env_returns_false(self):
+        os.environ.pop("OPENHANDS_LLM_CALL_DEBUG", None)
+        self.assertFalse(is_debug_enabled())
+
+    def test_truthy_1(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "1"
+        self.assertTrue(is_debug_enabled())
+
+    def test_truthy_true(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "true"
+        self.assertTrue(is_debug_enabled())
+
+    def test_truthy_TRUE(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "TRUE"
+        self.assertTrue(is_debug_enabled())
+
+    def test_truthy_yes(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "yes"
+        self.assertTrue(is_debug_enabled())
+
+    def test_truthy_on(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "on"
+        self.assertTrue(is_debug_enabled())
+
+    def test_truthy_debug(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "debug"
+        self.assertTrue(is_debug_enabled())
+
+    def test_falsy_0(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "0"
+        self.assertFalse(is_debug_enabled())
+
+    def test_falsy_empty(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = ""
+        self.assertFalse(is_debug_enabled())
+
+    def test_debug_log_no_crash_when_disabled(self):
+        os.environ.pop("OPENHANDS_LLM_CALL_DEBUG", None)
+        logger = __import__("logging").getLogger("test_debug_log_disabled")
+        # Should not raise
+        debug_log(logger, "test_msg", foo="bar")
+
+    def test_debug_log_no_crash_when_enabled(self):
+        os.environ["OPENHANDS_LLM_CALL_DEBUG"] = "1"
+        logger = __import__("logging").getLogger("test_debug_log_enabled")
+        logger.setLevel(__import__("logging").DEBUG)
+        # Should not raise
+        debug_log(logger, "test_msg", foo="bar")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """FastAPI server wrapping openhands_llm_call.py logic."""
 
+import contextlib
 import io
+import json
 import logging
 import os
 import sys
-import contextlib
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -349,6 +350,30 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
         answers = oh.collect_final_text_from_events(events)
         final_answer = oh.extract_final_answer([answers]) if answers else ""
 
+        # Debug logging for event extraction
+        if _is_debug():
+            kind_counts: dict[str, int] = {}
+            source_counts: dict[str, int] = {}
+            for ev in events[:20]:  # limit to first 20
+                k = str(ev.get("kind") or ev.get("type") or "").lower()
+                kind_counts[k] = kind_counts.get(k, 0) + 1
+                s = str(ev.get("source") or ev.get("origin") or "").lower()
+                source_counts[s] = source_counts.get(s, 0) + 1
+            logger.debug(
+                "job_poll events_count=%d answer_len=%d extraction_strategy=collect_final_text event_kinds=%s event_sources=%s",
+                len(events),
+                len(final_answer) if final_answer else 0,
+                json.dumps(kind_counts),
+                json.dumps(source_counts),
+            )
+            if not final_answer:
+                logger.debug(
+                    "job_poll.empty_answer events_count=%d event_kinds=%s event_sources=%s",
+                    len(events),
+                    json.dumps(kind_counts),
+                    json.dumps(source_counts),
+                )
+
         if exec_status in ("failed", "error"):
             job_status = "failed"
         else:
@@ -367,6 +392,11 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
         "answer": "",
         "execution_status": exec_status,
     }
+
+
+def _is_debug() -> bool:
+    """Return True if OPENHANDS_LLM_CALL_DEBUG is set to a truthy value."""
+    return os.getenv("OPENHANDS_LLM_CALL_DEBUG", "").lower() in {"1", "true", "yes", "on", "debug"}
 
 
 # ---------------------------------------------------------------------------

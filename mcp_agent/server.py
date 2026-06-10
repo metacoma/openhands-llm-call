@@ -21,6 +21,7 @@ from pydantic_core import PydanticUseDefault
 
 from .artifact_store import ArtifactStore
 from .roles import get_role, list_roles
+from .safe_logging import is_debug_enabled
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -572,33 +573,32 @@ def role_call(
     # ------------------------------------------------------------------
     # Debug logging
     # ------------------------------------------------------------------
-    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+    if is_debug_enabled():
         from .safe_logging import (
-            DEBUG_ROLE_CALL,
             correlate_id_from_args,
             format_correlation,
             safe_json_shape,
             safe_preview,
         )
-        if DEBUG_ROLE_CALL:
-            corr_id = correlate_id_from_args(
-                role_run_id=None, run_id=None, idempotency_key=idempotency_key
-            )
-            role_shape = safe_json_shape(role)
-            role_type = role_shape.get("type", type(role).__name__) if isinstance(role_shape, dict) else type(role).__name__
-            role_preview_val = safe_json_shape(role).get("preview", str(role)[:200]) if isinstance(safe_json_shape(role), dict) else str(role)[:200]
-            ut_shape = safe_json_shape(user_task)
-            ut_type = ut_shape.get("type", type(user_task).__name__) if isinstance(ut_shape, dict) else type(user_task).__name__
-            ut_len = ut_shape.get("len", len(str(user_task))) if isinstance(ut_shape, dict) else len(str(user_task))
-            ik_shape = safe_json_shape(idempotency_key) if idempotency_key is not None else None
-            ik_type = ik_shape.get("type", "NoneType") if ik_shape and isinstance(ik_shape, dict) else "NoneType"
-            logger.info(
-                "role_call.input %s role_type=%s role_preview=%s user_task_type=%s user_task_len=%d idempotency_key_type=%s",
-                format_correlation(corr_id, role=str(role)[:50]),
-                role_type, safe_preview(str(role_preview_val), 100),
-                ut_type, ut_len,
-                ik_type,
-            )
+
+        corr_id = correlate_id_from_args(
+            role_run_id=None, run_id=None, idempotency_key=idempotency_key
+        )
+        role_shape = safe_json_shape(role)
+        role_type = role_shape.get("type", type(role).__name__) if isinstance(role_shape, dict) else type(role).__name__
+        role_preview_val = safe_json_shape(role).get("preview", str(role)[:200]) if isinstance(safe_json_shape(role), dict) else str(role)[:200]
+        ut_shape = safe_json_shape(user_task)
+        ut_type = ut_shape.get("type", type(user_task).__name__) if isinstance(ut_shape, dict) else type(user_task).__name__
+        ut_len = ut_shape.get("len", len(str(user_task))) if isinstance(ut_shape, dict) else len(str(user_task))
+        ik_shape = safe_json_shape(idempotency_key) if idempotency_key is not None else None
+        ik_type = ik_shape.get("type", "NoneType") if ik_shape and isinstance(ik_shape, dict) else "NoneType"
+        logger.info(
+            "role_call.input %s role_type=%s role_preview=%s user_task_type=%s user_task_len=%d idempotency_key_type=%s",
+            format_correlation(corr_id, role=str(role)[:50]),
+            role_type, safe_preview(str(role_preview_val), 100),
+            ut_type, ut_len,
+            ik_type,
+        )
 
     # ------------------------------------------------------------------
     # Detect bad nested payload in ANY field (BLOCKER 1)

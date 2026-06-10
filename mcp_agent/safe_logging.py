@@ -4,14 +4,53 @@ Provides sanitization helpers that prevent secrets from leaking into logs
 and produce structured shape descriptions of MCP inputs and HTTP payloads.
 """
 
+import logging
 import os
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Debug flag
+# Shared debug flag: OPENHANDS_LLM_CALL_DEBUG
 # ---------------------------------------------------------------------------
 
-DEBUG_ROLE_CALL = os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}
+_DEBUG_ENV_VAR = "OPENHANDS_LLM_CALL_DEBUG"
+_TRUTHY_VALUES = {"1", "true", "yes", "on", "debug"}
+
+
+def is_debug_enabled() -> bool:
+    """Return True if OPENHANDS_LLM_CALL_DEBUG is set to a truthy value.
+
+    Accepted truthy values (case-insensitive): 1, true, yes, on, debug.
+    """
+    return os.getenv(_DEBUG_ENV_VAR, "").lower() in _TRUTHY_VALUES
+
+
+# Backward-compatibility alias for any code that imports DEBUG_ROLE_CALL directly.
+DEBUG_ROLE_CALL = is_debug_enabled()
+
+
+def debug_log(logger: logging.Logger, message: str, **fields) -> None:
+    """Log a structured debug message when OPENHANDS_LLM_CALL_DEBUG is enabled.
+
+    Parameters
+    ----------
+    logger :
+        The logger to use (must be configured by the caller).
+    message :
+        A greppable message key, e.g. ``"job_poll"`` or ``"extraction_candidate"``.
+    **fields :
+        Key-value pairs appended as ``key=value`` to the log line.
+        Long values are truncated to 500 chars; secrets are not filtered here
+        — callers must avoid passing tokens/keys.
+    """
+    if not is_debug_enabled():
+        return
+    parts = [f"DEBUG {message}"]
+    for k, v in sorted(fields.items()):
+        val = str(v)
+        if len(val) > 500:
+            val = val[:500] + "..."
+        parts.append(f"{k}={val}")
+    logger.debug(" ".join(parts))
 
 # ---------------------------------------------------------------------------
 # Constants

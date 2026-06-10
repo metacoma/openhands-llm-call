@@ -57,6 +57,19 @@ from .summary_validator import (
 
 logger = logging.getLogger("openhands-mcp")
 
+# ---------------------------------------------------------------------------
+# Shared debug flag: OPENHANDS_LLM_CALL_DEBUG
+# ---------------------------------------------------------------------------
+
+_DEBUG_ENV_VAR = "OPENHANDS_LLM_CALL_DEBUG"
+_TRUTHY_VALUES = {"1", "true", "yes", "on", "debug"}
+
+
+def _is_debug() -> bool:
+    """Return True if OPENHANDS_LLM_CALL_DEBUG is set to a truthy value."""
+    return os.getenv(_DEBUG_ENV_VAR, "").lower() in _TRUTHY_VALUES
+
+
 # Public maximum timeout for role_wait — prevents MCP tool call timeouts.
 _MAX_PUBLIC_ROLE_WAIT_TIMEOUT_SECONDS = int(
     os.getenv("OPENHANDS_ROLE_WAIT_MAX_PUBLIC_TIMEOUT_SECONDS", "240")
@@ -299,38 +312,37 @@ def _start_conversation_on_fastapi(
     # ------------------------------------------------------------------
     # Debug logging: outgoing payload shape
     # ------------------------------------------------------------------
-    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+    if _is_debug():
         from .safe_logging import (
-            DEBUG_ROLE_CALL,
             correlate_id_from_args,
+            debug_log,
             format_correlation,
             safe_json_shape,
             safe_preview,
         )
 
-        if DEBUG_ROLE_CALL:
-            corr_id = _correlation_id or correlate_id_from_args()
+        corr_id = _correlation_id or correlate_id_from_args()
 
-            payload_keys = list(payload.keys())
-            prompt_type = type(prompt).__name__
-            prompt_len = len(prompt) if isinstance(prompt, str) else 0
-            api_key_type = type(api_key).__name__ if api_key else "NoneType"
-            api_key_present = bool(api_key)
-            conv_id_present = bool(conversation_id)
+        payload_keys = list(payload.keys())
+        prompt_type = type(prompt).__name__
+        prompt_len = len(prompt) if isinstance(prompt, str) else 0
+        api_key_type = type(api_key).__name__ if api_key else "NoneType"
+        api_key_present = bool(api_key)
+        conv_id_present = bool(conversation_id)
 
-            logger.info(
-                "call_lm.request %s url=%s payload_keys=%s prompt_type=%s prompt_len=%d api_key_present=%s api_key_type=%s conversation_id_present=%s no_wait=%s no_wait_type=%s poll_interval=%s poll_interval_type=%s max_polls=%s max_polls_type=%s",
-                format_correlation(corr_id),
-                f"{base}/v1/call_lm",
-                payload_keys,
-                prompt_type, prompt_len,
-                api_key_present, api_key_type,
-                conv_id_present,
-                True, type(True).__name__,
-                _OPENHANDS_POLL_INTERVAL, type(_OPENHANDS_POLL_INTERVAL).__name__,
-                clamped_max_polls,
-                type(clamped_max_polls).__name__,
-            )
+        logger.info(
+            "call_lm.request %s url=%s payload_keys=%s prompt_type=%s prompt_len=%d api_key_present=%s api_key_type=%s conversation_id_present=%s no_wait=%s no_wait_type=%s poll_interval=%s poll_interval_type=%s max_polls=%s max_polls_type=%s",
+            format_correlation(corr_id),
+            f"{base}/v1/call_lm",
+            payload_keys,
+            prompt_type, prompt_len,
+            api_key_present, api_key_type,
+            conv_id_present,
+            True, type(True).__name__,
+            _OPENHANDS_POLL_INTERVAL, type(_OPENHANDS_POLL_INTERVAL).__name__,
+            clamped_max_polls,
+            type(clamped_max_polls).__name__,
+        )
 
     resp = requests.post(
         f"{base}/v1/call_lm",
@@ -341,58 +353,53 @@ def _start_conversation_on_fastapi(
     # ------------------------------------------------------------------
     # Debug logging: error response body on HTTP errors
     # ------------------------------------------------------------------
-    if resp.status_code >= 400:
-        if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
-            from .safe_logging import (
-                DEBUG_ROLE_CALL,
-                correlate_id_from_args,
-                format_correlation,
-            )
-
-            if DEBUG_ROLE_CALL:
-                corr_id = _correlation_id or correlate_id_from_args()
-                logger.error(
-                    "call_lm.response_error %s status=%d body=%s",
-                    format_correlation(corr_id),
-                    resp.status_code,
-                    resp.text[:4000],
-                )
-
-        # Raise with body included in message
-        raise requests.HTTPError(
-            f"HTTP {resp.status_code}; body={resp.text[:1000]}",
-            response=resp,
-        )
-
-    # ------------------------------------------------------------------
-    # Debug logging: success response shape
-    # ------------------------------------------------------------------
-    if os.getenv("MCP_DEBUG_ROLE_CALL", "").lower() in {"1", "true", "yes"}:
+    if resp.status_code >= 400 and _is_debug():
         from .safe_logging import (
-            DEBUG_ROLE_CALL,
             correlate_id_from_args,
             format_correlation,
         )
 
-        if DEBUG_ROLE_CALL:
-            corr_id = _correlation_id or correlate_id_from_args()
-            result = resp.json()
-            resp_keys = list(result.keys()) if isinstance(result, dict) else []
-            resp_status = result.get("status", "(none)") if isinstance(result, dict) else "(none)"
-            task_id_present = bool(result.get("task_id")) if isinstance(result, dict) else False
-            conv_id_present = bool(result.get("conversation_id")) if isinstance(result, dict) else False
-            app_conv_id_present = bool(result.get("app_conversation_id")) if isinstance(result, dict) else False
+        corr_id = _correlation_id or correlate_id_from_args()
+        logger.error(
+            "call_lm.response_error %s status=%d body=%s",
+            format_correlation(corr_id),
+            resp.status_code,
+            resp.text[:4000],
+        )
 
-            logger.info(
-                "call_lm.response_ok %s status=%d response_keys=%s response_status=%s task_id_present=%s conversation_id_present=%s app_conversation_id_present=%s",
-                format_correlation(corr_id),
-                resp.status_code,
-                resp_keys,
-                resp_status,
-                task_id_present,
-                conv_id_present,
-                app_conv_id_present,
-            )
+    # Raise with body included in message
+    raise requests.HTTPError(
+        f"HTTP {resp.status_code}; body={resp.text[:1000]}",
+        response=resp,
+    )
+
+    # ------------------------------------------------------------------
+    # Debug logging: success response shape
+    # ------------------------------------------------------------------
+    if _is_debug():
+        from .safe_logging import (
+            correlate_id_from_args,
+            format_correlation,
+        )
+
+        corr_id = _correlation_id or correlate_id_from_args()
+        result = resp.json()
+        resp_keys = list(result.keys()) if isinstance(result, dict) else []
+        resp_status = result.get("status", "(none)") if isinstance(result, dict) else "(none)"
+        task_id_present = bool(result.get("task_id")) if isinstance(result, dict) else False
+        conv_id_present = bool(result.get("conversation_id")) if isinstance(result, dict) else False
+        app_conv_id_present = bool(result.get("app_conversation_id")) if isinstance(result, dict) else False
+
+        logger.info(
+            "call_lm.response_ok %s status=%d response_keys=%s response_status=%s task_id_present=%s conversation_id_present=%s app_conversation_id_present=%s",
+            format_correlation(corr_id),
+            resp.status_code,
+            resp_keys,
+            resp_status,
+            task_id_present,
+            conv_id_present,
+            app_conv_id_present,
+        )
 
     resp.raise_for_status()
     return resp.json()
@@ -1366,6 +1373,52 @@ def role_lifecycle_wait_impl(
         }
 
     main_response = main_response_data.get("answer", "") or ""
+
+    # ------------------------------------------------------------------
+    # Pre-save guard: refuse to save empty primary artifact (Blocker 3)
+    # ------------------------------------------------------------------
+    if not main_response.strip():
+        # Try fallback: if we have a conversation_id, re-extract from events
+        fallback_answer = ""
+        if conversation_id:
+            try:
+                from . import openhands_llm_call as _oh
+
+                _fallback_events = _oh.search_v1_events(
+                    base_url=_OPENHANDS_URL,
+                    api_key=os.getenv("OPENHANDS_API_KEY", ""),
+                    conversation_id=conversation_id,
+                    limit=100,
+                    max_pages=50,
+                )
+                fallback_answer = _oh.collect_final_text_from_events(_fallback_events)
+            except Exception:
+                pass  # Fallback unavailable; will fail below
+
+        if not fallback_answer.strip():
+            role_store.update_role_run(
+                role_run_id,
+                status="failed",
+                lifecycle_state="empty_primary_artifact",
+            )
+            return {
+                "status": "failed",
+                "role_run_id": role_run_id,
+                "run_id": role_run.get("run_id", ""),
+                "role": role_run.get("role", ""),
+                "error": {
+                    "type": "EmptyPrimaryArtifactError",
+                    "artifact_slot": role_run.get("artifact_name", "unknown"),
+                    "artifact_id": "",
+                    "message": (
+                        f"OpenHands job completed but returned an empty answer for '{role_run.get('artifact_name', 'unknown')}'. "
+                        f"No fallback extraction succeeded. Refusing to save empty primary artifact."
+                    ),
+                    "retryable": True,
+                },
+            }
+        else:
+            main_response = fallback_answer.strip()
 
     role_store.update_role_run(
         role_run_id,

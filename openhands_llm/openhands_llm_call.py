@@ -490,6 +490,12 @@ def is_agent_event(event: dict[str, Any]) -> bool:
 
 
 def is_agent_message_event(event: dict[str, Any]) -> bool:
+    """Return True if *event* looks like an agent/assistant message event.
+
+    Broadens matching beyond the original ``kind == "messageevent"`` check to
+    cover additional OpenHands event schemas that may carry textual content
+    under ``args.*``, ``extras.*``, or ``data.*`` keys.
+    """
     kind = event_kind(event)
     source_ok = is_agent_event(event)
 
@@ -498,19 +504,42 @@ def is_agent_message_event(event: dict[str, Any]) -> bool:
     if isinstance(llm_message, dict):
         role = str(llm_message.get("role", "")).lower()
 
+    kind_lower = kind.lower()
     kind_ok = (
-        kind == "messageevent"
-        or kind == "message"
-        or kind.endswith(".message")
-        or "messageevent" in kind
+        "messageevent" in kind_lower
+        or kind_lower == "message"
+        or kind_lower.endswith(".message")
+        or kind_lower == "agent_message"
+        or kind_lower == "user_message"
     )
 
     role_ok = not role or role in {"assistant", "agent"}
 
-    return kind_ok and source_ok and role_ok
+    # Accept events with textual args/extras/data even if kind is generic
+    has_textual_args = (
+        event.get("args") and isinstance(event.get("args"), dict) and
+        any(event["args"].get(k) for k in ("message", "content", "text", "final_thought", "observation"))
+    )
+    has_textual_extras = (
+        event.get("extras") and isinstance(event.get("extras"), dict) and
+        any(event["extras"].get(k) for k in ("message", "content", "text"))
+    )
+    has_textual_data = (
+        event.get("data") and isinstance(event.get("data"), dict) and
+        any(event["data"].get(k) for k in ("message", "content", "text"))
+    )
+
+    # Accept if kind matches AND source is agent, OR if source is agent AND has textual content
+    return (kind_ok and source_ok and role_ok) or (source_ok and (has_textual_args or has_textual_extras or has_textual_data))
 
 
 def extract_finish_action_text(event: dict[str, Any]) -> str:
+    """Extract text from a finish-action event.
+
+    Checks ``action.outputs.*`` first (existing path), then falls back to
+    ``args.outputs.*`` and ``data.*`` paths that may carry the answer in
+    newer OpenHands event schemas.
+    """
     kind = event_kind(event)
     source = event_source(event)
     tool_name = str(event.get("tool_name") or "").lower()
@@ -550,6 +579,21 @@ def extract_finish_action_text(event: dict[str, Any]) -> str:
                 if text:
                     return text
 
+            # Also check args.outputs if action is nested under args
+            event_args = event.get("args")
+            if isinstance(event_args, dict):
+                nested_outputs = event_args.get("outputs")
+                if isinstance(nested_outputs, dict):
+                    for value in (
+                        nested_outputs.get("answer"),
+                        nested_outputs.get("final_answer"),
+                        nested_outputs.get("content"),
+                        nested_outputs,
+                    ):
+                        text = content_to_text(value)
+                        if text:
+                            return text
+
     if source == "environment" and kind == "observationevent" and tool_name == "finish":
         observation = event.get("observation")
         if isinstance(observation, dict):
@@ -568,19 +612,65 @@ def extract_finish_action_text(event: dict[str, Any]) -> str:
         if text:
             return text
 
+    # Also check data.* for finish events (newer OpenHands schema)
+    event_data = event.get("data")
+    if isinstance(event_data, dict):
+        for value in (
+            event_data.get("answer"),
+            event_data.get("final_answer"),
+            event_data.get("content"),
+            event_data.get("message"),
+            event_data,
+        ):
+            text = content_to_text(value)
+            if text:
+                return text
+
     return ""
 
 
 def extract_message_event_text(event: dict[str, Any]) -> str:
+    """Extract textual content from an agent message event.
+
+    Checks ``llm_message.content`` first (existing path), then falls back to
+    ``args.*``, ``extras.*``, and ``data.*`` paths that may carry the text
+    in newer OpenHands event schemas.
+    """
     if not is_agent_message_event(event):
         return ""
 
+    # Try llm_message first (existing path)
     llm_message = event.get("llm_message")
     if isinstance(llm_message, dict):
         text = content_to_text(llm_message.get("content"))
         if text:
             return text
 
+    # Try args.* paths
+    args = event.get("args")
+    if isinstance(args, dict):
+        for key in ("message", "content", "text", "final_thought", "observation"):
+            text = content_to_text(args.get(key))
+            if text:
+                return text
+
+    # Try extras.* paths
+    extras = event.get("extras")
+    if isinstance(extras, dict):
+        for key in ("message", "content", "text"):
+            text = content_to_text(extras.get(key))
+            if text:
+                return text
+
+    # Try data.* paths
+    data = event.get("data")
+    if isinstance(data, dict):
+        for key in ("message", "content", "text"):
+            text = content_to_text(data.get(key))
+            if text:
+                return text
+
+    # Fallback: full event (existing)
     return content_to_text(event)
 
 
