@@ -802,6 +802,7 @@ def role_wait(
     role_run_id: McpString,
     timeout_seconds: McpInt = 30,
     poll_interval_seconds: McpInt = 5,
+    request_nonce: str | None = None,
 ) -> dict:
     """Wait for a role_run_id returned by role_call. If status=running and timeout=true, call role_wait again with the same role_run_id. Never call role_call again for polling. When completed, use only control_summary and artifacts.primary.artifact_id/artifact_type. role_wait returns only status, control_summary, and artifact id references."""
     # Defensive parsing for nested LLM mistakes.
@@ -822,6 +823,8 @@ def role_wait(
     except ValueError:
         err = _build_invalid_role_run_id_error("role_run_id")
         err["response_nonce"] = _make_response_nonce()
+        if request_nonce is not None:
+            err["request_nonce"] = request_nonce
         return err
 
     if not normalized_role_run_id:
@@ -834,6 +837,8 @@ def role_wait(
             },
         }
         result["response_nonce"] = _make_response_nonce()
+        if request_nonce is not None:
+            result["request_nonce"] = request_nonce
         return result
 
     normalized_timeout = normalize_int(_timeout, default=30)
@@ -907,6 +912,8 @@ def role_wait(
             }
 
     result["response_nonce"] = _make_response_nonce()
+    if request_nonce is not None:
+        result["request_nonce"] = request_nonce
     return result
 
 

@@ -127,3 +127,24 @@ class TestMalformedRoleWaitInputs(unittest.TestCase):
         self.assertEqual(call_kwargs["timeout_seconds"], 300)
         self.assertEqual(call_kwargs["poll_interval_seconds"], 10)
 
+    @patch("mcp_agent.role_lifecycle.role_lifecycle_wait_impl")
+    def test_nested_args_with_request_nonce(self, mock_impl):
+        """role_wait handles nested args with request_nonce."""
+        mock_impl.return_value = {"status": "completed"}
+
+        from mcp_agent.server import role_wait
+
+        request_nonce = "2026-06-10T14:55:31Z"
+        result = role_wait(
+            role_run_id={
+                "role_run_id": "abc-scout-1",
+                "timeout_seconds": 600,
+                "poll_interval_seconds": 15,
+            },
+            request_nonce=request_nonce,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result.get("request_nonce"), request_nonce)
+        mock_impl.assert_called_once()
+

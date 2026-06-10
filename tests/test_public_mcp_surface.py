@@ -119,5 +119,35 @@ class TestNegativeAssertions(unittest.TestCase):
         self.assertNotIn("shttp_role_call", content)
 
 
+class TestRequestNonceSchema(unittest.TestCase):
+    """Verify request_nonce appears in the role_wait MCP tool schema."""
+
+    def test_request_nonce_in_role_wait_schema(self):
+        """role_wait MCP tool schema includes request_nonce parameter."""
+        from mcp_agent.server import MCP
+
+        for tool in MCP._tool_manager.list_tools():
+            if tool.name == "role_wait":
+                params = tool.parameters
+                prop_names = set(params.get("properties", {}).keys())
+                self.assertIn("request_nonce", prop_names)
+                break
+        else:
+            self.fail("role_wait tool not found in MCP tool list")
+
+    def test_request_nonce_is_optional_in_schema(self):
+        """request_nonce is optional (not in required list) in role_wait schema."""
+        from mcp_agent.server import MCP
+
+        for tool in MCP._tool_manager.list_tools():
+            if tool.name == "role_wait":
+                params = tool.parameters
+                required = set(params.get("required", []))
+                self.assertNotIn("request_nonce", required)
+                break
+        else:
+            self.fail("role_wait tool not found in MCP tool list")
+
+
 if __name__ == "__main__":
     unittest.main()
