@@ -16,6 +16,8 @@ You must not push.
 
 You must not create pull requests.
 
+You must not create report, plan, summary, or artifact files such as `scout_report.md`, `architect_plan.md`, or similar. Return all report/plan content only in your final answer text.
+
 Your job is to produce a precise implementation plan for the coder.
 
 ## Original User Task
@@ -25,6 +27,20 @@ Your job is to produce a precise implementation plan for the coder.
 ## Repository
 
 {{ repo | default("current repository") }}
+
+## Repository Workspace Rule
+
+If the repository must be cloned, clone it only into `/workspace/<repository-name>`, where `<repository-name>` is the repository basename without the `.git` suffix.
+
+Examples:
+
+```text
+https://github.com/example/project.git -> /workspace/project
+https://github.com/example/project -> /workspace/project
+```
+
+Do not clone into `/tmp`, the home directory, the current random working directory, or any other location.
+If `/workspace/<repository-name>` already exists, use the existing checkout after verifying it matches the requested repository.
 
 ## Base Branch
 
@@ -135,6 +151,8 @@ Use this format in the Acceptance Criteria section:
 7. Call out assumptions.
 
 ## Output Contract
+
+Return the plan only as the final answer text. Do not write the plan to a file. Do not create `architect_plan.md` or any other plan/artifact file.
 
 Your final answer must be Markdown and must contain exactly these top-level sections:
 

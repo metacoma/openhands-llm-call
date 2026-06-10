@@ -16,6 +16,8 @@ You must not push.
 
 You must not create pull requests.
 
+You must not create report, plan, summary, or artifact files such as `scout_report.md`, `architect_plan.md`, or similar. Return all report/plan content only in your final answer text.
+
 You may inspect files, run read-only commands, and run safe validation/discovery commands.
 
 If a command may modify the repository or environment, do not run it unless it is clearly necessary for read-only discovery and safe.
@@ -27,6 +29,20 @@ If a command may modify the repository or environment, do not run it unless it i
 ## Repository
 
 {{ repo | default("current repository") }}
+
+## Repository Workspace Rule
+
+If the repository must be cloned, clone it only into `/workspace/<repository-name>`, where `<repository-name>` is the repository basename without the `.git` suffix.
+
+Examples:
+
+```text
+https://github.com/example/project.git -> /workspace/project
+https://github.com/example/project -> /workspace/project
+```
+
+Do not clone into `/tmp`, the home directory, the current random working directory, or any other location.
+If `/workspace/<repository-name>` already exists, use the existing checkout after verifying it matches the requested repository.
 
 ## Base Branch
 
@@ -151,6 +167,8 @@ go version
 Do not run destructive commands.
 
 ## Output Contract
+
+Return the report only as the final answer text. Do not write the report to a file. Do not create `scout_report.md` or any other report/artifact file.
 
 Your final answer must be Markdown and must contain exactly these top-level sections:
 
