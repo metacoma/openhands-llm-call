@@ -127,10 +127,6 @@ def _get_final_answer_with_retry(
         )
         time.sleep(sleep_time)
 
-        # If deadline passed during sleep, one more check
-        if time.monotonic() >= deadline:
-            break
-
     return (final_answer, len(events))
 
 

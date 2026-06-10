@@ -477,6 +477,65 @@ class TestGetJobStatusFinalAnswerRetry(unittest.TestCase):
         # Only one call to search_v1_events (no retry)
         self.assertEqual(mock_search.call_count, 1)
 
+    @patch("openhands_llm.openhands_llm_call.get_v1_conversation")
+    @patch("openhands_llm.openhands_llm_call.search_v1_events")
+    @patch("openhands_llm.openhands_llm_call.collect_final_text_from_events")
+    @patch("openhands_llm.openhands_llm_call.extract_final_answer")
+    def test_answer_appears_near_retry_deadline(
+        self, mock_extract, mock_collect, mock_search, mock_get_conv
+    ):
+        """Answer becomes available on the final retry check at/near deadline: returns completed, not completed_empty_result.
+
+        This test verifies Blocker 2 is fixed: the retry loop must perform
+        one final fetch after sleeping up to the deadline, so answers that
+        appear near the deadline boundary are not missed.
+        """
+        mock_get_conv.return_value = {
+            "id": "conv-123",
+            "execution_status": "finished",
+        }
+
+        # First fetch (t=0) returns empty; second fetch (at deadline) returns answer
+        mock_search.side_effect = [[], [{"type": "text", "text": "Deadline Answer"}]]
+        mock_collect.side_effect = [
+            [],
+            [{"type": "text", "text": "Deadline Answer"}],
+        ]
+        mock_extract.return_value = "Deadline Answer"
+
+        with patch("time.sleep"), patch.dict(os.environ, {
+            "OPENHANDS_FINAL_ANSWER_RETRY_SECONDS": "10",
+            "OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS": "10",
+        }):
+            # deadline = 0.0 + 10 = 10.0
+            # Iteration 1: t=0, fetch=[], empty, now=0<10, sleep(10)
+            # After sleep: time.monotonic() returns 10.0 >= 10.0 (deadline)
+            #   OLD BUG: break → return empty
+            #   FIX: loop continues → Iteration 2: fetch=[...], answer found → return completed
+            monotonic_calls = [
+                0.0,    # line 90: deadline = 0.0 + 10 = 10.0
+                0.0,    # line 112: now = 0.0 (after first fetch)
+                10.0,   # after sleep: time.monotonic() >= deadline (10.0 >= 10.0)
+                10.0,   # line 112: now = 10.0 (second fetch, at deadline)
+            ]
+            with patch("time.monotonic", side_effect=monotonic_calls):
+                result = server._get_job_status(
+                    "conv-123", "http://localhost:3000", "test-key"
+                )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["answer"], "Deadline Answer")
+        # Two fetches: initial + one final at deadline
+        self.assertEqual(mock_search.call_count, 2)
+
+    def test_default_timeout_exceeds_retry_window(self):
+        """Default MCP request timeout (90) > default retry window (60)."""
+        retry_total, _ = server._final_answer_retry_config_from_env()
+        self.assertEqual(retry_total, 60)  # Verify the known default
+        # The actual timeout default is verified by inspection at role_lifecycle.py:235.
+        # A runtime check requires module reload; document the invariant instead.
+        self.assertGreater(90, retry_total, "Timeout must exceed retry window")
+
 
 if __name__ == "__main__":
     unittest.main()

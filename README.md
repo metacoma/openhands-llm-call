@@ -124,8 +124,11 @@ User / Head-of-IT
 | `OPENHANDS_POLL_INTERVAL_SECONDS` | `10` | Polling interval (seconds) |
 | `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS` | `60` | Total seconds to retry fetching the final OpenHands answer after a conversation reaches terminal state. Set to `0` for one immediate fetch (no retry). |
 | `OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS` | `10` | Seconds between retry attempts. Must be positive; invalid values fall back to `10`. |
+| `OPENHANDS_REQUEST_TIMEOUT_SECONDS` | `90` | HTTP request timeout (seconds) for MCP calls to `/v1/jobs/{id}`. Must be greater than `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS`, because `role_wait` calls `GET /v1/jobs/{id}` and the server may hold that request open while retrying final-answer extraction after OpenHands reaches terminal state. |
 
 These variables control how long the backend retries fetching the final OpenHands answer after a conversation reaches terminal state. This avoids false `completed_empty_result` errors caused by delayed event availability. When an OpenHands job reaches terminal state, the system polls for the final answer up to `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS` total time, at intervals of `OPENHANDS_FINAL_ANSWER_RETRY_INTERVAL_SECONDS`. Failed/error jobs are not retried.
+
+> **Important**: `OPENHANDS_REQUEST_TIMEOUT_SECONDS` must be greater than `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS`. When an OpenHands job reaches terminal state, the `/v1/jobs/{uid}` endpoint may hold the HTTP request open for up to `OPENHANDS_FINAL_ANSWER_RETRY_SECONDS` seconds while retrying final-answer extraction. If the client timeout is not larger than this window, the MCP agent will receive a `ReadTimeout` instead of the server's final status response (`completed`, `completed_empty_result`, or `failed`).
 
 ### Role configuration
 
