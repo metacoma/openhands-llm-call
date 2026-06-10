@@ -157,7 +157,7 @@ def start_v1_app_conversation(
                     "text": prompt,
                 }
             ],
-            "run": False,
+            "run": True,
         },
         "system_message_suffix": None,
         "processors": None,

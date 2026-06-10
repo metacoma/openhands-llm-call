@@ -1830,6 +1830,19 @@ class TestRoleWaitSanitizedResponse(TestCase):
             }),
         )
 
+        # Save a real artifact with artifact_id="art_scout" so that
+        # _validate_primary_artifact_nonempty can resolve it and the role
+        # completes successfully, allowing sanitization to be tested.
+        artifact_store = ArtifactStore(state_dir=self.state_dir)
+        artifact_store.save(
+            run_id="test-run-1",
+            role_run_id=role_run_id,
+            role="scout",
+            artifact_name="scout_report",
+            content="Scout report content for sanitization verification. This is non-empty.",
+            artifact_id="art_scout",
+        )
+
         # Call role_wait
         from mcp_agent.server import role_wait
         wait_result = role_wait(role_run_id=role_run_id)
@@ -1850,6 +1863,45 @@ class TestRoleWaitSanitizedResponse(TestCase):
         # Top-level must NOT contain forbidden keys
         for key in ("artifact_path", "content", "full_result", "result"):
             self.assertNotIn(key, wait_result)
+
+    def test_completed_response_with_empty_primary_artifact_fails(self):
+        """Empty / non-resolvable primary artifact must cause failed status."""
+        from mcp_agent.server import role_call
+        from mcp_agent.role_store import RoleRunStore
+
+        # Start a role to get a role_run_id
+        with patch("mcp_agent.role_lifecycle._start_conversation_on_fastapi") as mock_start:
+            mock_start.return_value = {"task_id": "task-2", "conversation_id": "conv-2"}
+            result = role_call(
+                role="scout",
+                user_task="Test",
+                repository="https://github.com/test/repo",
+                idempotency_key="test-scout-empty-art",
+            )
+            self.assertEqual(result["status"], "running")
+            role_run_id = result["role_run_id"]
+
+        # Update the role run to completed with a non-existent artifact_id
+        role_store = RoleRunStore()
+        role_store.update_role_run(
+            role_run_id,
+            status="completed",
+            result_summary=json.dumps({"summary": "done"}),
+            artifacts=json.dumps({
+                "primary": {
+                    "artifact_id": "art_nonexistent",
+                    "artifact_path": "/tmp/secret_path",
+                    "content": "secret_content",
+                },
+            }),
+        )
+
+        # Call role_wait — should fail because artifact cannot be resolved
+        from mcp_agent.server import role_wait
+        wait_result = role_wait(role_run_id=role_run_id)
+
+        self.assertEqual(wait_result["status"], "failed")
+        self.assertEqual(wait_result["error"]["type"], "EmptyPrimaryArtifactError")
 
 
 # ---------------------------------------------------------------------------

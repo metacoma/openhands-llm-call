@@ -131,6 +131,21 @@ def _resolve_api_key(req: CallLMRequest) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _completed_result(answer: str, conversation_id: str) -> dict[str, Any]:
+    """Return a completed result dict, distinguishing empty from non-empty answer."""
+    if not answer.strip():
+        return {
+            "answer": "",
+            "conversation_id": conversation_id,
+            "status": "completed_empty_result",
+        }
+    return {
+        "answer": answer,
+        "conversation_id": conversation_id,
+        "status": "completed",
+    }
+
+
 def _execute(req: CallLMRequest) -> dict[str, Any]:
     """Run the OpenHands conversation flow and return the final result dict."""
     base_url = _resolve_url(req)
@@ -152,11 +167,7 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
             verbose_events=False,
         )
         final_answer = oh.extract_final_answer(answers)
-        return {
-            "answer": final_answer,
-            "conversation_id": req.conversation_id,
-            "status": "completed",
-        }
+        return _completed_result(final_answer, req.conversation_id)
 
     # --- mode: send new message to existing conversation ---------------------
     if req.conversation_id and req.prompt:
@@ -199,11 +210,7 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
             stop_after_first_message=req.stop_after_first_message,
         )
         final_answer = oh.extract_final_answer(answers)
-        return {
-            "answer": final_answer,
-            "conversation_id": req.conversation_id,
-            "status": "completed",
-        }
+        return _completed_result(final_answer, req.conversation_id)
 
     # --- mode: new conversation ----------------------------------------------
     if not req.llm_model and DEFAULT_LLM_MODEL:
@@ -289,12 +296,7 @@ def _execute(req: CallLMRequest) -> dict[str, Any]:
     )
 
     final_answer = oh.extract_final_answer(answers)
-
-    return {
-        "answer": final_answer,
-        "conversation_id": conversation_id,
-        "status": "completed",
-    }
+    return _completed_result(final_answer, conversation_id)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +353,8 @@ def _get_job_status(uid: str, base_url: str, api_key: str) -> dict[str, Any]:
 
         if exec_status in ("failed", "error"):
             job_status = "failed"
+        elif not final_answer.strip():
+            job_status = "completed_empty_result"
         else:
             job_status = "completed"
 
