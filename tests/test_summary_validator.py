@@ -726,6 +726,77 @@ class TestSafeFallbackSummary(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["action"], "PASS")
 
+    def test_safe_fallback_with_summary_text_includes_llm_output(self):
+        """When summary_text is provided, fallback summary includes it."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        result = safe_fallback_summary(
+            role="scout",
+            primary_artifact_name="scout_summary",
+            is_reviewer=False,
+            summary_text="Hello world",
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertIn("Hello world", result["summary"])
+
+    def test_safe_fallback_with_long_summary_text_truncates(self):
+        """When summary_text exceeds 500 chars, it is truncated with ellipsis."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        long_text = "A" * 1000
+        result = safe_fallback_summary(
+            role="scout",
+            primary_artifact_name="scout_summary",
+            is_reviewer=False,
+            summary_text=long_text,
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertIn("[truncated]", result["summary"])
+        # Verify the truncated content is present
+        self.assertIn("A" * 100, result["summary"])
+
+    def test_safe_fallback_with_empty_summary_text_indicates_not_received(self):
+        """When summary_text is empty, fallback indicates answer was not received."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        result = safe_fallback_summary(
+            role="scout",
+            primary_artifact_name="scout_summary",
+            is_reviewer=False,
+            summary_text="",
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertIn("not received", result["summary"].lower())
+
+    def test_safe_fallback_with_none_summary_text_indicates_not_received(self):
+        """When summary_text is None, fallback indicates answer was not received."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        result = safe_fallback_summary(
+            role="scout",
+            primary_artifact_name="scout_summary",
+            is_reviewer=False,
+            summary_text=None,
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertIn("not received", result["summary"].lower())
+
+    def test_safe_fallback_reviewer_with_summary_text(self):
+        """Reviewer fallback with summary_text includes LLM output in summary."""
+        from mcp_agent.summary_validator import safe_fallback_summary
+
+        result = safe_fallback_summary(
+            role="reviewer",
+            primary_artifact_name="reviewer_summary",
+            is_reviewer=True,
+            main_artifact_content="No ACTION line found.",
+            summary_text="Some reviewer text",
+        )
+        self.assertTrue(result.get("valid"))
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["action"], "BLOCKER")
+        self.assertIn("Some reviewer text", result["summary"])
+
 
 class TestValidStructuredSummary(unittest.TestCase):
     """Test parsing a valid multi-line structured text summary."""

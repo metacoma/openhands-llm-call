@@ -614,8 +614,9 @@ class TestNoRepairFlow(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed")
         # control_summary should be the safe fallback (no repair was sent)
+        # The fallback now includes the raw LLM response text in the summary field
         cs = result.get("control_summary", {})
-        self.assertIn("summary parsing failed", cs.get("summary", "").lower())
+        self.assertIn("role completed", cs.get("summary", "").lower())
 
 
 # ---------------------------------------------------------------------------

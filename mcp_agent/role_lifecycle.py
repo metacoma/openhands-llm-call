@@ -1650,6 +1650,10 @@ def role_lifecycle_wait_impl(
     # ------------------------------------------------------------------
     # Deadline for summary phase
     # ------------------------------------------------------------------
+    # NOTE: summary_deadline shares the same absolute deadline as the main
+    # phase. This means the summary phase has whatever time is left after
+    # the main phase consumed its budget.  If the summary phase needs more
+    # time, consider adding a configurable buffer (e.g. +60 seconds) here.
     summary_deadline = deadline
 
     # ------------------------------------------------------------------
@@ -1703,6 +1707,7 @@ def role_lifecycle_wait_impl(
             primary_artifact_name=(role_spec.output_artifact if role_spec else "control_summary"),
             is_reviewer=(role == "reviewer"),
             main_artifact_content=main_response,
+            summary_text=summary_text,
         )
 
     # ------------------------------------------------------------------
