@@ -531,6 +531,7 @@ def safe_fallback_summary(
     primary_artifact_name: str,
     is_reviewer: bool = False,
     main_artifact_content: Optional[str] = None,
+    summary_text: Optional[str] = None,
 ) -> dict[str, Any]:
     """Generate a safe fallback summary when parsing fails.
 
@@ -544,6 +545,11 @@ def safe_fallback_summary(
         Whether the role is reviewer.
     main_artifact_content :
         The raw main artifact content (used to derive action for reviewer).
+    summary_text :
+        The raw LLM summary response text. If provided and non-empty,
+        it will be included (truncated to 500 chars) in the fallback
+        ``summary`` field so users see real LLM output instead of a
+        generic error message.
 
     Returns
     -------
@@ -557,6 +563,15 @@ def safe_fallback_summary(
         if derived:
             action = derived
 
+    # Build the summary field text, preferring real LLM output when available
+    if summary_text and summary_text.strip():
+        raw = summary_text.strip()
+        if len(raw) > 500:
+            raw = raw[:500] + "... [truncated]"
+        summary_val = f"Role completed. LLM response: {raw}"
+    else:
+        summary_val = "Role completed but summary response was not received from LLM."
+
     if is_reviewer and action is None:
         # Cannot derive safely — block the pipeline.
         # Reviewer is the only role that controls PASS/BLOCKER routing.
@@ -565,10 +580,7 @@ def safe_fallback_summary(
             "valid": True,
             "status": "blocked",
             "role": role,
-            "summary": (
-                "Reviewer completed, but MCP could not parse or derive "
-                "PASS/BLOCKER from the summary."
-            ),
+            "summary": summary_val,
             "primary_artifact_name": primary_artifact_name,
             "blocking": True,
             "risk_level": "HIGH",
@@ -583,10 +595,7 @@ def safe_fallback_summary(
         "valid": True,
         "status": "completed",
         "role": role,
-        "summary": (
-            f"Role completed, but summary parsing failed. "
-            f"The primary artifact was saved. Continue routing using artifact_id."
-        ),
+        "summary": summary_val,
         "primary_artifact_name": primary_artifact_name,
         "blocking": False,
         "risk_level": None,
