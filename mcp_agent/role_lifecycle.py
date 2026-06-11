@@ -1685,6 +1685,15 @@ def role_lifecycle_wait_impl(
     # If invalid, use safe fallback immediately (no repair round-trip)
     # ------------------------------------------------------------------
     if not control_summary.get("valid"):
+        error_info = control_summary.get("error", {})
+        logger.warning(
+            "role_wait.summary_parse_failed role_run_id=%s role=%s "
+            "error_type=%s error_msg=%s",
+            role_run_id,
+            role,
+            error_info.get("type", "Unknown"),
+            error_info.get("message", ""),
+        )
         role_store.update_role_run(
             role_run_id,
             lifecycle_state="summary_parse_failed",

@@ -353,6 +353,30 @@ class TestValidateSummaryStructuredText(unittest.TestCase):
         self.assertTrue(result.get("valid"))
         self.assertFalse(result["blocking"])
 
+    def test_blocking_extended_values_maps_to_bool(self):
+        """BLOCKING accepts true/false/y/n/1/0 in addition to yes/no."""
+        from mcp_agent.summary_validator import validate_summary
+
+        # Truthy values
+        for val in ("true", "True", "TRUE", "y", "Y", "1"):
+            result = validate_summary(
+                role="scout",
+                summary_artifact_name="scout_report",
+                json_str=self._make_structured({"BLOCKING": val}),
+            )
+            self.assertTrue(result.get("valid"), f"BLOCKING={val!r} should be valid")
+            self.assertTrue(result["blocking"], f"BLOCKING={val!r} should map to True")
+
+        # Falsy values
+        for val in ("false", "False", "FALSE", "n", "N", "0"):
+            result = validate_summary(
+                role="scout",
+                summary_artifact_name="scout_report",
+                json_str=self._make_structured({"BLOCKING": val}),
+            )
+            self.assertTrue(result.get("valid"), f"BLOCKING={val!r} should be valid")
+            self.assertFalse(result["blocking"], f"BLOCKING={val!r} should map to False")
+
     def test_none_blockers_maps_to_empty_list(self):
         """- none maps to empty blocker list."""
         from mcp_agent.summary_validator import validate_summary
@@ -440,6 +464,32 @@ class TestValidateSummaryStructuredText(unittest.TestCase):
         )
         self.assertFalse(result.get("valid"))
         self.assertEqual(result["error"]["type"], "SummaryForbiddenFields")
+
+    def test_forbidden_fields_natural_language_not_flagged(self):
+        """Natural-language use of 'next role' must NOT trigger forbidden fields."""
+        from mcp_agent.summary_validator import validate_summary
+
+        # The phrase "next role" appears in natural language (SUMMARY field),
+        # not as a field name. This should NOT be flagged.
+        text = (
+            "ROLE_SUMMARY_BEGIN\n"
+            "STATUS: completed\n"
+            "ROLE: scout\n"
+            "PRIMARY_ARTIFACT: scout_report\n"
+            "BLOCKING: no\n"
+            "RISK: LOW\n"
+            "ACTION: NONE\n"
+            "SUMMARY: The next role should review the report.\n"
+            "BLOCKERS:\n"
+            "- none\n"
+            "ROLE_SUMMARY_END"
+        )
+        result = validate_summary(
+            role="scout",
+            summary_artifact_name="scout_report",
+            json_str=text,
+        )
+        self.assertTrue(result.get("valid"), "Natural-language 'next role' should not trigger forbidden fields")
 
     def test_reviewer_action_none_returns_invalid(self):
         """Reviewer with ACTION: NONE returns invalid."""

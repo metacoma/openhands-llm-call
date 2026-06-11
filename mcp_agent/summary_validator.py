@@ -115,11 +115,11 @@ def _parse_structured_summary(
     risk_raw = fields.get("RISK", "").strip().upper()
     action_raw = fields.get("ACTION", "").strip().upper()
 
-    # Convert BLOCKING: yes/no → bool
+    # Convert BLOCKING: yes/no/true/false/y/n/1/0 → bool
     blocking = None
-    if blocking_raw == "yes":
+    if blocking_raw in ("yes", "true", "y", "1"):
         blocking = True
-    elif blocking_raw == "no":
+    elif blocking_raw in ("no", "false", "n", "0"):
         blocking = False
 
     # Convert RISK: NONE → None
@@ -199,9 +199,15 @@ def _parse_structured_summary(
                 },
             }
 
-    # Check forbidden fields (search in original text for next_role / ready_for_next_role)
+    # Check forbidden fields — match only when they appear as field names
+    # (followed by ':' or at end-of-line) to avoid false positives from
+    # natural-language text such as "the next role should be X".
     text_lower = text.lower()
-    if "next_role" in text_lower or "ready_for_next_role" in text_lower:
+    _forbidden_pattern = re.compile(
+        r"(?:^|[\s:])\s*(next_role|ready_for_next_role)\s*:",
+        re.IGNORECASE,
+    )
+    if _forbidden_pattern.search(text_lower):
         return {
             "valid": False,
             "error": {
